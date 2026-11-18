@@ -51,6 +51,23 @@ and that the daemon's two token backends do not lock each other out (regalia#541
                               backend needs the card to itself and OpenSC connects to every card it is
                               not told to ignore. With one backend or none there is nothing to check
 
+and the host's kernel settings and its users (#61 K61V-6, regalia-kms-r1s.5):
+
+  kernel_sysctl_baseline      every setting in SYSCTL_BASELINE (the image's /usr/lib/sysctl.d/90-regalia-kms.conf,
+                              less fs.suid_dumpable, which core_dumps_disabled measures) has that value in /proc/sys on the running kernel. A value that differs, or that
+                              cannot be read, fails the control. The file is not read: what counts is what the
+                              kernel applies. A "*" key (net.ipv4.conf.*.rp_filter) holds on all, default and every
+                              interface the kernel lists, and a conf directory without all and default fails it
+  bootstrap_and_kms_users_separate
+                              the KMS daemon (regalia-kms.service) and the bootstrap process (regalia-sync.service,
+                              which serves booting peers their unlock contribution) each run as a user of their
+                              own: two users, neither root, with different uids and different primary groups. This
+                              is read from the units and from getent, and also from the kernel for each running
+                              main process: real, effective, saved and filesystem uids are that user's, and so
+                              are its four gids (its primary group is its user's own, whatever Group= says). Neither
+                              process holds the other's primary group, as its gid or as a supplementary group.
+                              Both must be running
+
 and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
 
   kms_pcscd_access_rule       /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules is the shipped rule
@@ -78,7 +95,47 @@ SERVICE = "regalia-kms.service"
 PROFILE = "regalia-kms"            # deploy/baremetal/apparmor/usr.sbin.regalia-kms, the unit's AppArmorProfile=
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
-            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule")
+            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule", "kernel_sysctl_baseline", "bootstrap_and_kms_users_separate")
+# The kernel settings the image ships as /usr/lib/sysctl.d/90-regalia-kms.conf (deploy/baremetal/regalia-kms.sysctl.conf,
+# with each value's reason there). Measured from /proc/sys on the running host, never from the file. A test holds this
+# table and the shipped file together.
+SYSCTL_FILE = "/usr/lib/sysctl.d/90-regalia-kms.conf"
+SYSCTL_BASELINE = {
+    "kernel.kptr_restrict": "2",
+    "kernel.dmesg_restrict": "1",
+    "kernel.perf_event_paranoid": "3",
+    "kernel.kexec_load_disabled": "1",
+    "kernel.unprivileged_bpf_disabled": "1",
+    "net.core.bpf_jit_harden": "2",
+    "vm.unprivileged_userfaultfd": "0",
+    "dev.tty.ldisc_autoload": "0",
+    "kernel.sysrq": "0",
+    "kernel.randomize_va_space": "2",
+    "kernel.yama.ptrace_scope": "2",
+    "fs.protected_symlinks": "1",
+    "fs.protected_hardlinks": "1",
+    "fs.protected_fifos": "2",
+    "fs.protected_regular": "2",
+    "net.ipv4.ip_forward": "0",
+    "net.ipv6.conf.all.forwarding": "0",
+    "net.ipv4.conf.*.rp_filter": "1",
+    "net.ipv4.conf.*.accept_redirects": "0",
+    "net.ipv4.conf.*.secure_redirects": "0",
+    "net.ipv6.conf.*.accept_redirects": "0",
+    "net.ipv4.conf.*.send_redirects": "0",
+    "net.ipv4.conf.*.accept_source_route": "0",
+    "net.ipv6.conf.*.accept_source_route": "0",
+    "net.ipv4.tcp_syncookies": "1",
+    "net.ipv4.icmp_echo_ignore_broadcasts": "1",
+}
+# Settings the shipped file also sets that another control measures, so that one broken setting fails one control:
+# fs.suid_dumpable is core_dumps_disabled's. The file is held to SYSCTL_BASELINE plus these.
+SYSCTL_MEASURED_ELSEWHERE = {"fs.suid_dumpable": ("0", "core_dumps_disabled")}
+# The process that holds a booting peer's half of the disk credential and serves it (unlock.serve), and that runs
+# heartbeats and leases: regalia-sync (units/regalia-sync.service). It is the bootstrap side of #61's "bootstrap and
+# KMS processes have separate users". Each user is declared in /usr/lib/sysusers.d: regalia-sync in
+# units/regalia.sysusers.conf, regalia-kms in deploy/systemd/regalia-kms.sysusers.conf.
+BOOTSTRAP_SERVICE = "regalia-sync.service"
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -695,8 +752,100 @@ def pcscd_clients(host):
     return True, f"{len(client_inodes)} pcscd client(s), all the KMS binary"
 
 
+def sysctl_paths(host, key):
+    """[(name, /proc/sys path)] a baseline key covers. A "*" component is every entry of that directory as the kernel
+    lists it now (net.ipv4.conf.*: all, default and each interface), named by the entry itself: an interface name may
+    hold a dot, which a dotted key cannot say. A directory that does not list "all" and "default" is not the kernel's
+    and gives one unreadable path, so the key fails."""
+    parts = key.split(".")
+    if "*" not in parts:
+        return [(key, "/proc/sys/" + "/".join(parts))]
+    at = parts.index("*")
+    directory = "/proc/sys/" + "/".join(parts[:at])
+    entries = sorted(host.listdir(directory))
+    if not {"all", "default"} <= set(entries):
+        return [(f"{key} (the entries of {directory})", None)]
+    rest = "/".join(parts[at + 1:])
+    return [(".".join(parts[:at]) + f".{entry}." + ".".join(parts[at + 1:]), f"{directory}/{entry}/{rest}") for entry in entries]
+
+
+def sysctl_baseline(host):
+    """Every SYSCTL_BASELINE setting has its value in /proc/sys, on every interface for a "*" key. All the
+    differences are named, not only the first."""
+    wrong = []
+    for key, want in SYSCTL_BASELINE.items():
+        for name, path in sysctl_paths(host, key):
+            value = host.read(path) if path else None
+            if value is None:
+                wrong.append(f"{name} cannot be read (want {want})")
+            elif " ".join(value.split()) != want:
+                wrong.append(f"{name}={' '.join(value.split())!r} (want {want})")
+    if wrong:
+        return False, f"{len(wrong)} kernel setting(s) differ from the baseline {SYSCTL_FILE}: " + "; ".join(wrong)
+    return True, f"all {len(SYSCTL_BASELINE)} settings of {SYSCTL_FILE} hold in /proc/sys"
+
+
+def service_identity(host, service):
+    """(user, uid, gid, process gids, "") for a running service whose kernel uids are its User='s, or
+    (None, None, None, None, why)."""
+    _, props = unit_properties(host, "User", "MainPID", "LoadState", service=service)
+    if props.get("LoadState") != "loaded":
+        return None, None, None, None, f"{service} is not loaded"
+    user = props.get("User", "")
+    if user in ("", "root", "0"):
+        return None, None, None, None, f"{service} runs as {user or 'root (no User=)'}"
+    rc, entry = host.run(["getent", "passwd", user])
+    fields = entry.strip().split(":") if rc == 0 else []
+    if len(fields) < 4 or not fields[2].isdigit() or not fields[3].isdigit():
+        return None, None, None, None, f"{service}'s user {user!r} is not a user on this host"
+    uid, gid = fields[2], fields[3]
+    if uid == "0":
+        return None, None, None, None, f"{service}'s user {user!r} has uid 0"
+    pid = props.get("MainPID", "")
+    if not pid.isdigit() or pid == "0":
+        return None, None, None, None, f"{service} is not running, so the user the kernel gave it cannot be read (start it first)"
+    status = host.read(f"/proc/{pid}/status") or ""
+    uids = re.search(r"^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", status, re.M)
+    gids = re.search(r"^Gid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", status, re.M)
+    groups = re.search(r"^Groups:[ \t]*([\d \t]*)$", status, re.M)
+    if not uids or not gids or not groups:
+        return None, None, None, None, f"/proc/{pid}/status ({service}) has no Uid, Gid or Groups line"
+    if set(uids.groups()) != {uid}:
+        return None, None, None, None, (f"{service}'s running process (pid {pid}) has uids {' '.join(uids.groups())}, "
+                                        f"not {user}'s {uid} throughout")
+    # The running primary group is the user's own group, as the kernel reports it: a unit's Group= can give a process
+    # another one, and two processes sharing it would share what that group may read
+    if set(gids.groups()) != {gid}:
+        return None, None, None, None, (f"{service}'s running process (pid {pid}) has gids {' '.join(gids.groups())}, "
+                                        f"not {user}'s own group {gid} throughout")
+    return user, uid, gid, {gid} | set(groups.group(1).split()), ""
+
+
+def separate_users(host):
+    """The KMS daemon and the bootstrap process run as two different unprivileged users, and neither process holds
+    the other's primary group."""
+    kms = service_identity(host, SERVICE)
+    if kms[0] is None:
+        return False, kms[4]
+    boot = service_identity(host, BOOTSTRAP_SERVICE)
+    if boot[0] is None:
+        return False, boot[4]
+    (k_user, k_uid, k_gid, k_groups, _), (b_user, b_uid, b_gid, b_groups, _) = kms, boot
+    if k_user == b_user or k_uid == b_uid:
+        return False, f"{SERVICE} and {BOOTSTRAP_SERVICE} run as the same user ({k_user}, uid {k_uid}, and {b_user}, uid {b_uid})"
+    if k_gid == b_gid:
+        return False, f"{k_user} and {b_user} share the primary group {k_gid}"
+    if b_gid in k_groups:
+        return False, f"the running KMS daemon holds {b_user}'s primary group {b_gid}"
+    if k_gid in b_groups:
+        return False, f"the running bootstrap process holds {k_user}'s primary group {k_gid}"
+    return True, (f"{SERVICE} runs as {k_user} (uid {k_uid}, gid {k_gid}) and {BOOTSTRAP_SERVICE} as {b_user} "
+                  f"(uid {b_uid}, gid {b_gid}); neither process holds the other's group")
+
+
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
           "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
-          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule}
+          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule,
+          "kernel_sysctl_baseline": sysctl_baseline, "bootstrap_and_kms_users_separate": separate_users}

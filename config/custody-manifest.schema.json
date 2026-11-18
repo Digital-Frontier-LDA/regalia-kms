@@ -135,6 +135,41 @@
         },
         {
           "if": {
+            "properties": {
+              "backend": {
+                "enum": [
+                  "nitrokey-pkcs11",
+                  "yubikey-openpgp"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "object_id": {
+                "pattern": "^(?:[0-9a-f]{2}){1,64}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backend": {
+                "const": "yubikey-piv"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "object_id": {
+                "pattern": "^[0-9a-f]{2}$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "required": [
               "token_label"
             ]

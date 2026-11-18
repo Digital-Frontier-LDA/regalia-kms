@@ -97,7 +97,9 @@ PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_
 HOSTKEY="${SYSTEMD_CREDENTIAL_SECRET:-/var/lib/systemd/credential.secret}"
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
-CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
+# /etc/credstore.encrypted is a link to this, on /var: / is a tmpfs on a verity-/usr host, and a credential sealed into
+# /etc would be gone at the next boot (#61, deploy/baremetal/hostpaths.py). Written by its /var name, never the link.
+CREDSTORE="${REGALIA_CREDSTORE:-/var/lib/regalia-etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'seal-hsm-pin: %s\n' "$*" >&2; }
 INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regalia-pin-import.pub.pem"; REPLACE_IMPORT=0
@@ -313,6 +315,10 @@ if [ -n "$PUBKEY" ]; then
   say "signed policy: the TPM accepts this boot's PCR 11 signature by $PKFP, and refuses none"
 fi
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
+# the name a unit READS it by: the /etc one, a link to the default credstore on /var (#61), and the only source the
+# deployment check accepts (PIN-CUSTODY.md: under /etc/credstore.encrypted/regalia-kms-); an overridden credstore
+# (REGALIA_CREDSTORE: a bench, a drill) is read where it is
+READ_AS="$DEST"; [ -n "${REGALIA_CREDSTORE:-}" ] || READ_AS="/etc/credstore.encrypted/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
 # ---- a blob is opened FIRST, before any card is touched --------------------------------------------
@@ -484,6 +490,7 @@ SEALED
   device        : $KIND $SERIAL
   key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "host key + tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$([ "$BENCH" = 0 ] && [ -n "${SYSTEMD_CREDENTIAL_SECRET:-}" ] && echo " (TEST host key $HOSTKEY, not production)")$SIGNED_REC
   sealed at    : $(date -u +%FT%TZ)
-Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):
-  LoadCredentialEncrypted=$NAME:$DEST
+Service line (on the KMS host image its generator names this credential to regalia-kms.service at the next boot,
+or now: systemctl daemon-reload; elsewhere, a drop-in of the unit's, deploy/systemd/regalia-kms-credentials.conf.example):
+  LoadCredentialEncrypted=$NAME:$READ_AS
 REC

@@ -7,7 +7,8 @@
 # one pinned snapshot. Build 2 runs in a HOSTILE environment the builder must not let through: another locale, time
 # zone, umask, TMPDIR and working directory; a stray SOURCE_DATE_EPOCH; and Go variables that would change the
 # programs (GOFLAGS, CGO_ENABLED, GOTOOLCHAIN=local) or weaken their verification (GOSUMDB=off, GONOSUMDB, GOINSECURE).
-# Every build's rootfs.tar and build record must be identical. It writes OUT/build-N/ and, on a difference, prints
+# Every build's rootfs.tar, /usr image (usr.erofs, usr.verity: the dm-verity design, #61) and build record must be
+# identical, so the /usr root hash (usrhash=) is too. It writes OUT/build-N/ and, on a difference, prints
 # the listing lines that differ. CI runs it on a GitHub runner (.github/workflows/ci.yml, rootfs-reproducible).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -38,7 +39,8 @@ first="$(sha256sum < "$OUT/build-1/rootfs.tar" | cut -d' ' -f1)"
 same=1
 for n in $(seq 2 "$BUILDS"); do
   this="$(sha256sum < "$OUT/build-$n/rootfs.tar" | cut -d' ' -f1)"
-  if [ "$this" != "$first" ] || ! cmp -s "$OUT/build-1/rootfs-build.json" "$OUT/build-$n/rootfs-build.json"; then
+  if [ "$this" != "$first" ] || ! cmp -s "$OUT/build-1/rootfs-build.json" "$OUT/build-$n/rootfs-build.json" \
+     || ! cmp -s "$OUT/build-1/usr.erofs" "$OUT/build-$n/usr.erofs" || ! cmp -s "$OUT/build-1/usr.verity" "$OUT/build-$n/usr.verity"; then
     same=0
     echo "rootfs-reproducible: build $n differs from build 1 ($this vs $first); the listing lines that differ:"
     diff "$OUT/build-1/rootfs-listing.txt" "$OUT/build-$n/rootfs-listing.txt" | head -60 || true
@@ -47,3 +49,6 @@ for n in $(seq 2 "$BUILDS"); do
 done
 [ "$same" = 1 ] || exit 1
 echo "rootfs-reproducible: IDENTICAL over $BUILDS builds: rootfs.tar $first ($(wc -l < "$OUT/build-1/rootfs-listing.txt") entries)"
+echo "rootfs-reproducible: IDENTICAL /usr: $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_sha256"], "usr.verity", u["verity_sha256"])' "$OUT/build-1/rootfs-build.json")"
+# the image's /etc as a booted host makes it (#61: / on tmpfs, /etc from /usr/share/factory/etc before systemd-sysusers)
+e2e/etc-factory.sh "$OUT/build-1/rootfs.tar"

@@ -30,8 +30,8 @@ func rotatingRegistry(t *testing.T, bindings string) *Registry {
 // for; a fixture on a backend that cannot seal would fail Load for an unrelated reason and never
 // reach the rotation rules under test. A commissioned Nitrokey needs a pinned serial and DevAut
 // fingerprint — a retired one does not, which is validateBinding's existing distinction.
-const retiredV1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"retired","kek_algorithm":"rsa4096","kek_version":"1"}`
-const activeV2 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"slot-2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"2"}`
+const retiredV1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"retired","kek_algorithm":"rsa4096","kek_version":"1"}`
+const activeV2 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"a2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"2"}`
 
 // TestARotatedManifestLoadsAtAll is the precondition for everything below, and was false until
 // #84: validateBinding refused any retired binding on a seal-capable object, so the state a
@@ -51,8 +51,8 @@ func TestUnwrapResolvesTheRetiredKEKTheEnvelopeNames(t *testing.T) {
 	}
 	// The slot, not just the version: a route carrying version 1 while pointing at v2's device
 	// would send the old envelope to the new card, where it cannot unwrap.
-	if route.Binding.ObjectID != "slot-1" || route.KEKVersion != "1" {
-		t.Fatalf("resolved to slot %q version %q, want slot-1/1 — the envelope's own generation must choose the slot",
+	if route.Binding.ObjectID != "a1" || route.KEKVersion != "1" {
+		t.Fatalf("resolved to slot %q version %q, want a1/1 — the envelope's own generation must choose the slot",
 			route.Binding.ObjectID, route.KEKVersion)
 	}
 	if route.Binding.State != "retired" {
@@ -151,7 +151,7 @@ func TestUnwrapRefusesAnEmptyVersion(t *testing.T) {
 // TestUnwrapRefusesTwoBindingsClaimingOneGeneration. Which card opened a secret must not depend on
 // iteration order.
 func TestUnwrapRefusesTwoBindingsClaimingOneGeneration(t *testing.T) {
-	duplicate := strings.Replace(retiredV1, `"device_id":"dev-1","object_id":"slot-1"`, `"device_id":"dev-3","object_id":"slot-3"`, 1)
+	duplicate := strings.Replace(retiredV1, `"device_id":"dev-1","object_id":"a1"`, `"device_id":"dev-3","object_id":"a3"`, 1)
 	if duplicate == retiredV1 {
 		t.Fatal("fixture did not change: the duplicate binding is the same one, so this proves nothing")
 	}

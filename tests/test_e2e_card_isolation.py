@@ -35,12 +35,31 @@ PIN = re.compile(r"--login\b|--pin\b|--so-pin\b|--new-pin\b|--change-pin\b|--unl
 # REGALIA_X_PIN, PIN; not KEYPIN), not only REGALIA_*: a Go test or a unit reads it from there (#225). Searched
 # on the view with every quoted string blanked to one word, so a quoted value is one token and only an
 # assignment followed by a command word is one; reading a PIN into a shell variable is not presenting it.
+# One shell word on the lexed view (see LEXED_WORD below, the same pattern)
+_LEXED_WORD = r'(?:[^\s"$]|"[^"\n]*"|\$\([^)\n]*\)|\$(?!\())+'
+# A prefix's value on the lexed view: one lexed word that a ; & | does not end inside (pass=0; fail=0 is no prefix)
+_PREFIX_VALUE = r'(?:[^\s"$;&|]|"[^"\n]*"|\$\([^)\n]*\)|\$(?!\())+'
 PIN_PREFIX = re.compile(r"(?<![\w$-])(?<!export )([A-Za-z_]\w*)=[^\s;&|]*\s+(?=[^\s;&|#)])")
 
 
-def pin_at(line, bare_line):
-    """The first PIN use on a line: PIN (on the line) or PIN_PREFIX (on its blanked view, same positions)."""
+# PIN_PREFIX for the lexed view, tried at every position: the value is one lexed word (a quoted string or a "$( … )"
+# with its spaces), so NK_PIN="$(cat f)" ./tool inside a "$( … )" is a prefix there and not cut at the first space
+PIN_PREFIX_AT = re.compile(r"(?=(?P<all>(?<![\w$-])(?<!export )(?P<name>[A-Za-z_]\w*)=(?:" + _PREFIX_VALUE
+                           + r")?\s+(?=[^\s;&|#)])))")
+
+
+def pin_at(line, bare_line, lexed_line=None):
+    """The first PIN use on a line: PIN (on the line) or PIN_PREFIX (on its blanked view, same positions). And
+    PIN_PREFIX on the LEXED view too (quoted_blanked: "…" blanked, but code inside a quoted "$( … )" kept as code):
+    the blanked view blanks a whole "$( … )", so out="$(NK_PIN="$P" tool …)" held no PIN line at all (#675)."""
     prefixes = [m for m in PIN_PREFIX.finditer(bare_line) if pin_name(m.group(1))]
+    # on the lexed view at EVERY position (out="$(NK_PIN=… is one word there, and a match of it would hide the prefix
+    # inside); an assignment OF a "$( … )" (PIN="$(openssl rand …)") would read as a prefix, so a match there counts
+    # only when its value is closed
+    if lexed_line is not None:
+        prefixes += [m for m in PIN_PREFIX_AT.finditer(lexed_line) if pin_name(m.group("name"))
+                     and m.group("all").count("(") == m.group("all").count(")")]
+    prefixes.sort(key=lambda m: m.start())
     found = [m for m in [PIN.search(line)] + prefixes[:1] if m]
     return min(found, key=lambda m: m.start()) if found else None
 
@@ -197,7 +216,17 @@ EXEC_PREFIX = r"exec(?:\s+(?:" + _with_argument("a", ()) + r"|-[cl]+))*"
 ENV_OPTIONS = (r"(?:\s+(?:" + _with_argument("uC", ("unset", "chdir"))
                + r"|-(?![uCS-])\S*|--(?!(?:unset|chdir|split-string)\b)\S*))*")
 # CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
-PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX
+# One shell word on the lexed view: "…" is blanked there but "$( … )" stays code, so a word can hold a space.
+# The four alternatives start with different characters and cannot overlap (no backtracking blow-up, py/redos).
+LEXED_WORD = _LEXED_WORD
+# The drills' own bounds (#684): bounded SECONDS COMMAND (pkcs11-removal.sh, pkcs11-contract.sh) and
+# bench_bounded SECONDS COMMAND (lib/bench_cards.sh) run COMMAND as timeout does, so what follows them is checked.
+# Each takes exactly ONE word before COMMAND (test_e2e_timeout_escalation pins it); a first word that starts with
+# "-" makes the helper refuse to run anything (125), so it is no form to model.
+BOUNDED_PREFIX = r"(?:bounded|bench_bounded)\s+(?!-)" + LEXED_WORD
+# NAME=VALUE words before the command word (REGALIA_Q_PIN="$Q_PIN" bounded … in pkcs11-contract.sh)
+ASSIGNMENTS = r"(?:[A-Za-z_]\w*=(?:" + LEXED_WORD + r")?\s+)*"
+PREFIXES = (r"builtin|command|" + EXEC_PREFIX + r"|nohup|time|" + NICE_PREFIX + "|" + TIMEOUT_PREFIX + "|" + BOUNDED_PREFIX
             + r"|env" + ENV_OPTIONS + r"(?:\s+\w+=\S*)*")
 REFUSED_START = CALL_START + r"(?:(?:" + PREFIXES + r")\s+(?:-\S+\s+)*)*"
 # sudo's options that take an argument (sudo -u root stdbuf …): read as a flag alone, the user would be taken for the
@@ -208,7 +237,7 @@ SUDO_LONGS = ("user", "group", "close-from", "chdir", "host", "prompt", "chroot"
 SUDO_PREFIX = (r"sudo(?:\s+(?:" + _with_argument("ugCDhpRrTU", SUDO_LONGS) + r"|-(?![ugCDhpRrTU-])\S*|--(?!(?:"
                + "|".join(SUDO_LONGS) + r")\b)\S*))*")
 # A command position for the wrapper check: past the prefixes, and past sudo (#697 review, B1)
-WRAPPER_START = CALL_START + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
+WRAPPER_START = CALL_START + ASSIGNMENTS + r"(?:(?:" + PREFIXES + "|" + SUDO_PREFIX + r")\s+(?:-\S+\s+)*)*(?=\S)"
 # One shell word as written: unquoted characters, '…', "…" and backslash escapes, joined
 SHELL_WORD_AS_WRITTEN = re.compile(r"""(?:[^\s'"\\;&|()<>]|\\.|'[^']*'|"[^"]*")+""")
 # A wrapper's name as the shell runs it, once quotes and escapes are removed: bare, or by an absolute path
@@ -270,6 +299,139 @@ def pin_name(name):
     word that merely contains it (KEYPIN)."""
     words = name.lower().split("_")
     return bool({"pin", "puk", "secret", "pass", "password", "passphrase"} & set(words)) and words[-1] not in ("file", "path", "dir")
+
+
+# A PIN ON ARGV (#675). The command line of a running process is readable by every process on the host
+# (/proc/PID/cmdline, ps), so a PIN reaches a command in its ENVIRONMENT (NK_PIN="$PIN" tool, --pin env:NK_PIN),
+# on standard input, or in a file; never as an argument. Two rules, each read on the lexed view so that code inside a
+# quoted "$( … )" is code:
+#   * a PIN option's value that is not env:NAME (--pin "$P", --so-pin 123456, --pin="$(cat f)"), whatever the name;
+#   * a secret-named variable (pin_name) expanded as an argument of a command that runs as its own process. Not one
+#     to a shell builtin or keyword (printf, [, [[, local, read, case: no process, no argv), to one of the script's
+#     own functions (no process either; what the function does with it is read on its own lines), or as the value
+#     of a NAME=VALUE before the command word (its environment) or after <<< (its standard input). An assignment
+#     AFTER a command word is that command's argument: sudo NK_PIN="$P" tool puts the PIN in sudo's argv.
+# A tool that cannot take a PIN any other way is allowed by its exact line, with why.
+ARGV_PIN_ALLOWED = {
+    ("cosmos-simapp-kms-tx.sh", 'softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null'):
+        "SoftHSM only (the emulated branch, marked): softhsm2-util takes no env: form, and both PINs are random values "
+        "made on the line above for a token that lives in this run's $STATE and is deleted with it, never a card's",
+}
+# A PIN option, its name bare or quoted ("--pin" "$P" is --pin to the command), its value after = or a blank. The short
+# forms are a PIN only for the tools whose option they are: pkcs11-tool -p, ykman -P (-lp in one cluster too).
+PIN_OPTION = re.compile(r"""(?<![\w-])(?P<q>["']?)(?P<opt>--(?:pin|so-pin|new-pin|new-so-pin|puk|new-puk)|-[A-Za-z]*[pP])"""
+                        r"""(?:(?P=q)(?:=|\s+)|=)(?=\S)""")
+SHORT_PIN_OPTIONS = {"pkcs11-tool": "p", "ykman": "P"}
+# A redirection operator, at the end of the text before a word: the word is a file name (or here-string), not argv
+REDIRECTION = re.compile(r"(?:\d*(?:<<<|<>|>>|>\||<&|>&|<|>)|&>>?)\s*$")
+PIN_EXPANSION = re.compile(r"(?<!\\)\$\{?([A-Za-z_]\w*)")
+# What runs no process of its own: the shell's builtins and keywords, less those that run another command
+# (handled as the prefixes they are) or code from a string (refused elsewhere).
+IN_SHELL = (set(subprocess.run(["bash", "-c", "compgen -b; compgen -k"], capture_output=True, text=True).stdout.split())
+            - {"exec", "command", "builtin", "eval", "source", ".", "time", "coproc", "enable"})
+# Command-word prefixes: exec, command and builtin hand the PIN to the word after them; the rest run a process.
+PASS_THROUGH = {"exec", "command", "builtin"}
+KEYWORDS_BEFORE_A_COMMAND = {"then", "do", "else", "elif", "if", "while", "until", "!", "time", "{"}
+
+
+def _simple_commands(view):
+    """For each position of a lexed line, (where its simple command starts, its nesting depth), read left to right:
+    a ; & | ` { } or newline ends a command, "$(" and "(" open a nested one, ")" closes it, and a ")" with nothing
+    open is a case label's end. A parameter expansion's braces are not a group's."""
+    while True:
+        new = re.sub(r"\$\{[^{}]*\}", lambda m: "$" + "_" * (len(m.group(0)) - 1), view)
+        if new == view:
+            break
+        view = new
+    owner, stack, i = [None] * len(view), [0], 0
+    while i < len(view):
+        c = view[i]
+        if c == "(":
+            owner[i] = (stack[-1], len(stack))
+            stack.append(i + 1)
+        elif c == ")" and len(stack) > 1:
+            stack.pop()
+            owner[i] = (stack[-1], len(stack))
+        elif c in ";&|`{}\n" or c == ")":
+            owner[i] = (stack[-1], len(stack))
+            stack[-1] = i + 1
+        else:
+            owner[i] = (stack[-1], len(stack))
+        i += 1
+    return owner, view
+
+
+def _words_before(view, owner, start, depth, end):
+    """The words of the simple command from start to end, anything nested deeper blanked into its word."""
+    chars = [c if (owner[k] is None or owner[k][1] <= depth) else "_" for k, c in enumerate(view[start:end], start)]
+    return "".join(chars).split()
+
+
+def argv_pins(lines, lexed, own_functions=()):
+    """[(line, why)]: each line that hands a PIN to a command on its argv (#675)."""
+    found = []
+    for n, (line, view) in enumerate(zip(lines, lexed), 1):
+        hits = []
+        owner, plain = _simple_commands(view)
+
+        def command_of(pos):
+            """The command whose argument the word at pos is, None for a word that is no argument: a NAME=VALUE before
+            the command word, or a redirection's operand (a file name, a here-string: standard input)."""
+            start, depth = owner[pos]
+            word_start = pos
+            while (word_start > start and not plain[word_start - 1].isspace() and plain[word_start - 1] not in "<>"
+                   and owner[word_start - 1][1] >= depth):
+                word_start -= 1
+            if REDIRECTION.search(line[:word_start]):
+                return None, word_start
+            words = _words_before(plain, owner, start, depth, word_start)
+            kept, skip = [], False
+            for w in words:                             # redirections and their operands are no words of argv
+                if skip:
+                    skip = False
+                elif re.match(r"\d*(?:[<>]|&>)", w):
+                    skip = bool(REDIRECTION.fullmatch(w))
+                else:
+                    kept.append(w)
+            while kept and kept[0] in KEYWORDS_BEFORE_A_COMMAND:
+                kept.pop(0)
+            before = [w for w in kept if not re.match(r"[A-Za-z_]\w*\+?=", w)]
+            if not before:
+                return ("" if not re.match(r"[A-Za-z_]\w*\+?=", plain[word_start:]) else None), word_start
+            command = before[0].strip("\"'\\")
+            while command in PASS_THROUGH and len(before) > 1:
+                before.pop(0)
+                command = before[0].strip("\"'\\")
+            return command, word_start
+
+        for m in PIN_OPTION.finditer(line):
+            if view[m.start()] != (m.group("q") or "-"):
+                continue                               # in a quoted string: a message, not an option
+            opt = m.group("opt")
+            if not opt.startswith("--"):
+                command = command_of(m.start())[0] or ""
+                if SHORT_PIN_OPTIONS.get(command.rsplit("/", 1)[-1]) != opt[-1]:
+                    continue                           # -p of mkdir, systemctl show, systemd-run: no PIN
+            value = SHELL_WORD_AS_WRITTEN.match(line, m.end())
+            if not (value and re.fullmatch(r"""(["']?)env:[A-Za-z_]\w*\1""", value.group(0).strip("\"'"))):
+                hits.append("a PIN option (%s) whose value is not env:NAME" % opt)
+        for m in PIN_EXPANSION.finditer(line):
+            if not pin_name(m.group(1)):
+                continue
+            command, _ = command_of(m.start())
+            if command is None:
+                continue                               # the environment, a file name or standard input
+            if command == "":
+                hits.append("%s used as a command word" % m.group(1))
+                continue
+            if command in IN_SHELL or command in own_functions:
+                continue
+            hits.append("%s on the command line of %s" % (m.group(1), command))
+        if hits:
+            found.append((n, "a PIN on argv, readable by every process on the host (/proc/PID/cmdline): %s; hand it in "
+                             "the environment (NK_PIN=\"$PIN\" tool, --pin env:NK_PIN) or on standard input"
+                             % "; ".join(dict.fromkeys(hits))))
+    return found
 
 
 def script_problems(text, script=None):
@@ -391,6 +553,8 @@ def script_problems(text, script=None):
                     found.append((n, "exports %s, which is not on the allow-list of non-secret names" % (exported or word)))
                 elif exported in EXPORT_VALUES and value and not EXPORT_VALUES[exported].fullmatch(value):
                     found.append((n, "exports %s with a value not on its allow-list" % exported))
+    own = {name for name, _, _, _ in functions(bare)}
+    found += [(n, why) for n, why in argv_pins(lines, lexed, own) if (script, lines[n - 1].strip()) not in ARGV_PIN_ALLOWED]
     return found
 
 
@@ -536,6 +700,7 @@ def gated_functions(lines, bare=None, yubikey=True, with_exiting=False):
     yubikey=False the YubiKey bus check is not a gate (for an OpenSC PIN line). With with_exiting, also the
     subset whose gate's failure exits the shell (a plain call of one of those is a gate)."""
     bare = bare if bare is not None else lines
+    lexed = quoted_blanked(lines)
     defs, gated, exiting = functions(bare), set(), set()
     while True:
         gate_call = calls(GATES + tuple(gated), exiting, yubikey)
@@ -547,8 +712,9 @@ def gated_functions(lines, bare=None, yubikey=True, with_exiting=False):
             for k in range(start, end):
                 code_b = bare[k][head:] if k == start else bare[k]
                 code_l = lines[k][head:] if k == start else lines[k]
+                code_x = lexed[k][head:] if k == start else lexed[k]
                 g = gate_call.search(code_b, continued=bare[k + 1] if k + 1 < len(bare) else "", tail_of_function=(k == end - 1))
-                pin = pin_at(code_l, code_b)
+                pin = pin_at(code_l, code_b, code_x)
                 if first_gate is None and g:
                     first_gate = (k, g.start(), g, code_b)
                 if first_pin is None and pin:
@@ -613,6 +779,7 @@ def ungated_pin_lines(lines, raw=None):
     """lines: code_lines(text); raw: text.splitlines()."""
     raw = raw if raw is not None else lines
     bare = code_lines("\n".join(raw), blank_strings=True) if raw is not lines else lines
+    lexed = quoted_blanked(lines)
     set_e = bool(SET_E.search("\n".join(lines)))
     gated, exiting = gated_functions(lines, bare, with_exiting=True)
     gated_o, exiting_o = gated_functions(lines, bare, yubikey=False, with_exiting=True)
@@ -629,7 +796,7 @@ def ungated_pin_lines(lines, raw=None):
         for k in range(start, end):
             owner[k] = start
     for i, line in enumerate(lines):
-        pin = pin_at(line, bare[i])
+        pin = pin_at(line, bare[i], lexed[i])
         if not pin:
             continue
         opensc = bool(OPENSC_PIN.search(line))
@@ -1048,6 +1215,33 @@ class TheCheckItself(unittest.TestCase):
         # the wrapper is named, as the shell would run it
         self.assertIn("stdbuf runs another command", " ".join(self.problems("std''buf -oL pkcs11-tool -L\n")))
 
+    def test_what_a_drill_bound_runs_is_checked_like_what_timeout_runs(self):
+        # #684 moves token calls from timeout N to bounded N / bench_bounded N: a wrapper, an env or an unset after
+        # either is refused as it is after timeout N, and a plain bounded tool call stays fine
+        # each takes one word before the command: a number, a variable, a substitution, quoted or not; and an
+        # assignment may come first, as pkcs11-contract.sh writes it (the widest form a caller writes)
+        for line in ("bounded 60 setsid pkcs11-tool -L", "bench_bounded 5 stdbuf -oL pkcs11-tool -L",
+                     'x="$(bounded 60 /usr/bin/setsid pkcs11-tool -L)"', "bounded 60 sudo -n stdbuf -oL pkcs11-tool -L",
+                     "timeout 60 setsid pkcs11-tool -L", 'bounded "$PROBE_BOUND" setsid pkcs11-tool -L',
+                     'bench_bounded "${BOUND}" stdbuf -oL pkcs11-tool -L', "bounded ${B:-60} setsid pkcs11-tool -L",
+                     'bounded "$(bound_for p11)" setsid pkcs11-tool -L', "bounded $(bound_for p11) setsid pkcs11-tool -L",
+                     'REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" setsid pkcs11-tool -L',
+                     'A=1 B= bench_bounded 5 stdbuf -oL pkcs11-tool -L', "X=1 timeout 60 setsid pkcs11-tool -L",
+                     "X=1 setsid pkcs11-tool -L"):
+            with self.subTest(line=line):
+                found = self.problems(line + "\n")
+                self.assertTrue(any("runs another command" in why for why in found), found)
+        for pre in ("", "timeout 60 ", "bounded 60 ", "bench_bounded 5 "):
+            with self.subTest(env_after=pre):
+                self.assertEqual(bool(self.problems(pre + "env NK_PIN=1 pkcs11-tool -L\n")),
+                                 bool(self.problems("env NK_PIN=1 pkcs11-tool -L\n")))
+        for fine in ('bounded 60 pkcs11-tool --module "$MOD" -L', "bench_bounded 5 pkcs11-tool -L", "echo bounded 60 setsid",
+                     'REGALIA_Q_PIN="$Q_PIN" bounded "$PROBE_BOUND" python3 -Es "$HERE/lib/p11_extract_probe.py"',
+                     "X=setsid pkcs11-tool -L", "bounded 60 echo setsid"):
+            with self.subTest(fine=fine):
+                self.assertFalse(any("runs another command" in why for why in self.problems(fine + "\n")),
+                                 self.problems(fine + "\n"))
+
     def test_a_wrapper_name_that_is_not_the_command_is_not_one(self):
         # an option's argument, a substitution's text, an assignment's value, a relative path: not a wrapper run
         for fine in ("sudo -u stdbuf pkcs11-tool -L", "sudo --user stdbuf pkcs11-tool -L", 'x="$(printf stdbuf)"',
@@ -1090,6 +1284,94 @@ class TheCheckItself(unittest.TestCase):
             with self.subTest(line):
                 self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
         self.assertEqual(self.ungated('true\nHSM_PIN="$(cat f)"\nX_PIN=1; echo ok\nHSM_KEYPIN=1 ./x\nPIN_FILE=f ./x\n'), [])
+
+    def test_a_pin_handed_over_inside_a_quoted_substitution_is_a_pin_line(self):
+        """#675: the blanked view blanks a whole quoted "$( … )", so a PIN handed to a command inside one was no PIN line
+        at all, and an ungated one passed (measured in #673: its gate removed, both suites stayed green)."""
+        for line in ('out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es x.py 2>&1)"', 'rc="$(NK_PIN="$P" pkcs11-tool -O; echo $?)"',
+                     'x="$(cd /tmp && SO_PIN=1 ./init)"'):
+            with self.subTest(line):
+                self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
+        gated = 'bench_gate "$S" "$SLOT" || exit 1\nout="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es x.py 2>&1)"\n'
+        self.assertEqual(self.ungated(gated), [], "(control) the same line behind a gate")
+        # an assignment OF a substitution is no PIN handed over: reading one into a variable is not presenting it
+        self.assertEqual(self.ungated('true\nPIN="$(openssl rand -hex 16)"\nX_PIN="$(sed -n p f | head -1)"\n'
+                                      'pass=0; fail=0\npass=$((pass+1)); x=1\n'), [])
+
+    def argv(self, script, name="t.sh"):
+        return [why for why in self.problems(script, name) if "PIN on argv" in why]
+
+    def test_a_pin_on_argv_is_refused(self):
+        """#675: a command line is readable by every process on the host (/proc/PID/cmdline), so a PIN goes in the
+        environment or on standard input. Each line below hands one to a process as an argument."""
+        for line in ('pkcs11-tool --login --pin "$PIN" -O', "sc-hsm-tool --so-pin 0000 --initialize",
+                     'pkcs11-tool --login --pin="$(cat f)" -O', 'out="$(pkcs11-tool --login --pin "$P" -O)"',
+                     'grep -qF "$NK_PIN" out.log', './tool "$SO_PIN"', 'out="$(./tool "${HSM_PUK}" 2>&1)"',
+                     'sudo NK_PIN="$PIN" ./tool', 'env NK_PIN="$PIN" ./tool', 'command ./tool "$PIN"',
+                     'X="$(slot "$A")" ./tool "$A_USER_PIN"', 'case "$x" in a) ./tool "$PIN";; esac'):
+            with self.subTest(line):
+                self.assertEqual(len(self.argv(line + "\n")), 1, self.problems(line + "\n", "t.sh"))
+
+    def test_a_pin_in_the_environment_on_stdin_or_in_the_shell_is_not_on_argv(self):
+        for line in ('REGALIA_Q_PIN="$Q_PIN" p11 --login --pin env:REGALIA_Q_PIN -O', "pkcs11-tool --login --pin 'env:NK_PIN' -O",
+                     'out="$(REGALIA_Q_PIN="$Q_PIN" python3 -Es x.py 2>&1)"', "printf '%s' \"$PIN\" | openssl pkeyutl -encrypt",
+                     '[ -n "$PIN" ] || exit 1', '[[ "$PIN" =~ ^[0-9]+$ ]] || exit 1', 'local p="$NK_PIN"', 'grep -qF -f - f <<< "$NK_PIN"',
+                     'X="$(slot "$A")" REGALIA_PIN_A="$A_USER_PIN" ./tool', 'echo "the --pin option" >&2',
+                     'f(){ :; }; f "$PIN"', 'pin_of(){ case "$1" in a) echo "$A_PIN";; b) printf %s "$B_PIN";; esac; }',
+                     'PIN="$(openssl rand -hex 16)"', '[ "$back" = "$(printf %s "$NK_PIN" | sha256sum)" ] || exit 1'):
+            with self.subTest(line):
+                self.assertEqual(self.argv(line + "\n"), [])
+
+    def test_the_review_forms_of_a_pin_on_argv_are_refused(self):
+        """#724 review: a short PIN option of the tool that takes one, a quoted option name, a nested substitution in a
+        prefix's value (a PIN line, not an argv one: ungated, it fails the gate check)."""
+        for line in ('pkcs11-tool -l -p "$P" -O', "pkcs11-tool -l -p 0000 -O", 'pkcs11-tool -lp "$P" -O',
+                     'ykman piv keys generate -P "$P" 9a -', 'pkcs11-tool --login "--pin" "$P" -O',
+                     "pkcs11-tool --login '--pin' \"$P\" -O", 'pkcs11-tool --login "--pin=$P" -O',
+                     'out="$(/usr/bin/pkcs11-tool -l -p "$P" -O)"'):
+            with self.subTest(line):
+                self.assertEqual(len(self.argv(line + "\n")), 1, self.problems(line + "\n", "t.sh"))
+        for line in ("pkcs11-tool -l -p env:NK_PIN -O", "pkcs11-tool --login \"--pin\" 'env:NK_PIN' -O", 'mkdir -p "$W/x"',
+                     "systemctl show -p ActiveState kms", 'systemd-run -p LoadCredentialEncrypted=pin:/x ./kms',
+                     'grep -qF -f - out.log <<<"$NK_PIN"', './tool > "$PIN_OUT"', './tool 2>"$PIN_LOG" -x',
+                     './tool < "$PIN_SOURCE"'):
+            with self.subTest(line):
+                self.assertEqual(self.argv(line + "\n"), [])
+        line = 'out="$(NK_PIN="$(cat f)" ./tool)"'
+        self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
+
+    def test_a_pin_on_argv_is_allowed_only_by_its_exact_reviewed_line(self):
+        line = 'softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null'
+        self.assertEqual(self.argv(line + "\n", "cosmos-simapp-kms-tx.sh"), [])
+        self.assertEqual(len(self.argv(line + "\n", "another.sh")), 1, "the allow-list is per script")
+        self.assertEqual(len(self.argv(line.replace("--free", "--free --slot 1") + "\n", "cosmos-simapp-kms-tx.sh")), 1,
+                         "a changed line is reviewed again")
+
+
+    def test_the_import_drills_pin_checks_read_the_pin_from_a_descriptor_and_still_find_it(self):
+        """#675's real hit: nitrokey-pin-import-drill.sh's two leak checks ran grep -qF "$NK_PIN", the real Nitrokey
+        user PIN on grep's argv. They now read it as a pattern from a descriptor. The rule refuses the old lines and
+        passes the new ones, and the drill's own two lines, run here as written, still find a planted PIN (F) and pass
+        without one (P): the check means what it meant."""
+        drill = E2E / "nitrokey-pin-import-drill.sh"
+        old = ('grep -qF "$NK_PIN" "$W/pin-A.blob" && F "the PIN is visible in the blob" || P "the blob does not contain the PIN"',
+               'grep -qF "$NK_PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"')
+        for line in old:
+            self.assertEqual(len(self.argv(line + "\n", drill.name)), 1, line)
+        checks = [l.strip() for l in drill.read_text().splitlines() if l.lstrip().startswith("grep -qF -f <(printf '%s\\n' \"$NK_PIN\")")]
+        self.assertEqual(len(checks), 2, "the drill's two PIN checks, in the descriptor form")
+        for line in checks:
+            self.assertEqual(self.argv(line + "\n", drill.name), [], line)
+        import tempfile
+        with tempfile.TemporaryDirectory() as w:
+            for planted, verdict in (("ab-planted-test-pin-cd", "F"), ("ab-planted-test-pi", "P"), ("", "P")):
+                Path(w, "pin-A.blob").write_text(planted)
+                for line in checks:
+                    with self.subTest(line=line[:40], planted=planted):
+                        r = subprocess.run(["bash", "-c", 'F(){ echo F; }; P(){ echo P; }; ' + line],
+                                           env={"PATH": "/usr/bin:/bin", "NK_PIN": "planted-test-pin", "W": w, "out": planted},
+                                           capture_output=True, text=True)
+                        self.assertEqual(r.stdout.strip(), verdict, r.stderr)
 
 
 if __name__ == "__main__":

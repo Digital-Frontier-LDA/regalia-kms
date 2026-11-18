@@ -36,6 +36,7 @@ func draftFields() map[string]func(*Draft, string) {
 		"RegistryDigest": func(d *Draft, v string) { d.RegistryDigest = v },
 		"PolicyDigest":   func(d *Draft, v string) { d.PolicyDigest = v },
 		"RBACDigest":     func(d *Draft, v string) { d.RBACDigest = v },
+		"PolicyHash":     func(d *Draft, v string) { d.PolicyHash = v },
 	}
 }
 
@@ -120,7 +121,9 @@ func TestNoFieldMayCarryKeyMaterialOrForgeALine(t *testing.T) {
 				// constrained by those rules instead. Asserting "unsafe" for them would fail on
 				// correct code; asserting merely "an error" would prove nothing, because their own
 				// rules always fire. Named here rather than quietly passing.
-				if field == "RequestID" || field == "Decision" {
+				// PolicyHash likewise: it must be a sha256 hash with a sequence beside it, so it is
+				// refused as "invalid policy position" first.
+				if field == "RequestID" || field == "Decision" || field == "PolicyHash" {
 					return
 				}
 				if err.Error() != "unsafe audit metadata" {
@@ -136,8 +139,8 @@ func TestNoFieldMayCarryKeyMaterialOrForgeALine(t *testing.T) {
 // cap rather than about long values in general.
 func TestTheLengthCapIsInclusiveAtItsEdge(t *testing.T) {
 	for field, set := range draftFields() {
-		if field == "RequestID" || field == "Decision" {
-			continue // both have their own shape rules and cannot hold 512 arbitrary bytes
+		if field == "RequestID" || field == "Decision" || field == "PolicyHash" {
+			continue // each has its own shape rule and cannot hold 512 arbitrary bytes
 		}
 		t.Run(field, func(t *testing.T) {
 			item := draft("018f0000-0000-7000-8000-000000000001", "allow")

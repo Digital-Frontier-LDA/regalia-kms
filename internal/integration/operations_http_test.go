@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,9 +40,13 @@ import (
 type softCard struct {
 	key *ecdsa.PrivateKey
 	t   *testing.T
+	// calls counts every request that reached the token boundary, so a test can show a refused
+	// request never got this far.
+	calls atomic.Int64
 }
 
 func (card *softCard) Execute(_ context.Context, _ registry.Route, operation, _, _ string, data, aad []byte) ([]byte, string, error) {
+	card.calls.Add(1)
 	switch operation {
 	case "public-key":
 		der, err := x509.MarshalPKIXPublicKey(card.key.Public())
@@ -95,6 +100,13 @@ type stack struct {
 }
 
 func buildStack(t *testing.T) *stack {
+	t.Helper()
+	return buildStackWithRevocation(t, nil)
+}
+
+// buildStackWithRevocation is buildStack with the daemon's client-certificate revocation list in
+// front of the handler, as cmd/regalia-kms wires it.
+func buildStackWithRevocation(t *testing.T, revocation *auth.RevocationList) *stack {
 	t.Helper()
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -184,7 +196,7 @@ func buildStack(t *testing.T) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := auth.NewAuthenticator("spiffe://regalia/", nil, func() time.Time { return now }, time.Second).
+	handler := auth.NewAuthenticator("spiffe://regalia/", revocation, func() time.Time { return now }, time.Second).
 		Middleware(api.NewHandler(coordinator))
 	return &stack{handler: handler, ca: ca, card: card, now: now}
 }

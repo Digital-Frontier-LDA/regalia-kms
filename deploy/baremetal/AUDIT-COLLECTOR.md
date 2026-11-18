@@ -38,6 +38,10 @@ same sections.
   and the head does not move. It SHOULD also keep each refusal as an alarm for its operator; conformance cannot
   verify that, since the contract has no endpoint that reads alarms back.
 - It never deletes or rewrites what it committed. There is no endpoint that returns events, only positions.
+- **It accepts every field of an event, including optional ones it has not seen before.** The KMS daemon's
+  `authorized` record carries two optional fields, `policy_sequence` and `policy_hash`: the policy spend journal's
+  head, which the KMS checks against this service's committed head at startup ([POLICY-ANCHOR.md](../../POLICY-ANCHOR.md)).
+  A service that refuses an event because of a field it does not know refuses every allowed KMS operation.
 
 **Signed receipts.** Each receipt is Ed25519 over the bytes `ReceiptPreimage`, one field a line:
 
@@ -83,6 +87,13 @@ All of it lives under `/etc/regalia/audit-ship/` and `/etc/regalia/audit-ship.en
   name.
 - **On an update that brings this check, install `collector-receipt.pub` first, then the new unit.** Without the
   pin, every shipper refuses to start, by name, until it is there.
+- **On an update that brings the policy position (epic #40 `.1.2`), upgrade the collector before the KMS.**
+  `regalia-audit-collector` decodes events strictly, so one older than this change refuses the KMS's
+  `authorized` record with the new fields, and no allowed operation is served. For an external service, confirm
+  it accepts them first (section 1). Then upgrade the KMS daemon. From then on, the KMS refuses to start while
+  the collector cannot be reached at startup (`audit collector unreachable at open`), and there is no flag that
+  skips this. Restore the collector's reachability and restart the KMS ([POLICY-ANCHOR.md](../../POLICY-ANCHOR.md),
+  "Operator recovery").
 - `regalia-audit-ship check … -probe -trail sync` also reaches the collector, read-only (readiness and each named
   stream's head), and says which step failed: unreachable, a certificate not from the CA given, or this client
   refused.

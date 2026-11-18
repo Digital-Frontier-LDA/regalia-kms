@@ -1,0 +1,114 @@
+# /etc and /var on a verity-/usr host: what is this host's own, where it lives, and what is the image's (#61, the
+# dm-verity design of 2026-10-05, comments 17-20; bead K61V-5, regalia-kms-r1s.4).
+#
+# THE LAYOUT: / is a tmpfs, so /etc starts EMPTY at every boot; /usr is the read-only erofs image under dm-verity and
+# holds the image's /etc as /usr/share/factory/etc (build-rootfs.sh); /var is this host's LUKS2 volume and the ONLY
+# thing that survives a reboot. units/00-regalia-etc.tmpfiles.conf makes /etc from the factory copy (C+) and links each
+# per-host /etc path to its /var name (L), from regalia-etc-factory.service, BEFORE systemd-sysusers.
+#
+# FOUND BY SEARCHING, not from memory: tests/test_baremetal_etc_inventory.py refuses an /etc path named in deploy/'s
+# code or units that no row here covers, and holds [per-host] equal to deploy/baremetal/hostpaths.py and to the
+# tmpfiles links. tests/test_baremetal_etc_writes.py refuses a WRITE to a [per-host] path by its /etc name.
+# MEASURED, where a row says so: e2e/etc-factory.sh on a Debian 13 host tree (the image's [packages], the commit's
+# units, sysusers and tmpfiles, the factory copy as build-rootfs.sh makes it), with the image's own systemd 257.
+#
+# Format: one row per line, fields separated by " | ", in sections; blank lines and lines starting with # are ignored.
+
+[per-host]
+# /etc path | its /var name (the file itself) | written by | read by | why it is this host's
+/etc/regalia | /var/lib/regalia-etc/regalia | enrol commit (node.json, the site configuration, the WG-SERVICE key), rejoin (etcd.conf.yml), the operator (the rest, README.md, ETCD.md, AUDIT-COLLECTOR.md, MONITORING.md) | every node unit (--config /etc/regalia/node.json), regalia-etcd, the audit shipper, node_exporter | the node's configuration and keys; L, a directory link: every file below it moves with it
+/etc/regalia/node.json | /var/lib/regalia-etc/regalia/node.json | enrol commit (install_config, by its /var name: enrol.stored) | the six node units, the operator tools' --config default | this node's ID, the root key, its TPM indices
+/etc/regalia/site.json | /var/lib/regalia-etc/regalia/site.json | enrol commit (node.json's "site"; a site move replaces it, README.md) | wg-apply, site-check, the firewall's render | the site this node boots at
+/etc/regalia/wg-service.key | /var/lib/regalia-etc/regalia/wg-service.key | enrol init (wg_key, root 0600, by its /var name) | wg-apply (node.json wg_service_key) | the WireGuard SERVICE key, made on this host (the WG-BOOT key is never here: /var/lib/regalia-enrol, then sealed onto the ESP)
+/etc/regalia/etcd.conf.yml | /var/lib/regalia-etc/regalia/etcd.conf.yml | the operator (etcdconf render, ETCD.md), rejoin (etcdconf.STORED_CONFIG) | regalia-etcd.service (--config-file, ConditionPathExists) | this member's name and peers
+/etc/regalia/etcd | /var/lib/regalia-etc/regalia/etcd | the operator (ETCD.md: peer.crt, peers.pem) | etcd (etcd.conf.yml's cert-file, trusted-ca-file) | this member's certificate
+/etc/regalia/audit-ship.env | /var/lib/regalia-etc/regalia/audit-ship.env | the operator (AUDIT-COLLECTOR.md) | regalia-audit-ship@, regalia-audit-prune@ (EnvironmentFile) | the collector and this node's site
+/etc/regalia/audit-ship | /var/lib/regalia-etc/regalia/audit-ship | the operator (client.crt, client.key 0640 root:regalia-audit-ship, collector-ca.pem, collector-receipt.pub) | regalia-audit-ship@, regalia-audit-prune@ | this node's client certificate and key
+/etc/regalia/node-exporter | /var/lib/regalia-etc/regalia/node-exporter | the operator (MONITORING.md: web.yml, server.pem, server.key) | node_exporter (--web.config.file, metrics.node_exporter_args) | this node's TLS server certificate
+/etc/regalia-kms | /var/lib/regalia-etc/regalia-kms | the operator (README.md: config.json, opensc.conf) | regalia-kms.service (-config, OPENSC_CONF) | the daemon's backends, tokens and listen address are this host's; opensc.conf moves with them (one directory, one link)
+/etc/credstore.encrypted | /var/lib/regalia-etc/credstore.encrypted | seal-hsm-pin.sh (CREDSTORE, by its /var name), the operator (regalia-etcd-peer.key, ETCD.md) | systemd (LoadCredentialEncrypted= of regalia-kms and regalia-etcd), host_probe | sealed to THIS TPM and host key; 0700 root
+/etc/chrony/regalia.conf | /var/lib/regalia-etc/chrony/regalia.conf | enrol commit (install_config), authtime chrony-conf --install (STORED_CHRONY_CONF) | chronyd -f (units/chrony.service.d/regalia.conf), its ConditionPathExists | rendered from this site's NTS servers; chronyd's AppArmor profile reads it through the link (K61V-4's boots: chronyd runs confined, enforce)
+/etc/ssh/ssh_host_ed25519_key | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key | the operator (enrol's refusal says: ssh-keygen -f the /var name) | sshd, if ever installed: [not-on-image] | the SSH host key the manifest names must outlive a reboot
+/etc/ssh/ssh_host_ed25519_key.pub | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key.pub | as the key | enrol init (ssh_host_pub, the manifest's ssh_host_pub) | as the key
+/etc/nftables.d/regalia-kms.nft | /var/lib/regalia-etc/nftables.d/regalia-kms.nft | the operator (README.md, firewall.py: rendered, checked, loaded, then moved into the /var name) | nftables.service (the image's /etc/nftables.conf includes it; enabled under /usr, gated on it: regalia-kms-r1s.8), regalia-kms.service (asserts it) | rendered from this host's site configuration
+/etc/default/prometheus-node-exporter | /var/lib/regalia-etc/default/prometheus-node-exporter | the operator (MONITORING.md: metrics node-exporter-args) | prometheus-node-exporter.service (EnvironmentFile) | ARGS from this site's monitoring CIDRs and port; L+: the package's own file is in the factory copy and is replaced by the link
+
+[boot]
+# /etc path | how it is made at boot | why not from the factory copy, nor on /var
+/etc/machine-id | PID 1 writes it before any unit: from /var/lib/dbus/machine-id when /etc has none (machine-id(5), systemd 257), else a new random ID at the first boot; 00-regalia-etc.conf's `C /var/lib/dbus/machine-id - - - - /etc/machine-id` keeps that one on /var (overriding dbus.conf's link back to /etc); the factory copy's empty file never replaces it (C+, e2e/etc-factory.sh) | not a link to /var: PID 1 reads it before any tmpfiles pass. Not systemd.machine_id= on the command line: that is the signed UKI's, the same on every host and measured into PCR 11. /var is mounted by the initrd (the UKI's systemd.mount-extra=, K61V-4), and OnQemuVerity holds the ID equal to /var's, boot after boot
+/etc/ld.so.cache | the factory copy; ldconfig.service (ConditionNeedsUpdate=/etc) rewrites it at every boot, /etc/.updated never surviving | derived from /usr; the same bytes every boot
+/etc/mtab | systemd's own tmpfiles (etc.conf: L+ ../proc/self/mounts), and the factory copy's identical link | derived
+
+[image]
+# /etc path | why it is the image's (identical on every host, in /usr/share/factory/etc), not this host's
+/etc/passwd | the image's system users, allocated at build by systemd-sysusers and the packages' maintainer scripts; copied before systemd-sysusers runs at boot so the UIDs/GIDs the files on /var carry survive (e2e/etc-factory.sh)
+/etc/group | as /etc/passwd
+/etc/shadow | as /etc/passwd (no password is set: every account is locked or nologin)
+/etc/gshadow | as /etc/passwd
+/etc/nsswitch.conf | the package default; regalia-authtime and regalia-boot-session bind it read-only
+/etc/ld.so.conf | the package default; elfclosure.py reads it on the build tree
+/etc/apparmor.d | the daemon's profile (build-rootfs.sh installs usr.sbin.regalia-kms) and the packages' profiles; loaded by apparmor.service AFTER the factory copy (units/apparmor.service.d/regalia-etc.conf)
+/etc/polkit-1/rules.d | 50-regalia-kms-pcscd.rules is the same on every host: it belongs in the image (today README.md has the operator install it; not yet in build-rootfs.sh: [open]); os_probe reads it
+/etc/crypttab | the image's own (Debian's, empty); the volume is opened by the INITRD's crypttab (90regalia-unlock: PARTLABEL=regalia-root, nothing per host); host_probe reads /etc/crypttab and must read the initrd's: K61V-3/-4's
+/etc/initrd-release | only in the initrd; regalia-boot-session's ConditionPathExists=! tells the two apart
+/etc/systemd/tpm2-pcr-signature.json | never written: systemd-stub puts the UKI's into /run/systemd; signkey and seal-hsm-pin.sh read the first of /run, /etc, /usr
+/etc/systemd/system/regalia-sync.service | not written on a node: owner.py's NODE_MARKS refuses to run where the unit exists, the image's is /usr/lib/systemd/system
+/etc/systemd | the packages' defaults (journald.conf, system.conf, logind.conf, ...): the image's
+/etc/chrony | Debian's chrony.conf (a package conffile, never touched) and sources.d; only regalia.conf in it is this host's ([per-host])
+/etc/ssh | the directory; only the ed25519 host key in it is this host's ([per-host])
+/etc/default | the packages' defaults; only prometheus-node-exporter in it is this host's ([per-host])
+/etc/nftables.d | made by the link's parent
+/etc/nftables.conf | the image's (build-rootfs.sh, regalia-kms-r1s.8): `flush ruleset` and an include of this host's ruleset, /etc/nftables.d/regalia-kms.nft, by name; Debian's accept-everything example table is not kept
+/etc/hostname | build-rootfs.sh writes fixed ones before the factory copy (K61V-4): `localhost`, and /etc/hosts' localhost lines; /etc/resolv.conf and /etc/fstab hold comments only (MEASURED before: the BUILD container's, leaked by mmdebstrap); nothing reads the hostname
+/etc/apt/sources.list.d | emptied by the build: a host is updated by a new image, never by apt
+
+[not-on-image]
+# /etc path | why it is not on the KMS host image
+/etc/regalia-sops-kms | the SOPS sidecar runs on a workload host, not the KMS host (packages.txt: regalia-sops-kms.service is not an image unit)
+/etc/ssh/regalia-user-ca.pub | sshd is not in the image (packages.txt); SSH.md's certificate trust applies only if sshd is added, and then the CA, revoked keys, principals and sshd_config.d are image-wide: the factory copy
+
+[e2e]
+# path written | by which test (and where it runs) | under the verity /usr: what K61V-4's QEMU guests must do instead
+/usr/lib/systemd/system/regalia-e2e-enrol.service | e2e/unlock-boot-qemu.sh, into the GUEST's /usr, with multi-user.target.wants links under /usr (K61V-4) | the guest's /usr is a TEST image (its root hash not the production one); nothing of the test is under /etc
+/usr/lib/systemd/system/regalia-e2e-report.service | e2e/unlock-boot-qemu.sh (guest), as above | as above
+/mnt/enrol/unlock-local.cred | e2e/lib/boot-guest/e2e-enrol: the guest's test credentials (regalia.unlock-local, regalia.wg-boot-key) sealed onto the ESP's loader/credentials | unaffected: the ESP, not /etc; the guest's enrolment state is under /var
+/etc/regalia/node.json | e2e/node-units-systemd.py (node.json, site.json, wg-service.key, measurements.json, on the CI runner) | on a verity guest: written at the /var names (hostpaths.persistent), and the links made by regalia-etc.conf
+/etc/chrony/regalia.conf | e2e/node-units-systemd.py (with its test NTS certificates /etc/chrony/e2e-s1.crt, e2e-s2.crt, on the runner) | the conf at its /var name; the test certificates are test-only image content or /run
+/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf | e2e/node-units-systemd.py (the units' e2e-tcti.conf drop-ins, chrony.service.d, /etc/sysusers.d, /etc/tmpfiles.d, on the runner) | /run/systemd/system drop-ins (a daemon-reload after writing), never /etc
+/etc/regalia/audit-ship.env | e2e/audit-ship-systemd.py (and its client certificate under /etc/regalia/audit-ship, units in /etc/systemd/system, on the runner) | the /var names; units from /run/systemd/system
+/etc/credstore.encrypted | e2e/etcd-unit-sandbox.sh (the test credential regalia-etcd-peer.key, sealed on the runner) | the /var name (/var/lib/regalia-etc/credstore.encrypted)
+/etc/regalia-kms | e2e/kms-hardened-serve.sh, e2e/kms-two-token-systemd.sh (config.json, opensc.conf, the unit in /etc/systemd/system, the polkit rule, on the runner) | the /var name; the unit and the polkit rule from the image
+/etc/dbus-1/system.d/regalia-e2e-tabrmd.conf | e2e/abrmd-probe.sh (on the runner) | test-only: /run or a test image
+/etc/machine-id | read by the three-node and node-units e2e tests as the runner's identity (REGALIA_*_HOST_OK) | read only
+
+[early]
+# /etc path | read by | before the factory copy, so on its compiled-in default: why that is acceptable, or [open]
+/etc/systemd/system.conf | PID 1, at start | Debian's file sets nothing (every line commented): the defaults are the same
+/etc/systemd/system | PID 1, loading units | EMPTY when units load, and nothing is enabled there: the image's enablement is under /usr/lib/systemd/system/*.wants (K61V-4: deploy/baremetal/image/units-enabled.txt names each link, or the build stops), and a `disable *` preset (00-regalia-kms.preset) makes a first boot's preset-all pass, which runs at every boot, enable nothing. What a host starts once ITS state is there (the firewall, the node units, the audit shippers) is enabled there too, each gated on its per-host file under /etc (on /var), and per-host unit content comes from /var through the image's generator (regalia-kms-r1s.8: units-enabled.txt [per-host]); tests/etc_writes.py refuses a write under /etc/systemd/system in deploy/
+/etc/systemd/journald.conf | systemd-journald (started before sysinit) | Debian's file sets nothing; journald reads it again on a restart
+/etc/udev/udev.conf | systemd-udevd | Debian's file sets nothing
+/etc/modules-load.d/modules.conf | systemd-modules-load (sysinit, not ordered after the copy) | empty in the image; the image's modules belong in /usr/lib/modules-load.d
+/etc/sysctl.d | systemd-sysctl | only Debian's README in the image; the image's settings belong in /usr/lib/sysctl.d
+/etc/fstab | systemd-fstab-generator (before any unit) | the image's is the build's empty placeholder; mounts come from the initrd and the kernel command line (K61V-3/-4)
+/etc/crypttab | systemd-cryptsetup-generator | none in the image; the volume is opened in the initrd
+/etc/hostname, /etc/hosts | PID 1 (the hostname), nss | the hostname is set by PID 1 from /etc/hostname before the copy: it stays the kernel's default (or the command line's systemd.hostname=); nothing in deploy/ reads it
+/etc/machine-id | PID 1 | [boot]
+/etc/locale.conf, /etc/vconsole.conf, /etc/localtime | PID 1, systemd-vconsole-setup | the defaults (C.UTF-8, UTC, the kernel's keymap): the image's are the same
+
+[var-image]
+# /var path the BUILD writes (image content outside /usr, measured on the Debian 13 tree) | what it is | where it goes under the verity /usr
+/var/lib/dpkg | dpkg's database: status, the packages' file lists, maintainer scripts (7.7 MB) | moved into /usr/lib/sysimage/dpkg (q-18 = A, K61V-4), read-only and measured; dpkg.cfg.d/regalia-kms-admindir names it (dpkg-query needs --admindir: it does not read dpkg.cfg.d); no /var/lib/dpkg on the host
+/var/cache/debconf | debconf's answers (1.7 MB) | dropped at build (K61V-4): nothing at run time reads it
+/var/lib/ucf, /var/lib/apt | the conffile hashes, apt's extended_states and periodic stamps | dropped at build (K61V-4): a host is never updated by apt
+/var/lib/systemd/deb-systemd-helper-enabled | deb-systemd-helper's record of what the build enabled | dropped at build with the /etc enablement it records (K61V-4)
+/var/cache/apparmor | apparmor_parser's compiled profiles (empty in the image) | emptied at every boot (00-regalia-etc.conf: D): a cache newer than the profile is loaded, and the image's profiles carry the build's clamped mtime, so another image's cache would win
+/var/lib/dbus/machine-id | dbus's link to /etc/machine-id (dbus.conf) | the machine ID itself, kept by 00-regalia-etc.conf ([boot])
+/var/cache/ldconfig | ldconfig's aux cache | made again at boot (ldconfig.service); not needed from the image
+/var/log | the packages' log directories (journal, prometheus, runit/pcscd), btmp, wtmp, lastlog | made by the packages' and systemd's tmpfiles at boot (measured: journal, private; d /var/log); a log written at build is not the host's
+/var/lib/prometheus/node-exporter, /var/lib/chrony, /var/lib/tpm2-tss, /var/lib/pam, /var/lib/regalia-* | the daemons' state directories | made at boot by the packages' and regalia's tmpfiles.d (measured d lines) or StateDirectory=; the host's own state, on its LUKS2 volume
+/var/lib/xml-core, /var/lib/sgml-base, /var/lib/python, /var/lib/shells.state, /var/spool/mail, /var/backups | the packages' registries and empty directories | nothing at run time reads them; left in rootfs.tar, never on a host's /var (install-host.sh leaves /var empty)
+
+[open]
+# subject | the question | recommendation (who decides)
+polkit rule | 50-regalia-kms-pcscd.rules is installed by the operator into /etc/polkit-1/rules.d | install it into /usr/share/polkit-1/rules.d at build (regalia-kms-r1s.9)
+chronyd's AppArmor profile | chronyd reads /etc/chrony/regalia.conf through the link, and AppArmor checks the /var file | shipped: the local include (apparmor/local/usr.sbin.chronyd) linked by 00-regalia-etc.conf; K61V-4's boot shows chronyd starts in enforce mode

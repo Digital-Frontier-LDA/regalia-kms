@@ -106,7 +106,8 @@ grep -q "$fpA" <<< "$(seal "$TA" --init-import-key --import-pub "$W/A2.pub.pem" 
 
 hdr "the ceremony side: the PIN wrapped to each host's import key (v2 blob)"
 encrypt "$W/A.pub.pem" "$W/pin-A.blob" && encrypt "$W/B.pub.pem" "$W/pin-B.blob" && P "blobs made (v2, TPM2 duplication to P-256, $(wc -c < "$W/pin-A.blob") bytes)" || F "wrapping failed"
-grep -qF "$NK_PIN" "$W/pin-A.blob" && F "the PIN is visible in the blob" || P "the blob does not contain the PIN"
+# the PIN is grep's PATTERN read from a file descriptor, never its argument: argv is readable by every process (#675)
+grep -qF -f <(printf '%s\n' "$NK_PIN") "$W/pin-A.blob" && F "the PIN is visible in the blob" || P "the blob does not contain the PIN"
 
 hdr "B: a blob made for another host's TPM is refused"
 out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/pin-B.blob")"; rc=$?
@@ -127,7 +128,7 @@ out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-hos
 grep -q 'PIN unsealed by the TPM' <<< "$out" && P "the PIN came from the TPM, not a prompt" || F "no TPM unseal reported"
 back="$(sudo systemd-creds decrypt --name=drill-import.pin "$CRED/regalia-kms-drill-import.pin" - 2>/dev/null | sha256sum)"
 [ "$back" = "$(printf '%s' "$NK_PIN" | sha256sum)" ] && P "the sealed credential reads back as the card's PIN" || F "sealed credential does not match the PIN"
-grep -qF "$NK_PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
+grep -qF -f <(printf '%s\n' "$NK_PIN") <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
 [ "$(tries)" = "$RETRIES" ] && P "the card ends at its full $RETRIES tries" || F "the card ends at $(tries)"
 
 echo; echo "pin-import drill ($SERIAL): $pass passed, $fail failed"

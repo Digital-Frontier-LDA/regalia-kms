@@ -12,7 +12,7 @@
 #
 # Reviewed image: Debian 13 (trixie) from snapshot.debian.org 20261023T210712Z (main, updates, security), kernel 6.12.113+deb13-amd64, built by
 # deploy/baremetal/initrd/build-initrd.sh (#248: dracut --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline
-# --add regalia-unlock, DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
+# --add regalia-unlock --add-drivers "dm-verity erofs", DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
 # repository's cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). The initrd's
 # sha256 moves with the client's source; every builder CI runs gets the same one (initrd-reproducible).
 ours regalia-kms f 0644 0:0 etc/crypttab 71ce00157d1a94a11ba7ecd31064ec77926aa804e866597412723a334b8912ce
@@ -78,10 +78,10 @@ generated dracut-over:systemd=257.13-1~deb13u1 l 0777 0:0 usr/bin/loginctl true
 generated dracut f 0755 0:0 usr/lib/dracut-crypt-lib.sh d21702eb9dee0e3d748b72aaf0a02bff9a3da1675abaa3321d377c267a010eb9
 generated dracut f 0755 0:0 usr/lib/dracut-dev-lib.sh 948fa5cd4250f03df0fbaa6e3cab3f2bb82270df8d47f38a5b57399c299d7a60
 generated dracut f 0755 0:0 usr/lib/dracut-lib.sh b4736104e821e2e6c13ad21717d08467629c7accfa3b67cedd56385d5cc04f1f
-generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt c91dbf2d8da62df69edc6c46784557eea670fd1b74ad6419a52b3ffc6a0a084f
+generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt 40d451702fc6e82647bd8cabd1f6d277559b9bc0ac6d6f544c4ad893f6d97d65
 generated dracut f 0644 0:0 usr/lib/dracut/dracut-106-6 2e446eac7298ea391cb3e0e10ce78c50fb99c1e370c23cabb4cdb9f60b5a7e98
 generated dracut l 0777 0:0 usr/lib/dracut/hooks ../../../var/lib/dracut/hooks
-generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 9ab4d68fd9d9b6a7f5ed71f5be86eb63b9f39e57af264c531da2b5ab48e703e7
+generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 0dfdcd7c9b1dfac05ba41f6ec90103f92795a4f3cc927ffcc71c187d2c9f926e
 generated dracut f 0644 0:0 usr/lib/dracut/need-initqueue e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 generated dracut f 0755 0:0 usr/lib/fs-lib.sh 6f3f0ac2595735883c19ec808c4f84c15514d8b910e7ff2105601a28f84cfe0b
 generated dracut f 0644 0:0 usr/lib/initrd-release e81949eb129c97adb7a47dd5b54db478289bcd15e82599bfff47d4e192ea9eb2
@@ -1616,6 +1616,7 @@ package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/system-generators/sy
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/system-generators/systemd-gpt-auto-generator 5cab1473324acfe319121786aa49cb3a34e73ad715c673c34068799827abf2ff
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/system-generators/systemd-hibernate-resume-generator 2230099ee3150e2b5568d0a8a602d2f64a43346a1fd64f61acd9975230a625cf
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/system-generators/systemd-tpm2-generator 07dd5f254baa1f830c1ce97d9155b79fdde4e61a6ff84b0161439f63fc250f77
+package systemd-cryptsetup=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/system-generators/systemd-veritysetup-generator 64c6e5bc774bccdffba8d7d83875c174bed495c64e051b7a5a6c52ea282183ca
 package systemd=257.13-1~deb13u1 d 0755 0:0 usr/lib/systemd/system.conf.d -
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system.conf.d/10-coredump-debian.conf 0600cca2c44aaca9b295d260bc15be83dbb3eada10110b6882fee2645294f4f0
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/basic.target 7d97dda25769ba30dff93d7aa2818151d968c843281767b720b3eabf09563f0b
@@ -1632,6 +1633,7 @@ package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/initrd-parse-
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/initrd-root-device.target 34468c5d32d254b32e92d4ca879af529710b855e5008dcfac9c370eb0c0b5596
 package systemd-cryptsetup=257.13-1~deb13u1 d 0755 0:0 usr/lib/systemd/system/initrd-root-device.target.wants -
 package systemd-cryptsetup=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/initrd-root-device.target.wants/remote-cryptsetup.target ../remote-cryptsetup.target
+package systemd-cryptsetup=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/initrd-root-device.target.wants/remote-veritysetup.target ../remote-veritysetup.target
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/initrd-root-fs.target 46f23915c1eb438e404c61fff69440b36d0eb9fc637d476190983e08c4899fee
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/initrd-switch-root.service e8f9fe126cdf066e64010778324836909878b6b660e3f23da88d3b20016e4628
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/initrd-switch-root.target 5d9620d86c1e929a8f279d9d0055c2f3983ef7438e9d0856a0b41cdb6c2a87ab
@@ -1658,6 +1660,7 @@ package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/reboot.target
 package systemd-cryptsetup=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/remote-cryptsetup.target 805fdd3c24505f494fcf893941ff32f502ebee0f2d4938144a6bcc5bdddd4951
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/remote-fs-pre.target 401196a6bf1e5786b88d6539728b01ccf56ae49ac2ac6060915a9d82f180e0ce
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/remote-fs.target ea2eeaa585de8819d99d82ebb0230651f2b8e63f07a6f169a25b0cbbfe1fc37a
+package systemd-cryptsetup=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/remote-veritysetup.target 01e95fb27d8ff07f94c0744cf30ccbf24519a5528cc94a5d6b1bdd4be8720555
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/rescue.target 8fbe27d89586cb4cec720c746ab62dbb6ff9d933b1eff90659d27cb7452a2ad7
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/rpcbind.target 467d1f0f6b2ff32332dc444aa5da014586e08e64a9be31d947111f572d188755
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/shutdown.target 66be4f001c56d7a7b8d2dc636b951acd8627d92281ff5688a746586b34a48e72
@@ -1684,6 +1687,7 @@ package systemd=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/sysinit.targe
 package systemd=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup.service ../systemd-tmpfiles-setup.service
 package udev=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/sysinit.target.wants/systemd-udev-trigger.service ../systemd-udev-trigger.service
 package udev=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/sysinit.target.wants/systemd-udevd.service ../systemd-udevd.service
+package systemd-cryptsetup=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/system/sysinit.target.wants/veritysetup.target ../veritysetup.target
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/syslog.socket c74e5d7406f133b7fa9a5889b7eed569f81dd265f1e9d996b8cf7f414c71c3ac
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/systemd-ask-password-console.path f45f90d868036ce5aac4c3e8f5522d66bbf2c65c95f82dc6ffdf7f293acf5bbc
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/systemd-ask-password-console.service 339e74aeb29cc207061218b294213557feafc9c6e3962e32fda84d5dbd850804
@@ -1720,6 +1724,8 @@ package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/systemd-volat
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/timers.target c0ef1e24adda9b81ca8439a6a4060aeb730fbc3abf55e07e59852911cf523aa6
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/tpm2.target 93d77ed91c15b56f22dff5b2c3b0ad20a233b8a3c913305bf69755d52adfbff6
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/umount.target 13b6f2aa3150e1950ffc646a64ade207757b6544009ab776a7d2ab5ea134952e
+package systemd-cryptsetup=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/veritysetup-pre.target aaeb68dc7f82e70ed7fbe811091f7129506061183339a43f4f5058053745aad4
+package systemd-cryptsetup=257.13-1~deb13u1 f 0644 0:0 usr/lib/systemd/system/veritysetup.target 3923f4680c1e639d447894a093f09f3729c69f45e78becb2558a785a9ecf24f7
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd 799fd89964a716fb5f26c4506047190b6e842ac2745b473bd45351c4d8cbd929
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-battery-check fee7ecb1f7dd5f7fc9123c9c6e66e97604591a1500937ef0c27b9146b64759c7
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-cgroups-agent 8044c5e76a1a49c7e5f629c0d1b8ced675fc2cb1d597682997aee23bbb294716
@@ -1735,6 +1741,7 @@ package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-shutdown 63c
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-sysctl 8f940668dc2fe1854289c0ada5f84de2e9573a330295d258ac75855a76f57d7a
 package systemd=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/systemd-sysroot-fstab-check system-generators/systemd-fstab-generator
 package udev=257.13-1~deb13u1 l 0777 0:0 usr/lib/systemd/systemd-udevd ../../bin/udevadm
+package systemd-cryptsetup=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-veritysetup 9b9197fbf5374b0267a2da29257b8183b738ce3efecd31a88be8b954b00e73b8
 package systemd=257.13-1~deb13u1 f 0755 0:0 usr/lib/systemd/systemd-volatile-root 37b1af47f78d8d038fdd22fa5ef23ba9f68d4fd42492f55c3af28cabc33faa5c
 package systemd=257.13-1~deb13u1 d 0755 0:0 usr/lib/sysusers.d -
 package systemd=257.13-1~deb13u1 f 0644 0:0 usr/lib/sysusers.d/basic.conf 3a03f4babbd4ea96e1fa96b83c3640f3a59194c5546695526d0d968f0b0893e3

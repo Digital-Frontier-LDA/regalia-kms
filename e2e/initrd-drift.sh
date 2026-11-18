@@ -79,7 +79,7 @@ echo "### the initrd, by its own dracut, as build-initrd.sh runs it (SOURCE_DATE
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
 # build-initrd.sh's own chroot environment and dracut flags (tests/test_initrd_drift.py holds them equal)
 inroot(){ chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC HOME=/root SOURCE_DATE_EPOCH="$EPOCH" DRACUT_NO_MKNOD=1 "$@"; }
-inroot dracut --force --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /boot/initrd.drift >"$W/dracut.log" 2>&1 \
+inroot dracut --force --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline --add regalia-unlock --add-drivers "dm-verity erofs" --kver "$KVER" /boot/initrd.drift >"$W/dracut.log" 2>&1 \
   || { tail -40 "$W/dracut.log"; echo "initrd-drift: dracut failed"; exit 2; }
 mkdir -p "$ROOT/tmp/src"; cp -r deploy "$ROOT/tmp/src/"
 chroot "$ROOT" sh -c "cd /tmp/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.drift --root /" > "$W/current.txt" \

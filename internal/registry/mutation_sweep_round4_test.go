@@ -19,7 +19,7 @@ import (
 // routing decision. `object()` hardcodes production (which requires 2 bindings
 // or custody "exception"); staging does not, which is why we build fixtures
 // inline.
-const r4stagingBinding = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`
+const r4stagingBinding = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`
 
 // r4object wraps an operation and a binding in a staging-environment object
 // the registry will load. The environment matters: a production object
@@ -43,10 +43,10 @@ func r4object(id, purpose, operation, binding string) string {
 func TestRouteForUnwrapRefusesAnObjectThatDoesNotDeclareReleaseSecret(t *testing.T) {
 	// The seal-only object stays on the manifest's slot; only the control moves,
 	// so the two occupy different (site, device_id, object_id) slots.
-	withReleaseBinding := strings.Replace(r4stagingBinding, `"device_id":"dev-1","object_id":"slot-1"`,
-		`"device_id":"dev-2","object_id":"slot-2"`, 1)
+	withReleaseBinding := strings.Replace(r4stagingBinding, `"device_id":"dev-1","object_id":"a1"`,
+		`"device_id":"dev-2","object_id":"a2"`, 1)
 	if withReleaseBinding == r4stagingBinding {
-		t.Fatalf("the control binding was not moved off dev-1/slot-1 — both objects would share a slot and :688 would refuse the control before the guard under test could be reached")
+		t.Fatalf("the control binding was not moved off dev-1/a1 — both objects would share a slot and :688 would refuse the control before the guard under test could be reached")
 	}
 
 	sealOnly := r4object("seal-only", "release-purpose", "seal-envelope", r4stagingBinding)
@@ -135,9 +135,9 @@ func TestLoadRefusesTwoObjectsSharingAHardwareSlot(t *testing.T) {
 
 	// The control: a manifest with two objects on different slots loads.
 	distinct := r4object("alpha", "release-purpose", "release-secret",
-		`{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`) + "," +
+		`{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`) + "," +
 		r4object("beta", "release-purpose", "release-secret",
-			`{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"slot-2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`)
+			`{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-2","object_id":"a2","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active","device_serial":"test-serial","devaut_fingerprint":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","kek_algorithm":"rsa4096","kek_version":"1"}`)
 	if _, err := Load(strings.NewReader(manifest(distinct)), "sitea",
 		&healthMap{states: map[string]bool{"dev-1": true, "dev-2": true}}); err != nil {
 		t.Fatalf("control: Load(distinct-slots) error = %v, want nil", err)

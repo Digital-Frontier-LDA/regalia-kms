@@ -90,8 +90,8 @@ func TestTheManifestFileMustNotBeWritableByAnyoneElse(t *testing.T) {
 // HasBackendHealth is what lets the daemon turn that into a startup error instead.
 func TestBackendHealthMustBeAttachedBeforeTheRegistryCanServe(t *testing.T) {
 	registry, err := Load(strings.NewReader(manifest(object("production-sops", "sops-data-key", "secp256k1", "sign",
-		binding("sitea", "nitrokey-pkcs11", "hsm-1", "slot-1", "active")+","+
-			binding("siteb", "nitrokey-pkcs11", "hsm-2", "slot-2", "standby")))), "sitea", nil)
+		binding("sitea", "nitrokey-pkcs11", "hsm-1", "a1", "active")+","+
+			binding("siteb", "nitrokey-pkcs11", "hsm-2", "a2", "standby")))), "sitea", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestDeclaredPoliciesReportsEveryObjectOnceInAStableOrder(t *testing.T) {
 	names := []string{"zulu-object", "mike-object", "delta-object", "alpha-object"}
 	objects := make([]string, 0, len(names))
 	for index, name := range names {
-		slot := fmt.Sprintf("slot-%d", index*2+1)
-		standby := fmt.Sprintf("slot-%d", index*2+2)
+		slot := fmt.Sprintf("%02x", index*2+1)
+		standby := fmt.Sprintf("%02x", index*2+2)
 		objects = append(objects, object(name, "sops-data-key", "secp256k1", "sign",
 			binding("sitea", "nitrokey-pkcs11", "hsm-1", slot, "active")+","+
 				binding("siteb", "nitrokey-pkcs11", "hsm-2", standby, "standby")))

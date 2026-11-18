@@ -27,6 +27,17 @@ Commissioning has two halves:
 4. Record them in the evidence: the server serial (`host_serial`), `system_rom_version`,
    `ilo_firmware_version`, `tpm_ek_certificate_present` (`tpm2_getekcertificate`), and
    `used_hardware_intake: true` once steps 1-3 are done.
+5. Verify the EK certificates against the pinned Infineon roots, for this server on its own:
+   `python3 -Es -m deploy.baremetal.ekchain verify --server server-<n> --rsa EK-RSA.der CA-RSA.der
+   --ecc EK-ECC.der CA-ECC.der --ek-public ek.pub --out deploy/baremetal/ekroots/servers/server-<n>.json`
+   (the CAs are the ones each certificate's AIA names; `ek.pub` is `tpm2_createek -G rsa -u`'s output).
+   Exit 0 writes the record into `server-<n>.json` under `"intake"`, in server-1.json's shape, sets the
+   file's `"status": "verified"`, and keeps its other fields (`host`); the record carries the ek_name
+   enrolment will meet. Exit 1 is a refusal: `server-<n>.json` is not touched, and the refused record (no
+   ek_name) goes to stdout with its findings on stderr. A `server-<n>.json` that is already verified is
+   never overwritten, by a refusal or a pass: a re-intake removes it in a reviewed commit first. A CA
+   whose key `ekroots/PINS` does not name is refused until it is pinned from public sources
+   (`ekroots/SOURCES.md`).
 
 ## 2. Firmware settings (RBSU / iLO)
 
@@ -151,13 +162,32 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
-- **The service's sandbox.** Install `deploy/baremetal/regalia-kms-hardening.conf.example` as
-  `/etc/systemd/system/regalia-kms.service.d/hardening.conf`. Measured, with the service running:
+- **The service's sandbox.** The image ships `deploy/baremetal/regalia-kms-hardening.conf.example` as
+  `/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf` (build-rootfs.sh): nothing to install, and nothing
+  under `/etc/systemd/system`, which a verity host empties at every boot (regalia-kms-r1s.8). Measured, with the service running:
   `kms_service_sandboxed` (ProtectSystem=strict, ProtectHome, PrivateTmp, ProtectKernelTunables/
   Modules/Logs, ProtectControlGroups, RestrictSUIDSGID, LockPersonality), `kms_capabilities_minimal`
   (no capability in the unit's bounding or ambient set, nor in the running process's) and
   `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
   profile and how to load it are under **AppArmor** below). All three are required in the evidence.
+- **Kernel settings** (regalia-kms-r1s.5). The image ships `deploy/baremetal/regalia-kms.sysctl.conf` as
+  `/usr/lib/sysctl.d/90-regalia-kms.conf`, with the reason for each value: kernel pointers and the kernel log hidden,
+  no kexec, no unprivileged eBPF, perf or userfaultfd, ptrace for CAP_SYS_PTRACE only, no SysRq, the protected-file
+  settings, and a host that forwards nothing, filters by reverse path and ignores redirects and source routes. The
+  per-interface settings are written with `*`, so they reach every interface, including one that existed before the
+  file was applied, and are measured on each one the kernel lists.
+  Under `/usr`, so dm-verity covers it. Measured: `kernel_sysctl_baseline`, read from `/proc/sys` on the running
+  kernel, not from the file. A value that differs or cannot be read fails it, and the failure names every one.
+  `fs.suid_dumpable` is `core_dumps_disabled`'s, as before.
+- **The bootstrap and the KMS run as separate users** (#61, regalia-kms-r1s.5). The bootstrap process is
+  `regalia-sync`. It serves booting peers their half of the disk credential (`unlock.serve`), and runs heartbeats
+  and leases. It runs as `regalia-sync` (`units/regalia.sysusers.conf`). The daemon runs as `regalia-kms`
+  (`deploy/systemd/regalia-kms.sysusers.conf`). Each has its own group, and neither user is a member of the other's
+  group. Measured: `bootstrap_and_kms_users_separate`, from the units, from `getent` and from the kernel for each
+  running main process. It needs two users, neither root, with different uids and different primary groups. Each
+  process's uids must be its own user's, and neither process may hold the other's primary group.
+- **SSH.** The image has no sshd (`image/packages.txt`). Whether a KMS host ever runs one, and if so whether it is
+  bound to WireGuard only, is an open owner question (q-20, regalia-kms-r1s.5). Nothing measures sshd yet.
 - **Token clients root-only.** This host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
@@ -183,7 +213,11 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   distribution update that changes one of those files fails the control until its digest is renewed
   in `os_probe.KNOWN_RULES_FILES`.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
-  `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
+  `regalia-kms-hardening.conf.example`) and does not start without it. The image binds it itself
+  (`units/regalia-kms.service.d/apparmor.conf`, under `/usr`): the profile with no `-`, `AssertSecurity=apparmor`
+  (with AppArmor off, systemd would skip the profile and run the daemon unconfined), and `Requires=apparmor.service`,
+  which itself requires a successful `/etc` copy, so a failed copy stops the KMS instead of running it unconfined
+  (#723 review). In the image `apparmor.service` loads the profile in enforce mode at every boot. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
   in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
   from the kernel log, and only then enforce (the full sequence is in the file's header):
@@ -273,8 +307,9 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   recorded; then it starts. A backward jump is refused where expiries are judged anyway
   (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
   what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
-  they must belong to independent operators. Mask the package's other ways of running chronyd at install:
-  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
+  they must belong to independent operators. The package's other ways of running chronyd,
+  `chronyd-restricted.service` and `chrony-dnssrv@.timer`, are masked by the image (links to `/dev/null` under
+  `/usr`: `image/units-enabled.txt`, `[masked]`); there is nothing to mask at install. Leap seconds come from the
   `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (a host
   without it is refused by `regalia-authtime`, which publishes "…/right/UTC is missing: chronyd has no
   leap-second data (install tzdata-legacy)" and records it in the time trail, so the node goes unready
@@ -283,7 +318,7 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
   either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
-  (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
+  (the image's, in `/usr/lib/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
   (Debian's own `chrony.conf`, a package conffile, is never touched; `/etc/chrony` is where the
   distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
   the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
@@ -349,27 +384,37 @@ KMS and SSH ports, the zones allowed to reach each, and the only destinations th
 (the audit and NTP sinks at least). From it:
 
 ```sh
-install -d -m 0755 /etc/nftables.d
+# On the verity-/usr image /etc is a tmpfs: /etc/nftables.d/regalia-kms.nft is a link to this host's file on /var
+# (units/00-regalia-etc.tmpfiles.conf). Write the /var name: a mv onto the link would replace it with a file the next
+# boot does not have (#61, image/etc-inventory.txt).
+D=/var/lib/regalia-etc/nftables.d
+install -d -m 0755 "$D"
 # Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
 # a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
-tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
+tmp="$(mktemp "$D/.regalia-kms.XXXXXX")"
 if python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
-  chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
+  chmod 0644 "$tmp" && mv -f "$tmp" "$D/regalia-kms.nft"
 else
   rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
 fi
 ```
 
-It must also survive a reboot, and the KMS must never start without it:
-- **Load it at boot:** in `/etc/nftables.conf`, keep Debian's `flush ruleset` first, then add
-  `include "/etc/nftables.d/*.nft"`, and `systemctl enable nftables.service`.
-- **Order the KMS after it**, with a drop-in `/etc/systemd/system/regalia-kms.service.d/firewall.conf`:
-  ```ini
-  [Unit]
-  Requires=nftables.service
-  After=nftables.service
-  ```
-  If the ruleset fails to load, nftables.service fails and the KMS does not start.
+It must also survive a reboot, and the KMS must never start without it. **The image does both; the file above is the
+only thing the operator writes** (regalia-kms-r1s.8: on a verity host `/etc` is made from the image at every boot, so
+an edited `/etc/nftables.conf`, a `systemctl enable` or a drop-in under `/etc/systemd/system` would be gone at the
+next boot):
+- **Loaded at boot:** the image's `/etc/nftables.conf` is `flush ruleset` and `include "/etc/nftables.d/regalia-kms.nft"`
+  (build-rootfs.sh), and `nftables.service` is enabled under `/usr` (`image/units-enabled.txt`, `[per-host]`), gated
+  on this host's ruleset (`units/nftables.service.d/regalia.conf`: `ConditionPathExists=/etc/nftables.d/regalia-kms.nft`).
+  Before the ruleset is written (a host not enrolled yet) it is skipped.
+- **The KMS refuses to start without it** (`units/regalia-kms.service.d/firewall.conf`, the image's): `Requires=` and
+  `After=nftables.service`, so a ruleset that fails to load fails the KMS; `AssertPathExists=` on the ruleset, so a
+  host with none (nftables.service skipped, which `Requires=` alone counts as success) fails the start by name; and
+  `ExecStartPre=+nft list table inet regalia_kms`, so the table must be loaded in the kernel when it starts. The QEMU
+  boots show both ways (`tests/test_baremetal_unlock_boot.py`, OnQemuVerity: the ruleset there, nftables active and
+  the KMS started; the ruleset gone, nftables skipped and the KMS not started).
+- **Loaded now, without a reboot:** the render above loads it (`nft -f`); `systemctl start nftables.service
+  regalia-kms.service` then starts what the boot skipped.
 - **Check again after the reboot** (section 5): `firewall_default_deny` is measured on the running
   host, so a ruleset that loaded once but not at boot fails commissioning.
 
@@ -622,8 +667,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   down waits at the prompt with its client still asking, and unlocks unattended when a peer comes
   back, however long that takes. Neither waits forever by accident: crypttab says `tries=0,timeout=0`
   (ask again after a wrong key, no time limit on the prompt) and `x-systemd.device-timeout=0`, and the
-  image's signed command line says `rootflags=x-systemd.device-timeout=0` (the root's mount waits for
-  the volume without limit; systemd's default is 90 s, after which the boot would fail into the
+  image's signed command line mounts `/var` from it with `x-systemd.device-timeout=0` (#61: `/` is a
+  tmpfs, and the volume is `/var`, `systemd.mount-extra=`; its mount waits for the volume without limit; systemd's default is 90 s, after which the boot would fail into the
   emergency path). `uki.py build` and `host_probe.py` refuse an image or a host without them.
 - **The client's unit** (`deploy/baremetal/initrd/regalia-unlock.service`, wanted by
   `cryptsetup.target`): sandboxed (no capability, no write anywhere but its own `/run/regalia` and the
@@ -926,6 +971,12 @@ the single-site baseline (initramfs-tools, TPM-only crypttab); they change when 
 Six systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
 (`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
 
+**On the verity-`/usr` image there is nothing to enable** (regalia-kms-r1s.8). The image enables these units, with
+`regalia-site-check`, `regalia-esp-advance` and `regalia-etcd`, under `/usr` (`image/units-enabled.txt`,
+`[per-host]`), each gated on `/etc/regalia/node.json` (`units/<unit>.d/per-host.conf`), which enrolment's commit
+writes on /var: before enrolment they are skipped, and from the next boot on they start, every boot. An operator's
+`systemctl enable` would be gone at the next boot (`/etc` is made from the image), and no step here uses one.
+
 | Unit | Runs as | Privilege | Does |
 |---|---|---|---|
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
@@ -1112,10 +1163,15 @@ removing only what it can prove it made.
 
 Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
 audit collector by one instance of `units/regalia-audit-ship@.service` per trail
-(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). Enable all of them, one per trail in the registry:
+(`cmd/regalia-audit-ship`, `internal/audit/trail.go`). **The image enables all of them**, one per trail in the registry,
+with each trail's daily `regalia-audit-prune@<trail>.timer` (`image/units-enabled.txt`, `[per-host]`), gated on this
+host's collector configuration, `/etc/regalia/audit-ship.env` (on /var; `units/regalia-audit-ship@.service.d/per-host.conf`):
+nothing to enable, and nothing under `/etc/systemd/system`, which a verity host empties at every boot
+(regalia-kms-r1s.8). Write the configuration (AUDIT-COLLECTOR.md, section 3, at its /var names under
+`/var/lib/regalia-etc/regalia/`); from the next boot on every instance starts. To start them now:
 
 ```sh
-systemctl enable --now \
+systemctl start \
     regalia-audit-ship@admission \
     regalia-audit-ship@enrol \
     regalia-audit-ship@esp-advances \
@@ -1129,13 +1185,16 @@ systemctl enable --now \
     regalia-audit-ship@update
 ```
 
-A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are enabled
+A node that ships only some of them raises `RegaliaAuditShipMetricsMissing` until the rest are running
 (`tests/test_scrape_job_contract.py` holds this list to the registry).
 Each line becomes one audit event on the stream `<site>.<trail>`.
 
 The collector is an **external service** the owner chooses (#351). `AUDIT-COLLECTOR.md` is the contract it must
 meet and what each node gives it. `regalia-audit-ship check` validates a node's endpoint configuration (and the
 unit runs it before each start); `regalia-audit-ship conformance` checks a candidate service against the contract.
+**Upgrading a site: the collector goes before the KMS** when an update brings the policy position (epic #40
+`.1.2`). The KMS also refuses to start while the collector cannot be reached at startup. `AUDIT-COLLECTOR.md`,
+section 3, has the order and the recovery.
 - **No local state.** Each pass rebuilds the events from the file and goes on only if the collector's
   committed head is one of them. A file cut short, rewritten or removed under what was shipped raises an
   alarm in the collector's `alarms.jsonl`, and the instance exits 3. The unit does not restart it, and

@@ -663,14 +663,32 @@ class Verification(unittest.TestCase):
         def policy(*sets):
             return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
         signing = {"initrd": "1a" * 32, "system": "5b" * 32, "secure_boot_cert": "5c" * 32}
-        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing)))
+        usr = "6e" * 32
+        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing, usr_roothash=usr)))
+        # ... and the /usr it runs (#61 K61V-3): the usrhash= of its UKI, required with "signing", allowed nowhere else
+        usrs = (
+            ("a signed set naming no /usr", "a signed image's set must name its /usr root hash (usr_roothash",
+             dict(self.one("a", self.IMAGE1), signing=signing)),
+            ("a /usr root hash not hex", "usr_roothash must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, usr_roothash="6E" * 32)),
+            ("a /usr root hash too short", "usr_roothash must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, usr_roothash="6e" * 31)),
+            ("a /usr root hash not a string", "usr_roothash must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=signing, usr_roothash=None)),
+            ("a /usr on an unsigned set", "only a signed image's set (one that names its signing keys) names its /usr root hash",
+             dict(self.one("a", self.IMAGE1), usr_roothash=usr)),
+            ("a /usr on a set with no per-phase PCR 11", "only a signed image's set (one that names its signing keys) names its /usr",
+             dict(self.one("a", None), usr_roothash=usr)),
+            ("the old name of the field (#478)", "fields mismatch", dict(self.one("a", self.IMAGE1), signing=signing, usr_roothash=usr, rootfs_sha256=usr)),
+        )
+        for label, reason, entry in usrs:
+            with self.subTest(label), self.assertRaises(attest.Refused) as caught:
+                attest.validate_policy(policy(entry))
+            self.assertIn(reason, str(caught.exception))
         cases = (
-            ("a field missing", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing={"initrd": "1a" * 32, "system": "5b" * 32})),
-            ("a field more", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing=dict(signing, pcrpkey="77" * 32))),
-            ("not hex", "signing.system must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=dict(signing, system="5B" * 32))),
+            ("a field missing", "signing fields mismatch", dict(self.one("a", self.IMAGE1), usr_roothash=usr, signing={"initrd": "1a" * 32, "system": "5b" * 32})),
+            ("a field more", "signing fields mismatch", dict(self.one("a", self.IMAGE1), usr_roothash=usr, signing=dict(signing, pcrpkey="77" * 32))),
+            ("not hex", "signing.system must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), usr_roothash=usr, signing=dict(signing, system="5B" * 32))),
             ("one key for both phases", "the two phases' PCR keys must be two keys",
-             dict(self.one("a", self.IMAGE1), signing=dict(signing, system="1a" * 32))),
-            ("not an object", "signing must be an object", dict(self.one("a", self.IMAGE1), signing=[])),
+             dict(self.one("a", self.IMAGE1), usr_roothash=usr, signing=dict(signing, system="1a" * 32))),
+            ("not an object", "signing must be an object", dict(self.one("a", self.IMAGE1), usr_roothash=usr, signing=[])),
             ("on a set with no per-phase PCR 11", "only a set with per-phase PCR 11", dict(self.one("a", None), signing=signing)),
         )
         for label, reason, entry in cases:

@@ -1,0 +1,3216 @@
+{
+ "cases": [
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a canonical PKCS#11 object id",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a canonical PKCS#11 object id of 64 bytes",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "p256",
+      "bindings": [
+       {
+        "backend": "yubikey-piv",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "9c",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a canonical PIV slot",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "ed25519",
+      "bindings": [
+       {
+        "backend": "yubikey-openpgp",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "03",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "OpenPGP card (User PIN (sig))",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a canonical OpenPGP-applet object id",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "0A",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an upper-case PKCS#11 object id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an odd-length PKCS#11 object id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "0x0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a 0x-prefixed PKCS#11 object id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "slot-1",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a named PKCS#11 object id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "ababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a PKCS#11 object id of 65 bytes",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "p256",
+      "bindings": [
+       {
+        "backend": "yubikey-piv",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "9C",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an upper-case PIV slot",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "p256",
+      "bindings": [
+       {
+        "backend": "yubikey-piv",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "0x9c",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a 0x-prefixed PIV slot",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "p256",
+      "bindings": [
+       {
+        "backend": "yubikey-piv",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "09c",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a zero-padded PIV slot",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "ed25519",
+      "bindings": [
+       {
+        "backend": "yubikey-openpgp",
+        "device_id": "yk-1",
+        "device_serial": "35000001",
+        "object_id": "0A",
+        "pin_policy": "once",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "OpenPGP card (User PIN (sig))",
+        "touch_policy": "never"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-yubikey",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-yubikey",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-yubikey",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an upper-case OpenPGP-applet object id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "0A",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "probe A: the secret pins its key, the unwrap object re-cases object_id",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "0A",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "probe B: the secret pins DevAut only, the unwrap object re-cases object_id and pins the key",
+   "refused": "lowercase hex"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "02",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "two objects on two declared slots",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token one"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token two"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "two objects on two labelled tokens of one declared slot",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "siteb",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the same declared slot at two sites",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "two objects on one declared slot",
+   "refused": "also assigned to"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token one"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token one"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "two objects on one labelled token",
+   "refused": "also assigned to"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token one"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-a",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-a",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-a",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign-b",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign-b",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign-b",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an unlabelled binding shares a slot with a labelled one",
+   "refused": "also assigned to"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the plain shared slot of a secret and an unwrap object is answered by the slot rule first",
+   "refused": "also assigned to"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "another card",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "02",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "another key on the same card",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "an unpinned card with no serial",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token one"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Token two"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the other labelled token of the same card",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a sign key aliasing a secret's KEK",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the same card under another device id",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the same card, the unwrap binding unlabelled and unpinned",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "09",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the same public key on another card",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned",
+        "token_label": "Other token"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "a labelled token of the card whose secret binding is unlabelled",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "01",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the unwrap object listed first",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "probe B': the secret pins DevAut only, the unwrap object pins the key on the same slot",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "the same slot, neither binding pinning a key",
+   "refused": "declares unwrap"
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-3",
+        "device_serial": "S1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "09",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "F2 control: the secret's slot is pinned to another key",
+   "refused": null
+  },
+  {
+   "manifest": {
+    "generated_at": "2026-11-11T00:00:00Z",
+    "manifest_id": "custody-slot-rules-v1",
+    "objects": [
+     {
+      "algorithm": "opaque",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-1",
+        "device_serial": "S1",
+        "kek_algorithm": "rsa2048",
+        "kek_version": "1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "hardware-envelope",
+      "environment": "staging",
+      "id": "vector-secret",
+      "kind": "api-token",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-secret",
+      "operations": [
+       "release-secret"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-secret",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-3",
+        "device_serial": "S1",
+        "object_id": "0a",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-sign",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-sign",
+      "operations": [
+       "sign"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-sign",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     },
+     {
+      "algorithm": "rsa2048",
+      "bindings": [
+       {
+        "backend": "nitrokey-pkcs11",
+        "device_id": "nk-2",
+        "device_serial": "S2",
+        "object_id": "09",
+        "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "public_key_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "site": "sitea",
+        "state": "planned"
+       }
+      ],
+      "classification": "restricted",
+      "custody": "direct-hardware",
+      "environment": "staging",
+      "id": "vector-unwrap",
+      "kind": "asymmetric-key",
+      "migration": {
+       "source": "vector",
+       "status": "planned"
+      },
+      "name": "vector-unwrap",
+      "operations": [
+       "unwrap"
+      ],
+      "owner": "platform",
+      "policy_id": "vector-policy",
+      "purpose": "vector-unwrap",
+      "recovery": {
+       "authority_id": "vector-root",
+       "minimum_replicas": 2,
+       "mode": "shamir-2-of-3",
+       "status": "planned"
+      },
+      "rotation": {
+       "last_rotated": null,
+       "maximum_age_days": 90
+      },
+      "verification": {
+       "evidence": "regalia-kms-wd6",
+       "last_verified": null,
+       "status": "planned"
+      }
+     }
+    ],
+    "schema_version": 1
+   },
+   "name": "F2: an unwrap binding pins the key another object pins in the secret's slot",
+   "refused": "declares unwrap"
+  }
+ ],
+ "generator": "tests/vectors/make-custody-slot-rules-v1.py",
+ "site": "sitea",
+ "vector": "custody-slot-rules-v1"
+}

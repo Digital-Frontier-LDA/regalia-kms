@@ -16,7 +16,10 @@
 #      to the initrd-phase key opens in the initrd with the image's own signature and not once booted;
 #      a secret sealed to the system-phase key opens once booted and not in the initrd; neither opens
 #      on another image
-#   5  the measurement set printed for a host is one the measurement document accepts
+#   5  the measurement set printed for a host is one the measurement document accepts, and names the /usr
+#   6  THE /usr IT RUNS (#61 K61V-3): the command line carries usrhash=<the /usr record's root hash>, root=tmpfs and
+#      panic-on-corruption; an image whose /usr root hash differs by ONE hex digit has another PCR 11 in BOTH phases
+#      (on the software TPM), and the approved image's own signatures open nothing on it
 #
 # NOT HERE: a boot. That the firmware and systemd-stub of a real machine measure these sections in this
 # order is systemd's documented behaviour and this script's assumption; the first boot of such an image
@@ -95,7 +98,18 @@ json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], 
                                  "keyring_sha256": sys.argv[5], "inventory_sha256": digest(sys.argv[4]),
                                  "entries": 0, "dracut_over": 0}}, open(sys.argv[3], "w"))
 PY
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n' > "$W/cmdline"
+BASE="quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
+printf '%s\n' "$BASE" > "$W/cmdline"
+# the /usr image's record (build-rootfs.sh's rootfs-build.json, #61): a TEST root hash, its PARTUUIDs its two halves.
+# usr_record OUT HASH; OTHER_USRHASH is USRHASH with its last hex digit changed (one digit, section 6)
+usr_record(){ python3 -I -c 'import json,sys; h=sys.argv[2]; u=lambda x: "-".join((x[:8],x[8:12],x[12:16],x[16:20],x[20:]))
+json.dump({"schema": "regalia.rootfs-build/v1", "usr": {"roothash": h, "usr_partuuid": u(h[:32]), "usr_verity_partuuid": u(h[32:])}}, open(sys.argv[1], "w"))' "$1" "$2"; }
+USRHASH="$(printf 'TEST /usr image' | sha256sum | cut -d' ' -f1)"
+OTHER_USRHASH="${USRHASH:0:63}$( [ "${USRHASH:63}" = 0 ] && echo 1 || echo 0)"
+usr_record "$W/rootfs-build.json" "$USRHASH"; usr_record "$W/rootfs-build-other.json" "$OTHER_USRHASH"
+# ... and /var, mounted by the initrd from the LUKS2 volume (#61 K61V-4: uki.py's VAR_MOUNT, added by it, never by --cmdline)
+VAR_MOUNT="systemd.mount-extra=/dev/mapper/root:/var:ext4:x-initrd.mount,x-systemd.device-timeout=0,nodev,nosuid"
+FULL="$BASE root=tmpfs usrhash=$USRHASH systemd.verity_usr_options=panic-on-corruption $VAR_MOUNT"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
@@ -103,7 +117,7 @@ for k in initrd system secure-boot other; do
   openssl req -new -x509 -key "$W/TEST-$k.key" -out "$W/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
 IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub"
-    --initrd-build "$W/initrd-build.json" --root-key "$W/root-key.json")
+    --initrd-build "$W/initrd-build.json" --root-key "$W/root-key.json" --usr-record "$W/rootfs-build.json")
 FILEKEYS=(--initrd-key "$W/TEST-initrd.key" --initrd-cert "$W/TEST-initrd.crt" --system-key "$W/TEST-system.key" --system-cert "$W/TEST-system.crt"
           --secure-boot-key "$W/TEST-secure-boot.key" --secure-boot-cert "$W/TEST-secure-boot.crt")
 
@@ -118,13 +132,22 @@ REC="$W/a/test-image.record.json"
 i11="$(field "$REC" pcr11.initrd)"; s11="$(field "$REC" pcr11.system)"
 [ "${#i11}" = 64 ] && [ "${#s11}" = 64 ] && [ "$i11" != "$s11" ] && P "one image, two PCR 11 values: initrd ${i11:0:16}…, system ${s11:0:16}…" || F "the record's PCR 11 values: '$i11' '$s11'"
 # the same prediction, asked of ukify itself (its --measure runs systemd-measure over the image it builds, for every phase)
-theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" --os-release "@$W/os-release" \
+theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "$FULL" --os-release "@$W/os-release" \
   --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub" --tools "$(dirname "$MEASURE")" --measure --output "$W/ukify-own.efi" 2>/dev/null | sed -n 's/^11:sha256=//p')"
 grep -qx "$i11" <<< "$theirs" && grep -qx "$s11" <<< "$theirs" && P "ukify --measure predicts both values for the image it builds from the same inputs" \
   || F "ukify --measure says '$(tr '\n' ' ' <<< "$theirs")', the record $i11 and $s11"
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 rd.luks.uuid=0\n' > "$W/cmdline-bad"
+printf '%s rd.luks.uuid=0\n' "$BASE" > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
+[ "$(field "$REC" cmdline)" = "$FULL" ] && [ "$(field "$REC" usr_roothash)" = "$USRHASH" ] \
+  && P "the image's command line is --cmdline's, then root=tmpfs usrhash=<the /usr record's root hash> systemd.verity_usr_options=panic-on-corruption and the initrd's /var mount; the record names the root hash" \
+  || F "the record's command line is '$(field "$REC" cmdline)', its usr_roothash '$(field "$REC" usr_roothash)'"
+printf '%s usrhash=%s\n' "$BASE" "$OTHER_USRHASH" > "$W/cmdline-own"
+out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-own" "${IN[@]:6}" --name x --out "$W/x2" 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q "come from the /usr record" <<< "$out" && [ ! -e "$W/x2/x.unsigned.efi" ] && P "a --cmdline that names a /usr itself is refused, nothing built" || F "own usrhash=: exit $rc: $out"
+printf '%s systemd.verity=no\n' "$BASE" > "$W/cmdline-noverity"
+out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-noverity" "${IN[@]:6}" --name x --out "$W/x3" 2>&1)"; rc=$?
+[ "$rc" = 1 ] && grep -q "holds 'systemd.verity=no'" <<< "$out" && [ ! -e "$W/x3/x.unsigned.efi" ] && P "a command line that turns the verity generator off is refused, nothing built" || F "systemd.verity=no: exit $rc: $out"
 
 hdr "2  two PCR signatures and a Secure Boot signature; keys in files, then in a PKCS#11 token"
 out="$(uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/a" "${FILEKEYS[@]}" 2>&1)"; rc=$?
@@ -245,14 +268,48 @@ hdr "5  the measurement set of this image for a host"
 printf '{"0": "%s", "7": "%s"}' "$(printf '00%.0s' $(seq 32))" "$(printf '77%.0s' $(seq 32))" > "$W/pcrs.json"
 mkdir -p "$W/esp/loader/credentials"; printf 'test-node\n' > "$W/esp/loader/credentials/regalia.node-id.cred"
 uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp" > "$W/set.json" 2>"$W/set.err"
-python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
+python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" "$USRHASH" <<'EOF' && P "the set gives PCR 11 per phase from the record and names the /usr root hash, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
 import sys; sys.path.append(sys.argv.pop(1))
 import json, sys
 from deploy.baremetal import measurements
 entry = json.load(open(sys.argv[1]))
 assert entry["phases"] == {"initrd": {"11": sys.argv[2]}, "system": {"11": sys.argv[3]}}, entry
+assert entry["usr_roothash"] == sys.argv[4], entry
 measurements.version({"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}})
 EOF
+# signed addons on the ESP would add command-line words (PCR 12, not 11): another usrhash= among them. Refused
+mkdir -p "$W/esp/loader/addons"; printf 'stand-in\n' > "$W/esp/loader/addons/usr.addon.efi"
+no "an ESP that holds an addon has no measurement set" "the ESP holds global addons" \
+  uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp"
+rm -r "$W/esp/loader/addons"
+
+hdr "6  the /usr it runs: one hex digit of usrhash= is another PCR 11, in both phases"
+# the same inputs, with the /usr record of a root hash one hex digit away
+out="$(uki build "${IN[@]:0:$((${#IN[@]} - 2))}" --usr-record "$W/rootfs-build-other.json" --name test-image --out "$W/o" 2>&1)"; rc=$?
+OREC="$W/o/test-image.record.json"
+if [ "$rc" = 0 ] && [ -s "$OREC" ]; then
+  oi11="$(field "$OREC" pcr11.initrd)"; os11="$(field "$OREC" pcr11.system)"
+  [ "$(field "$OREC" usr_roothash)" = "$OTHER_USRHASH" ] && [ "$oi11" != "$i11" ] && [ "$os11" != "$s11" ] \
+    && P "usrhash=…${OTHER_USRHASH:56} for …${USRHASH:56}: the record predicts another PCR 11 in both phases (initrd ${oi11:0:16}…, system ${os11:0:16}…)" \
+    || F "one digit of usrhash=: initrd $oi11 vs $i11, system $os11 vs $s11"
+  python3 -IB - "$HERE" "$W/o/test-image.unsigned.efi" > "$W/extends" <<'EOF'
+import sys; sys.path.append(sys.argv.pop(1))
+import hashlib, sys
+from deploy.baremetal import uki
+for name, content in uki.measured(uki.read(sys.argv[1])).items():
+    print(hashlib.sha256(b"." + name.encode() + b"\0").hexdigest(), hashlib.sha256(content).hexdigest())
+EOF
+  boot
+  got="$(pcr11)"
+  [ "$got" = "$oi11" ] && [ "$got" != "$i11" ] && P "the software TPM, initrd phase: PCR 11 is the other image's, not the approved one's" || F "initrd phase: PCR 11 $got, other $oi11, approved $i11"
+  opens initrd && F "the approved image's signature opened the initrd-phase secret on a /usr one digit away" || P "initrd phase: the approved image's signature opens nothing on it"
+  up
+  got="$(pcr11)"
+  [ "$got" = "$os11" ] && [ "$got" != "$s11" ] && P "the software TPM, booted: PCR 11 is the other image's, not the approved one's" || F "booted: PCR 11 $got, other $os11, approved $s11"
+  opens system && F "the approved image's signature opened the system-phase secret on a /usr one digit away" || P "booted: the approved image's signature opens nothing on it"
+else
+  F "the image with the other /usr did not build (exit $rc): $out"; F "(not measured)"; F "(not measured)"; F "(not measured)"; F "(not measured)"
+fi
 
 echo
 echo "uki-build: image $(field "$SIGNED" signed.image_sha256) (unsigned $(field "$REC" unsigned_sha256)), kernel $UNAME"

@@ -66,7 +66,7 @@ func r5yubikey(state, serial, pinPolicy, touchPolicy string) string {
 	if touchPolicy != "" {
 		extra += fmt.Sprintf(`,"touch_policy":%q`, touchPolicy)
 	}
-	return fmt.Sprintf(`{"site":"sitea","backend":"yubikey-piv","device_id":"yk-1","object_id":"slot-1",%s,"state":%q%s}`,
+	return fmt.Sprintf(`{"site":"sitea","backend":"yubikey-piv","device_id":"yk-1","object_id":"a1",%s,"state":%q%s}`,
 		r5fingerprint, state, extra)
 }
 
@@ -153,7 +153,7 @@ func TestAnObjectWithNoRotationBlockLoadsWithNoDeadline(t *testing.T) {
 	object := `{"id":"no-rotation","name":"R5","kind":"asymmetric-key","classification":"restricted",` +
 		`"environment":"staging","owner":"security","purpose":"signing","custody":"direct-hardware",` +
 		`"algorithm":"secp256k1","operations":["sign"],"policy_id":"test-policy","bindings":[` +
-		r5nitrokey("sitea", "dev-1", "slot-1", "active", "", "") + `],` +
+		r5nitrokey("sitea", "dev-1", "a1", "active", "", "") + `],` +
 		`"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},` +
 		`"migration":{"status":"migrated","source":"test"},"verification":{"status":"verified"}}`
 	if strings.Contains(object, `"rotation"`) {
@@ -178,7 +178,7 @@ func TestAnObjectWithNoRotationBlockLoadsWithNoDeadline(t *testing.T) {
 // A separate case per operand: one fixture spoiling both would leave each
 // masked by the other, and pin neither.
 func TestObjectIDAndPurposeMustBeLowercaseIdentifiers(t *testing.T) {
-	binding := r5nitrokey("sitea", "dev-1", "slot-1", "active", "", "")
+	binding := r5nitrokey("sitea", "dev-1", "a1", "active", "", "")
 	control := r5object("wallet-key", "cosmos-transaction", "asymmetric-key", "secp256k1", "direct-hardware", `"sign"`, binding)
 	if _, err := r5load(t, control, "dev-1"); err != nil {
 		t.Fatalf("control must load for the cases below to mean anything: %v", err)
@@ -217,7 +217,7 @@ func TestObjectIDAndPurposeMustBeLowercaseIdentifiers(t *testing.T) {
 // place instead, since asserting only `err != nil` let :578 and :750 refuse the
 // fixture on its behalf.
 func TestValidateObjectRequiresVerificationAndAtLeastOneOperation(t *testing.T) {
-	binding := r5nitrokey("sitea", "dev-1", "slot-1", "active", "", "")
+	binding := r5nitrokey("sitea", "dev-1", "a1", "active", "", "")
 	noVerification := `{"id":"wallet-key","name":"R5","kind":"asymmetric-key","classification":"restricted",` +
 		`"environment":"staging","owner":"security","purpose":"cosmos-transaction","custody":"direct-hardware",` +
 		`"algorithm":"secp256k1","operations":["sign"],"policy_id":"test-policy","bindings":[` + binding + `],` +
@@ -259,13 +259,13 @@ func TestValidateObjectRequiresVerificationAndAtLeastOneOperation(t *testing.T) 
 // manifest reads as if the device were commissioned.
 func TestAnUnsupportedBindingStateIsRefusedByName(t *testing.T) {
 	control := r5object("wallet-key", "cosmos-transaction", "asymmetric-key", "secp256k1", "direct-hardware",
-		`"sign"`, r5nitrokey("sitea", "dev-1", "slot-1", "active", "", ""))
+		`"sign"`, r5nitrokey("sitea", "dev-1", "a1", "active", "", ""))
 	if _, err := r5load(t, control, "dev-1"); err != nil {
 		t.Fatalf("control must load: %v", err)
 	}
 
 	typo := r5object("wallet-key", "cosmos-transaction", "asymmetric-key", "secp256k1", "direct-hardware",
-		`"sign"`, r5nitrokey("sitea", "dev-1", "slot-1", "activee", "", ""))
+		`"sign"`, r5nitrokey("sitea", "dev-1", "a1", "activee", "", ""))
 	_, err := r5load(t, typo, "dev-1")
 	if err == nil {
 		t.Fatal("Load() accepted binding state \"activee\": a state outside the enum pins no device " +
@@ -371,7 +371,7 @@ func TestYubiKeyInteractionPolicyIsBoundedInBothDirections(t *testing.T) {
 // either one neutralised the other still refuses, and the test stays green.
 // One field per fixture is the whole point of this test.
 func TestInteractionPolicyIsRefusedOnANonYubiKeyBackendFieldByField(t *testing.T) {
-	base := r5nitrokey("sitea", "dev-1", "slot-1", "active", "", "")
+	base := r5nitrokey("sitea", "dev-1", "a1", "active", "", "")
 	for name, binding := range map[string]string{
 		"pin_policy alone":   strings.Replace(base, `"state":"active"`, `"pin_policy":"once","state":"active"`, 1),
 		"touch_policy alone": strings.Replace(base, `"state":"active"`, `"touch_policy":"never","state":"active"`, 1),
@@ -405,7 +405,7 @@ func TestInteractionPolicyIsRefusedOnANonYubiKeyBackendFieldByField(t *testing.T
 // it on a signing binding is a manifest that describes rotation of a key that
 // does no wrapping.
 func TestKEKVersionAloneIsRefusedOnABindingThatNeitherReleasesNorSeals(t *testing.T) {
-	binding := strings.Replace(r5nitrokey("sitea", "dev-1", "slot-1", "active", "", ""),
+	binding := strings.Replace(r5nitrokey("sitea", "dev-1", "a1", "active", "", ""),
 		`"state":"active"`, `"kek_version":"1","state":"active"`, 1)
 	if !strings.Contains(binding, `"kek_version"`) {
 		t.Fatal("the fixture carries no kek_version; the replacement did not land")
@@ -445,13 +445,13 @@ func TestKEKVersionAloneIsRefusedOnABindingThatNeitherReleasesNorSeals(t *testin
 // TestAnObjectThatSealsMustStillHaveSomethingThatCanSeal; the site half was not.
 func TestSealEligibilityIsJudgedAtTheConfiguredSite(t *testing.T) {
 	local := r5object("seal-target", "seal-purpose", "opaque-secret", "opaque", "hardware-envelope",
-		`"seal-envelope"`, r5nitrokey("sitea", "dev-1", "slot-1", "active", "rsa4096", "1"))
+		`"seal-envelope"`, r5nitrokey("sitea", "dev-1", "a1", "active", "rsa4096", "1"))
 	if _, err := r5load(t, local, "dev-1"); err != nil {
 		t.Fatalf("control (sealable binding AT the configured site) must load: %v", err)
 	}
 
 	remote := r5object("seal-target", "seal-purpose", "opaque-secret", "opaque", "hardware-envelope",
-		`"seal-envelope"`, r5nitrokey("siteb", "dev-2", "slot-2", "active", "rsa4096", "1"))
+		`"seal-envelope"`, r5nitrokey("siteb", "dev-2", "a2", "active", "rsa4096", "1"))
 	_, err := r5load(t, remote, "dev-2")
 	if err == nil {
 		t.Fatal("Load() accepted a seal-envelope object whose only sealable binding is at another site: " +
@@ -477,8 +477,8 @@ func TestSealEligibilityIsJudgedAtTheConfiguredSite(t *testing.T) {
 // filter is the runtime one, and it is the only thing keeping "the envelope
 // chooses the generation" from becoming "the envelope chooses the site".
 func TestRouteForUnwrapNeverSelectsABindingAtAnotherSite(t *testing.T) {
-	bindings := r5nitrokey("sitea", "dev-1", "slot-1", "active", "rsa4096", "1") + "," +
-		r5nitrokey("siteb", "dev-2", "slot-2", "active", "rsa4096", "2")
+	bindings := r5nitrokey("sitea", "dev-1", "a1", "active", "rsa4096", "1") + "," +
+		r5nitrokey("siteb", "dev-2", "a2", "active", "rsa4096", "2")
 	object := r5object("release-target", "release-purpose", "opaque-secret", "opaque", "hardware-envelope",
 		`"release-secret"`, bindings)
 	registry, err := r5load(t, object, "dev-1", "dev-2")
@@ -534,7 +534,7 @@ func TestUnwrapAndSealStillServeBeforeTheRotationDeadline(t *testing.T) {
 		`"bindings":[%s],"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},`+
 		`"rotation":{"maximum_age_days":365,"last_rotated":%q},"migration":{"status":"migrated","source":"test"},`+
 		`"verification":{"status":"verified"}}`,
-		r5nitrokey("sitea", "dev-1", "slot-1", "active", "rsa4096", "1"), rotated.Format(time.RFC3339))
+		r5nitrokey("sitea", "dev-1", "a1", "active", "rsa4096", "1"), rotated.Format(time.RFC3339))
 
 	registry, err := r5load(t, object, "dev-1")
 	if err != nil {
@@ -574,11 +574,11 @@ func TestUnwrapAndSealStillServeBeforeTheRotationDeadline(t *testing.T) {
 func TestRequiredBackendsNeverNamesAnUnassignedObject(t *testing.T) {
 	// Served here, so the assertion cannot be satisfied by an empty result.
 	served := r5object("local-key", "cosmos-transaction", "asymmetric-key", "secp256k1", "direct-hardware",
-		`"sign"`, r5nitrokey("sitea", "dev-1", "slot-1", "active", "", ""))
+		`"sign"`, r5nitrokey("sitea", "dev-1", "a1", "active", "", ""))
 	// Operated custody, but every binding is at another site: assigned is false
 	// and route.Binding is the zero Binding.
 	elsewhere := r5object("remote-key", "other-purpose", "asymmetric-key", "secp256k1", "direct-hardware",
-		`"sign"`, r5nitrokey("siteb", "dev-2", "slot-2", "active", "", ""))
+		`"sign"`, r5nitrokey("siteb", "dev-2", "a2", "active", "", ""))
 
 	registry, err := r5load(t, served+","+elsewhere, "dev-1", "dev-2")
 	if err != nil {
@@ -640,7 +640,7 @@ func TestANilRegistryAndANilClockAreToleratedByEveryAccessor(t *testing.T) {
 		`"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},`+
 		`"rotation":{"maximum_age_days":365,"last_rotated":%q},"migration":{"status":"migrated","source":"test"},`+
 		`"verification":{"status":"verified"}}`,
-		r5nitrokey("sitea", "dev-1", "slot-1", "active", "", ""), rotated.Format(time.RFC3339))
+		r5nitrokey("sitea", "dev-1", "a1", "active", "", ""), rotated.Format(time.RFC3339))
 	registry, err := r5load(t, object, "dev-1")
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -675,7 +675,7 @@ func TestANilRegistryAndANilClockAreToleratedByEveryAccessor(t *testing.T) {
 // nothing else covering the paths.
 func TestAnUnattachedProbeFailsClosedOnEveryRouteAndOnReadiness(t *testing.T) {
 	object := r5object("release-target", "release-purpose", "opaque-secret", "opaque", "hardware-envelope",
-		`"release-secret","seal-envelope"`, r5nitrokey("sitea", "dev-1", "slot-1", "active", "rsa4096", "1"))
+		`"release-secret","seal-envelope"`, r5nitrokey("sitea", "dev-1", "a1", "active", "rsa4096", "1"))
 	registry, err := Load(strings.NewReader(manifest(object)), "sitea", nil)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -739,7 +739,7 @@ func (reader *failingReader) Read(buffer []byte) (int, error) {
 // "the daemon loaded manifest X" would be a claim about bytes nobody wrote.
 func TestLoadRefusesAManifestItCouldNotFinishReading(t *testing.T) {
 	body := manifest(r5object("wallet-key", "cosmos-transaction", "asymmetric-key", "secp256k1",
-		"direct-hardware", `"sign"`, r5nitrokey("sitea", "dev-1", "slot-1", "active", "", "")))
+		"direct-hardware", `"sign"`, r5nitrokey("sitea", "dev-1", "a1", "active", "", "")))
 	// The control: the same bytes from a reader that does not fail must load,
 	// so the refusal below is the read error and not the fixture.
 	if _, err := Load(strings.NewReader(body), "sitea", &healthMap{states: map[string]bool{"dev-1": true}}); err != nil {
@@ -777,7 +777,7 @@ func TestABadEnvelopeMaxAgeIsRefusedAtLoadAndNotJustInTheHelper(t *testing.T) {
 			`"algorithm":"secp256k1","operations":["sign"],"policy_id":"test-policy","bindings":[%s],`+
 			`"recovery":{"mode":"shamir-4-of-6","authority_id":"root","minimum_replicas":2,"status":"tested"},`+
 			`"rotation":%s,"migration":{"status":"migrated","source":"test"},"verification":{"status":"verified"}}`,
-			r5nitrokey("sitea", "dev-1", "slot-1", "active", "", ""), rotation)
+			r5nitrokey("sitea", "dev-1", "a1", "active", "", ""), rotation)
 	}
 	// The control names a rotation block that parses, so the case below cannot
 	// be refused for being malformed in general.

@@ -12,7 +12,7 @@ import (
 // the runbook row for setting the state warns about this before the operator can set it; the
 // audit record names the refusal so a release at 3am is not mistaken for a routing failure.
 
-const revokedV1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
+const revokedV1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
 
 // revokedOnlyReleaseRegistry loads an object whose only binding is `revoked` and whose only
 // declared operation is `release-secret`. Release-only is the deliberate shape: a revoked
@@ -28,7 +28,7 @@ const revokedV1 = `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-
 // and adding a second binding would hide the test under unrelated routing constraints.
 func revokedOnlyReleaseRegistry(t *testing.T) *Registry {
 	t.Helper()
-	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
+	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
 	registry, err := Load(strings.NewReader(manifest(revokedOnlyReleaseObject(bindings))),
 		"sitea", &healthMap{states: map[string]bool{"dev-1": true}})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestAnEnvelopeUnderARevokedKEKUsesTheDistinctReasonEvenWithALiveSibling(t *
 // Falsified by: widening the seal-eligibility iteration to admit `revoked`. The test fails
 // because Load returns no error on a manifest whose only seal-capable binding is revoked.
 func TestSealManifestWithOnlyRevokedBindingsIsRefusedAtLoad(t *testing.T) {
-	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
+	bindings := `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1","public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","state":"revoked","kek_algorithm":"rsa4096","kek_version":"1"}`
 	_, err := Load(strings.NewReader(manifest(sealObject("seal-target", "seal-purpose", bindings))),
 		"sitea", &healthMap{states: map[string]bool{"local-hsm": true}})
 	if err == nil {

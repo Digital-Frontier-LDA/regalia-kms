@@ -517,3 +517,52 @@ func stateEventHash(event stateEvent) string {
 	sum := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+// ErrBehindCollector and ErrDivergedFromCollector are the two ways this journal can disagree with
+// the audit collector's memory of it (epic #40 gap .1.2, T09). Every allowed operation's
+// "authorized" audit record carries this journal's head, and that record is acknowledged off-host
+// before the card is touched. The journal, its high-water mark and its epoch all live on one disk,
+// so restoring the journal AND the mark from one earlier backup passes every local check; the
+// collector's copy is the one position the host cannot restore with them.
+var (
+	ErrBehindCollector       = errors.New("policy state journal is behind what the audit collector acknowledged")
+	ErrDivergedFromCollector = errors.New("policy state journal disagrees with what the audit collector acknowledged")
+)
+
+// Head is the last durable reservation: its sequence and hash, (0, genesis) for an empty journal.
+// Reserve advances it only after the append is synced, so a head read here never names a
+// reservation a crash could lose.
+func (state *FileState) Head() (uint64, string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.sequence, state.lastHash
+}
+
+// RequireAcknowledged refuses a journal that ends before, or differs at, the reservation the audit
+// collector last acknowledged an operation under. sequence 0 is "the collector holds no policy
+// position" (a fresh stream, or events written before this field existed) and constrains nothing.
+func (state *FileState) RequireAcknowledged(sequence uint64, hash string) error {
+	if sequence == 0 {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.sequence < sequence {
+		return fmt.Errorf("%w: the journal ends at reservation %d, but the collector acknowledged an operation authorized at reservation %d; the journal (and its high-water mark) were restored from an earlier point, and the nonces and quota spent since would be spendable again",
+			ErrBehindCollector, state.sequence, sequence)
+	}
+	events, err := readState(state.path)
+	if err != nil {
+		return fmt.Errorf("policy state journal: %w", err)
+	}
+	for _, event := range events {
+		if event.Sequence == sequence {
+			if event.Hash != hash {
+				return fmt.Errorf("%w: reservation %d is %s here but %s in the acknowledged audit record; the journal was rewritten after that operation was authorized",
+					ErrDivergedFromCollector, sequence, event.Hash, hash)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: reservation %d is not in the journal", ErrDivergedFromCollector, sequence)
+}

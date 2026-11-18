@@ -1,6 +1,8 @@
 #!/bin/bash
 # dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67, #70).
 #
+# What it pulls in (depends): systemd's cryptsetup, pcrphase and veritysetup modules, the last of which opens the
+# image's /usr from the UKI's usrhash= (#61).
 # What it puts in the initrd: the unlock client (a password agent, enabled beside systemd-cryptsetup) and
 # its unit, the unit that renders the boot configuration from the signed membership chain (the same
 # binary, -render; #66 B3), the boot mesh unit and its script, the three tools the script runs (ip, wg,
@@ -65,7 +67,12 @@ depends() {
     # systemd-pcrphase: the unit that extends PCR 11 with "enter-initrd". It is not in dracut's default set
     # (its check() returns 0, not 255), and without it no credential sealed to the image's initrd-phase
     # signature opens: the units here are ordered After= it, which does nothing for a unit that is absent.
-    echo systemd systemd-cryptsetup systemd-pcrphase tpm2-tss
+    # systemd-veritysetup (#61, the dm-verity design): systemd-veritysetup-generator opens /usr from the UKI's usrhash=,
+    # and veritysetup.target. Its check() returns 255, so dracut adds it only when a module names it; named here, not
+    # left to a --add on the command line, so an image built without it cannot boot to a missing /usr in silence: its
+    # check() needs systemd-veritysetup and the generator (package systemd-cryptsetup), and without them the module
+    # fails and dracut stops the build.
+    echo systemd systemd-cryptsetup systemd-pcrphase systemd-veritysetup tpm2-tss
 }
 
 installkernel() {

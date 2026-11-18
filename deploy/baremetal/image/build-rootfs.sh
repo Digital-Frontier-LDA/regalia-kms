@@ -19,25 +19,45 @@
 #                     host runs and checked in CI (tests/test_baremetal_rootfs_packages.py)
 #
 # TWO TREES from the same snapshot:
-#   BUILD  gcc, libc6-dev, libpcsclite-dev, pkg-config: packages.txt's [built] programs are compiled IN it, so the
+#   BUILD  gcc, libc6-dev, libpcsclite-dev, pkg-config (and erofs-utils, cryptsetup-bin for the /usr image, below):
+#          packages.txt's [built] programs are compiled IN it, so the
 #          cgo link (the -tags piv daemon's PC/SC) is against the snapshot's libraries, never the builder's. The
 #          toolchain and the modules are fetched outside it first (go.sum and the checksum database verify them);
 #          inside it nothing reaches the network (GOPROXY=off, GOTOOLCHAIN=local, the module cache read-only).
 #   HOST   mmdebstrap --variant=minbase with exactly [packages], then from the commit: the deploy package at
 #          /usr/lib/regalia-kms (every unit's WorkingDirectory), the units, sysusers.d and tmpfiles.d, the daemon's
 #          AppArmor profile, and the [built] programs at their paths. systemd-sysusers runs in it, so the system
-#          users exist in the image; nothing is enabled or started (first boot is a later slice).
+#          users exist in the image. What it STARTS is units-enabled.txt, enabled under /usr (#61 K61V-4: /etc is a tmpfs,
+#          empty when PID 1 loads units), with a "disable *" preset so the first-boot preset pass every boot runs enables
+#          nothing more; its [per-host] units each gated on a per-host file on /var (regalia-kms-r1s.8), its [masked]
+#          units linked to /dev/null under /usr; dpkg's database is moved to /usr/lib/sysimage/dpkg (owner decision q-18 = A).
+#
+# THE HERMETIC /usr (#61's dm-verity design of 2026-10-05; the owner requires it before the first ceremony, #297): the
+#   host tree's /etc is also copied to /usr/share/factory/etc, so /usr alone holds everything a booted host runs and
+#   the /etc it starts from; then usr-verity.sh, run INSIDE the build tree (its erofs-utils and cryptsetup-bin are the
+#   snapshot's), makes /usr an erofs image and its dm-verity hash tree, salt and UUIDs derived from the commit.
 #
 # OUT, written last and all together: DIR/rootfs.tar (sorted, numeric owners, every mtime clamped to the epoch, pax
-# with no atime or ctime), DIR/rootfs-listing.txt (path, type, mode, uid, gid, size, sha256, link) and
-# DIR/rootfs-build.json (regalia.rootfs-build/v1: the inputs, the package set with versions, each built program's
-# sha256 and Go release, the repository files' sha256). A refusal leaves DIR empty.
+# with no atime or ctime), DIR/rootfs-listing.txt (path, type, mode, uid, gid, size, sha256, link),
+# DIR/usr.erofs and DIR/usr.verity (the /usr image and its hash tree), and DIR/rootfs-build.json
+# (regalia.rootfs-build/v1: the inputs, the package set with versions, each built program's sha256 and Go release,
+# the repository files' sha256, and "usr": the root hash, the two PARTUUIDs derived from it, the salt, the UUIDs, the
+# images' sizes and sha256s and the tools' versions). A refusal leaves DIR empty.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NOT A BOOTABLE DISK YET. No partitions, LUKS2, crypttab, ESP, kernel/UKI pairing, network configuration,
-#     node.json or first-boot step: later slices of #61. Nothing is enabled.
-#   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
-#     removing unwanted binaries (#61's baseline) are later slices.
+#   * NO KERNEL IN THE IMAGE: the UKI carries the kernel, and /usr has no /usr/lib/modules yet (no kernel/UKI pairing).
+#     The QEMU boots (e2e/unlock-boot-qemu.sh REGALIA_BOOT_CASES=verity, #61 K61V-4) add the test UKI kernel's modules
+#     to the guest's /usr; a host needs the pairing (a later slice), as it needs network configuration and node.json.
+#   * BOOTED IN QEMU, NOT ON A DL360: this image's /usr, installed by install-host.sh (test mode) and opened by the
+#     UKI's usrhash=, boots in QEMU with /var from the initrd, /etc from the factory copy and its units started
+#     (OnQemuVerity). The node units, the audit shippers and the firewall are enabled by the image too, each gated on
+#     its per-host file on /var (units-enabled.txt [per-host], regalia-kms-r1s.8): nothing an operator enables is lost
+#     at a reboot, because an operator enables nothing. What lives
+#     outside /usr is the /etc and /var inventory's (etc-inventory.txt).
+#   * HARDENING: the units' own sandboxes, the daemon's AppArmor profile, and the kernel settings in
+#     /usr/lib/sysctl.d/90-regalia-kms.conf (regalia-kms-r1s.5). AppArmor profiles for the other services, and removing
+#     unwanted binaries (#61's baseline), are later slices. There is no sshd in the image (packages.txt); whether one is
+#     ever added is an owner decision (q-20).
 #   * PACKAGES ARE AUTHENTICATED BY APT ONLY: every .deb is checked by apt against the snapshot's signed index with
 #     the pinned keyring. The independent per-file check build-initrd.sh makes (debverify, #246) is not run on the
 #     host tree.
@@ -62,9 +82,11 @@ SCRIPT="deploy/baremetal/image/build-rootfs.sh"
 LIST="deploy/baremetal/image/packages.txt"
 SCHEMA="regalia.rootfs-build/v1"
 SUITE=trixie
-BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config"
+BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config,erofs-utils,cryptsetup-bin"   # the last two: the /usr image
 PIN="deploy/baremetal/image/etcd.pin"
-REPO_FILES=("$SCRIPT" "$LIST" "$PIN" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+ENABLED="deploy/baremetal/image/units-enabled.txt"
+PRESET="deploy/baremetal/image/regalia-kms.preset"
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" "$ENABLED" "$PRESET" deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
 SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
@@ -279,6 +301,14 @@ cp -a "$SRC/deploy" "$ROOT/usr/lib/regalia-kms/deploy"                          
      if [ -d "$f" ]; then mkdir -p "$ROOT/usr/lib/systemd/system/$f"; else install -m 0644 "$f" "$ROOT/usr/lib/systemd/system/$f"; fi
    done)
 install -m 0644 "$SRC/deploy/systemd/regalia-kms.service" "$ROOT/usr/lib/systemd/system/regalia-kms.service"
+# the KMS's sandbox, the image's (regalia-kms-r1s.8: a drop-in under /etc/systemd/system is gone at every boot), from the
+# one file os_probe's controls are written against; and the generator that names this host's PIN credentials to it,
+# from the /var credstore, at every boot (generators/regalia-kms-credentials)
+install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms-hardening.conf.example" "$ROOT/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf"
+install -D -m 0755 "$SRC/deploy/baremetal/generators/regalia-kms-credentials" "$ROOT/usr/lib/systemd/system-generators/regalia-kms-credentials"
+# the kernel settings, each with its reason (regalia-kms-r1s.5): under /usr, so verity covers them; os_probe's
+# kernel_sysctl_baseline measures them on the running kernel
+install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms.sysctl.conf" "$ROOT/usr/lib/sysctl.d/90-regalia-kms.conf"
 for f in "$SRC"/deploy/baremetal/units/*.sysusers.conf "$SRC"/deploy/systemd/*.sysusers.conf; do
   [ -e "$f" ] && install -m 0644 "$f" "$ROOT/usr/lib/sysusers.d/$(basename "$f" .sysusers.conf).conf"
 done
@@ -323,6 +353,120 @@ done
 [ "${#missing[@]}" = 0 ] || die "packages.txt says these are provided, and the host tree lacks them: ${missing[*]}"
 chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 
+# ---- what the image STARTS (#61 K61V-4): enablement under /usr, from units-enabled.txt. / is a tmpfs, so /etc is empty
+# when PID 1 loads units: a link under /etc/systemd/system is never seen. Every link a package made there must be named
+# in units-enabled.txt ([enabled], [alias] or [dropped]: a new one is a decision, not an accident); the [enabled] and
+# [alias] lines become links under /usr/lib/systemd/system; then the image's /etc holds no enablement at all
+echo "### the units the image starts, enabled under /usr ($ENABLED)"
+ENABLE_SPEC="$(python3 -I - "$ENABLED" <<'PY'
+import re, sys
+UNIT, TARGET = re.compile(r"[a-zA-Z0-9:_.\\-]+(@[a-zA-Z0-9:_.\\-]*)?\.(service|socket|timer|path|target)"), re.compile(r"[a-z0-9-]+\.target")
+sections, section = {"enabled": "ENABLE", "alias": "ALIAS", "dropped": "DROP", "per-host": "ENABLE", "masked": "MASK"}, None
+WIDTH = {"per-host": 4, "masked": 2}
+for number, raw in enumerate(open(sys.argv[1]), 1):
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    m = re.fullmatch(r"\[([a-z-]+)\]", line)
+    if m:
+        section = m.group(1)
+        if section not in sections:
+            raise SystemExit("units-enabled.txt line %d: no section [%s]" % (number, section))
+        continue
+    fields = [f.strip() for f in line.split("|")]
+    if section == "masked":
+        if len(fields) != 2 or not fields[1] or not UNIT.fullmatch(fields[0]):
+            raise SystemExit("units-enabled.txt line %d: not 'unit | why'" % number)
+        print("MASK", fields[0], "-")
+        continue
+    first = UNIT if section == "alias" else TARGET
+    shape = "target | unit | the per-host file | why" if section == "per-host" else "%s | unit | why" % ("alias" if section == "alias" else "target")
+    if section is None or len(fields) != WIDTH.get(section, 3) or not fields[-1] or not first.fullmatch(fields[0]) or not UNIT.fullmatch(fields[1]):
+        raise SystemExit("units-enabled.txt line %d: not '%s'" % (number, shape))
+    print(sections[section], fields[0], fields[1])
+    if section == "per-host":
+        # a per-host file under /etc (its /var name is the host's own): an absolute, plain path
+        if not re.fullmatch(r"/etc/[A-Za-z0-9._/-]+", fields[2]) or "/../" in fields[2] or fields[2].endswith("/"):
+            raise SystemExit("units-enabled.txt line %d: %r is not a per-host /etc path" % (number, fields[2]))
+        print("GATE", fields[1], fields[2])
+PY
+)" || die "$ENABLED cannot be read (above)"
+UNITDIR="$ROOT/usr/lib/systemd/system"
+unknown=()
+while IFS= read -r l; do
+  case "$l" in
+    *.wants/*) grep -qxF -e "ENABLE ${l%%.wants/*} ${l#*.wants/}" -e "DROP ${l%%.wants/*} ${l#*.wants/}" <<< "$ENABLE_SPEC" || unknown+=("$l") ;;
+    */*) unknown+=("$l") ;;
+    *) grep -qxF "ALIAS $l $(basename "$(readlink "$ROOT/etc/systemd/system/$l")")" <<< "$ENABLE_SPEC" || unknown+=("$l") ;;
+  esac
+done < <(cd "$ROOT/etc/systemd/system" && find . -type l -printf '%P\n' | sort)
+[ "${#unknown[@]}" = 0 ] || die "the packages enabled units under /etc/systemd/system that $ENABLED does not name (enable or drop each, with why): ${unknown[*]}"
+while read -r kind a b; do
+  case "$kind" in
+    ENABLE)
+      file="$b"; [[ "$b" =~ ^([^@]+@)[^.]+(\..+)$ ]] && file="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"      # an instance: its template
+      [ -f "$UNITDIR/$file" ] || die "$ENABLED enables $b, and the image has no /usr/lib/systemd/system/$file"
+      mkdir -p "$UNITDIR/$a.wants"
+      if [ -L "$UNITDIR/$a.wants/$b" ]; then [ "$(readlink "$UNITDIR/$a.wants/$b")" = "../$file" ] || die "the image's $a.wants/$b names another unit"
+      else ln -s "../$file" "$UNITDIR/$a.wants/$b"; fi ;;
+    ALIAS)
+      [ -f "$UNITDIR/$b" ] || die "$ENABLED aliases $a to $b, and the image has no /usr/lib/systemd/system/$b"
+      [ ! -e "$UNITDIR/$a" ] && [ ! -L "$UNITDIR/$a" ] || die "the image already has /usr/lib/systemd/system/$a"
+      ln -s "$b" "$UNITDIR/$a" ;;
+    GATE)
+      # [per-host] (regalia-kms-r1s.8): the unit, its template's drop-ins or its own must carry the condition on the
+      # per-host file, or the image would start it on every host, enrolled or not
+      file="$a"; [[ "$a" =~ ^([^@]+@)[^.]+(\..+)$ ]] && file="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+      grep -qsxF "ConditionPathExists=$b" "$UNITDIR/$file" "$UNITDIR/$file.d/"*.conf "$UNITDIR/$a.d/"*.conf \
+        || die "$ENABLED gates $a on $b, and neither the unit nor its drop-ins under /usr/lib/systemd/system say ConditionPathExists=$b" ;;
+    MASK)
+      # [masked]: the package's unit replaced, in the image's /usr, by a link to /dev/null (systemctl mask's own form)
+      [ -f "$UNITDIR/$a" ] || die "$ENABLED masks $a, and the image has no /usr/lib/systemd/system/$a"
+      rm -f -- "$UNITDIR/$a" && ln -s /dev/null "$UNITDIR/$a" ;;
+  esac
+done <<< "$ENABLE_SPEC"
+find "$ROOT/etc/systemd/system" -type l -delete
+find "$ROOT/etc/systemd/system" -mindepth 1 -type d -empty -delete
+rm -rf -- "$ROOT/var/lib/systemd/deb-systemd-helper-enabled" "$ROOT/var/lib/systemd/deb-systemd-helper-masked"
+# every boot is a first boot (/etc/machine-id is missing when PID 1 starts), and PID 1 then applies the preset policy:
+# the image's is "disable *" (regalia-kms.preset), shown here doing nothing to the tree, as PID 1 will do it to /etc
+install -D -m 0644 "$PRESET" "$ROOT/usr/lib/systemd/system-preset/00-regalia-kms.preset"
+chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C systemctl --root=/ preset-all --preset-mode=enable-only >"$W/preset.log" 2>&1 \
+  || { cat "$W/preset.log"; die "systemctl preset-all failed in the host tree"; }
+made="$(cd "$ROOT/etc/systemd/system" && find . -mindepth 1 -printf '%P ' 2>/dev/null)"
+[ -z "$made" ] || die "the preset pass a first boot runs enabled units under /etc/systemd/system: $made"
+
+# ---- dpkg's database is the image's (owner decision q-18 = A): moved into /usr, where it is read-only and in the verity
+# hash with the files it lists, so a host's /var never disagrees with its /usr after an A/B update. dpkg reads admindir
+# from dpkg.cfg.d; dpkg-query does not (measured, dpkg 1.22): give it --admindir or DPKG_ADMINDIR. Nothing on the host
+# runs either. /var/lib/dpkg is not used on the host, and what only a package installation uses (apt's and debconf's
+# state, ucf's hashes) is dropped
+mkdir -p "$ROOT/usr/lib/sysimage"
+mv "$ROOT/var/lib/dpkg" "$ROOT/usr/lib/sysimage/dpkg" || die "/var/lib/dpkg could not be moved into /usr"
+printf '# The KMS host image keeps its package database in /usr, read-only (regalia-kms#61, q-18)\nadmindir /usr/lib/sysimage/dpkg\n' \
+  > "$ROOT/etc/dpkg/dpkg.cfg.d/regalia-kms-admindir"
+rm -rf -- "$ROOT/var/lib/apt" "$ROOT/var/cache/apt" "$ROOT/var/cache/debconf" "$ROOT/var/lib/ucf"
+[ "$(DPKG_ADMINDIR=/usr/lib/sysimage/dpkg chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort)" = "$(cat "$W/packages.txt")" ] \
+  || die "the moved dpkg database does not list the packages the tree has"
+
+# ---- what the build host left in /etc (etc-inventory.txt [open]: mmdebstrap copies the BUILD's hostname, hosts,
+# resolv.conf; the fstab is its placeholder): fixed files, the same on every builder, and no backup or lock left
+printf 'localhost\n' > "$ROOT/etc/hostname"
+printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$ROOT/etc/hosts"
+printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses, or names in the hosts file.\n' > "$ROOT/etc/resolv.conf"
+printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$ROOT/etc/fstab"
+# the firewall (regalia-kms-r1s.8): the image's nftables.conf loads THIS host's ruleset and nothing else. Debian's
+# example table (accept everything) is not kept; the file named, not a glob, so a ruleset missing at load fails
+# nftables.service (which a missing one skips first: units/nftables.service.d/regalia.conf; the KMS then refuses)
+printf '#!/usr/sbin/nft -f\n# The KMS host image'"'"'s (regalia-kms#61, regalia-kms-r1s.8): this host'"'"'s ruleset, rendered by\n# deploy/baremetal/firewall.py from its site configuration; /etc/nftables.d/regalia-kms.nft links to /var.\nflush ruleset\ninclude "/etc/nftables.d/regalia-kms.nft"\n' \
+  > "$ROOT/etc/nftables.conf"
+rm -f -- "$ROOT/etc/.pwd.lock" "$ROOT/etc/passwd-" "$ROOT/etc/group-" "$ROOT/etc/shadow-" "$ROOT/etc/gshadow-"
+
+# the hermetic /usr: the image's /etc, as built, is also /usr's factory copy (the dm-verity design: / is a tmpfs and
+# /etc is made from it at boot). The image's own files win over a package's factory default of the same name
+mkdir -p "$ROOT/usr/share/factory/etc"
+cp -a "$ROOT/etc/." "$ROOT/usr/share/factory/etc/" || die "/etc could not be copied to /usr/share/factory/etc"
+
 # the archive: sorted, numeric owners, mtimes clamped to the epoch, no atime/ctime; the API filesystems' contents
 # are not the image's
 echo "### rootfs.tar, SOURCE_DATE_EPOCH=$EPOCH"
@@ -339,6 +483,23 @@ with tarfile.open(sys.argv[1]) as t:
         print("\t".join([m.name, kind, "%o" % m.mode, str(m.uid), str(m.gid), str(m.size), digest, m.linkname or ""]))
 PY
 
+# ---- the /usr image: erofs and its dm-verity hash tree, made IN the build tree by the snapshot's tools, from the host
+# tree's /usr read-only (usr-verity.sh, the commit's own copy; the seed is the commit)
+echo "### usr.erofs and usr.verity, from the host tree's /usr"
+mkdir -p "$BUILD/build/usr-src" "$BUILD/build/usr-out"
+mount --bind "$ROOT/usr" "$BUILD/build/usr-src"; MOUNTED+=("$BUILD/build/usr-src")
+mount -o remount,bind,ro "$BUILD/build/usr-src"
+for fs in proc dev; do mount --bind "/$fs" "$BUILD/$fs"; MOUNTED+=("$BUILD/$fs"); done
+chroot "$BUILD" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC \
+  bash /build/src/deploy/baremetal/image/usr-verity.sh --usr /build/usr-src --seed "$COMMIT" --epoch "$EPOCH" --out /build/usr-out \
+  >"$W/usr-verity.log" 2>&1 || { tail -20 "$W/usr-verity.log"; die "the /usr image could not be made"; }
+for m in "${MOUNTED[@]}"; do umount -R "$m" || die "$m could not be unmounted after the /usr image"; done; MOUNTED=()
+for f in usr.erofs usr.verity usr-verity.txt; do mv "$BUILD/build/usr-out/$f" "$W/stage/$f"; done
+grep -qx "seed=$COMMIT" "$W/stage/usr-verity.txt" && grep -qx "source_date_epoch=$EPOCH" "$W/stage/usr-verity.txt" \
+  && [ "$(sed -n 's/^erofs_sha256=//p' "$W/stage/usr-verity.txt")" = "$(sha256sum < "$W/stage/usr.erofs" | cut -d' ' -f1)" ] \
+  && [ "$(sed -n 's/^verity_sha256=//p' "$W/stage/usr-verity.txt")" = "$(sha256sum < "$W/stage/usr.verity" | cut -d' ' -f1)" ] \
+  || die "the /usr image's record does not name this commit, this epoch and these files"
+
 # the build record
 {
   echo "schema=$SCHEMA"; echo "commit=$COMMIT"; echo "go=$GO_VERSION"; echo "snapshot=$SNAPSHOT"; echo "source_date_epoch=$EPOCH"
@@ -354,7 +515,7 @@ PY
   echo "rootfs_size=$(stat -c %s "$W/stage/rootfs.tar")"
   echo "rootfs_entries=$(wc -l < "$W/stage/rootfs-listing.txt")"
 } > "$W/record.txt"
-python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/rootfs-build.json" <<'PY'
+python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/rootfs-build.json" "$W/stage/usr-verity.txt" <<'PY'
 import json, sys
 record, files, built, etcd = {}, {}, {}, {"programs": {}}
 for line in open(sys.argv[1]):
@@ -378,9 +539,14 @@ record["built"] = built
 record["etcd"] = etcd
 record["repository_files"] = files
 record["packages"] = [l.strip() for l in open(sys.argv[2]) if l.strip()]
+usr = dict(l.rstrip("\n").partition("=")[::2] for l in open(sys.argv[4]) if l.strip())
+for key in ("source_date_epoch", "erofs_size", "verity_size", "verity_format", "verity_data_block_size", "verity_hash_block_size"):
+    usr[key] = int(usr[key])
+record["usr"] = usr
 with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
 PY
-for f in rootfs.tar rootfs-listing.txt rootfs-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
+for f in rootfs.tar rootfs-listing.txt usr.erofs usr.verity rootfs-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
 echo "build-rootfs: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["rootfs_sha256"], r["rootfs_size"], "bytes,", r["rootfs_entries"], "entries, commit", r["commit"][:12], r["go"])' "$OUT/rootfs-build.json")"
+echo "build-rootfs: /usr $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_size"], "bytes, PARTUUIDs", u["usr_partuuid"], u["usr_verity_partuuid"])' "$OUT/rootfs-build.json")"

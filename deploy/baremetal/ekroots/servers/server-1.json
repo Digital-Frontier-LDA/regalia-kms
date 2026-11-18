@@ -1,0 +1,240 @@
+{
+  "ac3": {
+    "answer": "yes, by key. openssl checks every certificate's validity at the verification time, not the issuer's at the leaf's issuance: today both the 2017 CA 029 certificate (from TrustedTpm.cab) and the 2023 re-issue (AIA) verify these EKs, rc 0. At 2017-10-08 only the 2017 one does; the 2023 one fails 'error 9 at 1 depth lookup: certificate is not yet valid'. Both have one SPKI, subject and SKID, so intake pins the CA's key (PINS ca-spki), not either certificate.",
+    "question": "the EKs were issued 2017-10-07; the CA 029 certificates their AIA serves were re-issued 2023-02-08. Does the chain hold?",
+    "runs": {
+      "ecc ca029-2017 at=2017-10-08": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "-attime",
+          "1507420800",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) ECC Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) ECC Root CA\n"
+      },
+      "ecc ca029-2017 at=now": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) ECC Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) ECC Root CA\n"
+      },
+      "ecc ca029-2023 at=2017-10-08": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "-attime",
+          "1507420800",
+          "ek.pem"
+        ],
+        "rc": 2,
+        "stderr": "C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) ECC Manufacturing CA 029\nerror 9 at 1 depth lookup: certificate is not yet valid\nerror ek.pem: verification failed\n",
+        "stdout": ""
+      },
+      "ecc ca029-2023 at=now": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) ECC Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) ECC Root CA\n"
+      },
+      "rsa ca029-2017 at=2017-10-08": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "-attime",
+          "1507420800",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) RSA Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) RSA Root CA\n"
+      },
+      "rsa ca029-2017 at=now": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) RSA Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) RSA Root CA\n"
+      },
+      "rsa ca029-2023 at=2017-10-08": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "-attime",
+          "1507420800",
+          "ek.pem"
+        ],
+        "rc": 2,
+        "stderr": "C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) RSA Manufacturing CA 029\nerror 9 at 1 depth lookup: certificate is not yet valid\nerror ek.pem: verification failed\n",
+        "stdout": ""
+      },
+      "rsa ca029-2023 at=now": {
+        "argv": [
+          "openssl",
+          "verify",
+          "-x509_strict",
+          "-no-CApath",
+          "-no-CAstore",
+          "-CAfile",
+          "root.pem",
+          "-untrusted",
+          "ca.pem",
+          "-show_chain",
+          "ek.pem"
+        ],
+        "rc": 0,
+        "stderr": "",
+        "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) RSA Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) RSA Root CA\n"
+      }
+    }
+  },
+  "captures": {
+    "not_committed_here": "the EK certificates: this repository is public, and the TPM's identity stays in the private one",
+    "read_from_tpm": "2026-11-03, tpm2_getekcertificate (NV 0x1c00002 RSA, 0x1c0000a ECC); the CAs as fetched from the EK certificates' AIA",
+    "sha256": {
+      "SHA256SUMS": "9a7f3762c3f9e0c5d5345a5edcc2fc43e28de1d82a91c806076bf3c3178c4b55",
+      "ek-0x1c00002.der": "3b0625a563bf87b280c45d19da77f20ce2eb778be248281355322e46bdb90604",
+      "ek-0x1c0000a.der": "857946256539deb8b3666a8b82894708399d33c44190ccb8190182045ed27dd2",
+      "ica-0x1c00002.der": "fc7160eaa18a03722b534aeaa4167fee44555a9f1d8e4d725d1b69cafd280946",
+      "ica-0x1c0000a.der": "766507db64abf98e14d1c3c754d09d480b981c0f782a2f397e58811808b9d759",
+      "transcript.txt": "d873b505d6c66c31c8b8b46d0bfb4ae7e6a97979ce1b67d39a7ccd9763849ebe"
+    },
+    "source": "Digital-Frontier-LDA/regalia @ 26a2adbb (regalia#595), doc/evidence/2026-11-03-first-dl360-tpm/"
+  },
+  "host": "the first DL360 (its hostname and chassis serial are in the private regalia repository, doc/drills/2026-11-03-first-dl360-tpm-ek-and-quote.md)",
+  "intake": {
+    "checked_at": "2026-11-10T14:41:59Z",
+    "ek_name": "000bce45e01507f61921a34f7fa5751208ec95a6e27535d7dd4c74c347a01d7a32f3",
+    "ek_name_source": "rsa-ek-certificate+tcg-template-l1",
+    "families": {
+      "ecc": {
+        "ca": "Infineon OPTIGA(TM) ECC Manufacturing CA 029",
+        "ca_cert_sha256": "766507db64abf98e14d1c3c754d09d480b981c0f782a2f397e58811808b9d759",
+        "ca_spki_sha256": "942da2973e3523889c0766925767f3b207300838a67523b293bced843e59c53a",
+        "ek_cert_sha256": "857946256539deb8b3666a8b82894708399d33c44190ccb8190182045ed27dd2",
+        "openssl": {
+          "argv": [
+            "openssl",
+            "verify",
+            "-x509_strict",
+            "-no-CApath",
+            "-no-CAstore",
+            "-CAfile",
+            "root.pem",
+            "-untrusted",
+            "ca.pem",
+            "-show_chain",
+            "ek.pem"
+          ],
+          "chain_ends_at_root": true,
+          "rc": 0,
+          "stderr": "",
+          "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) ECC Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) ECC Root CA\n"
+        },
+        "root_sha256": "cfeb02fecd55ad7a73c6e1d11985d4c47dee248ab63dcb66091a2489660443c3"
+      },
+      "rsa": {
+        "ca": "Infineon OPTIGA(TM) RSA Manufacturing CA 029",
+        "ca_cert_sha256": "fc7160eaa18a03722b534aeaa4167fee44555a9f1d8e4d725d1b69cafd280946",
+        "ca_spki_sha256": "31c0aa4f072f1d9e4d7ff33e5bd27810e5d2d1019c06549bbc707a3180fa518e",
+        "ek_cert_sha256": "3b0625a563bf87b280c45d19da77f20ce2eb778be248281355322e46bdb90604",
+        "openssl": {
+          "argv": [
+            "openssl",
+            "verify",
+            "-x509_strict",
+            "-no-CApath",
+            "-no-CAstore",
+            "-CAfile",
+            "root.pem",
+            "-untrusted",
+            "ca.pem",
+            "-show_chain",
+            "ek.pem"
+          ],
+          "chain_ends_at_root": true,
+          "rc": 0,
+          "stderr": "",
+          "stdout": "ek.pem: OK\nChain:\ndepth=0:  (untrusted)\ndepth=1: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) TPM2.0, CN=Infineon OPTIGA(TM) RSA Manufacturing CA 029 (untrusted)\ndepth=2: C=DE, O=Infineon Technologies AG, OU=OPTIGA(TM) Devices, CN=Infineon OPTIGA(TM) RSA Root CA\n"
+        },
+        "root_sha256": "899e35474c9807eb4c7f2f7a12da0028fb250cd02154d0009fca7d9c66574f3b"
+      }
+    },
+    "openssl_version": "OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)",
+    "pins_sha256": "00baea523d16ab0c45e89e70e9fc79f6ae3155fbeedea5ac44ffa1497a09639a",
+    "schema": "regalia-kms/ek-intake/v1",
+    "server": "server-1",
+    "status": "verified"
+  },
+  "server": "server-1",
+  "status": "verified"
+}

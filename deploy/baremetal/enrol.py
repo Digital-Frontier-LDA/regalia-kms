@@ -12,7 +12,7 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
   * the SIGNING KEY (#199, schema v4's signing_key: signkey.py), persistent at 0x81010003, usable only under
     PolicyAuthorize of the system-phase PCR key given with --system-pub, and certified by the AK;
-  * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
+  * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600 (kept on /var: hostpaths, #61);
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
 It READS, and records in the bundle, the serial of every hardware token the node serves from (#363), in each form a
 backend pins it: its SmartCard-HSM's PKCS#11 serial, and its YubiKey's decimal serial (PIV) and OpenPGP-applet PKCS#11
@@ -71,12 +71,12 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, espcreds, measurements, membership, ownerauth, signkey
+from deploy.baremetal import attest, espcreds, hostpaths, measurements, membership, ownerauth, signkey
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
 ENROL_DIR = "/var/lib/regalia-enrol"
-WG_SERVICE_KEY = "/etc/regalia/wg-service.key"
+WG_SERVICE_KEY = "/etc/regalia/wg-service.key"      # its /etc name; written at its /var name (stored, #61)
 EK_CERT_INDICES = ("0x01c00002", "0x01c0000a")       # TCG EK credential profile: RSA 2048, ECC P-256
 NODE_ID = re.compile(r"[a-z][a-z0-9-]{0,31}")
 WG_KEY = re.compile(r"[A-Za-z0-9+/]{43}=")
@@ -89,6 +89,20 @@ class Refused(Exception):
 def require(cond, message):
     if not cond:
         raise Refused(message)
+
+
+def stored(path):
+    """Where enrolment writes, and reads back, one of this host's /etc files: its /var name (hostpaths.persistent).
+    / is a tmpfs on a verity-/usr host and /etc is made from the image at every boot, so a file written under /etc
+    would be gone at the next (#61); its /etc name is a link to the /var one (units/00-regalia-etc.tmpfiles.conf), which
+    readers keep. An /etc path that is not one of hostpaths.PER_HOST is refused. A path outside /etc (a test's
+    directory) is itself."""
+    if path == "/etc" or path.startswith("/etc/"):
+        try:
+            return hostpaths.persistent(path)
+        except hostpaths.NotPerHost as e:
+            raise Refused(str(e))
+    return path
 
 
 def _write_private(path, data, exclusive=True):
@@ -379,7 +393,8 @@ def ssh_host_pub(path=SSH_HOST_KEY):
         with open(path) as f:
             line = f.read(4096).strip()
     except FileNotFoundError:
-        raise Refused("%s is missing: this host has no Ed25519 SSH host key (ssh-keygen -A makes one)" % path)
+        raise Refused("%s is missing: this host has no Ed25519 SSH host key (on a verity-/usr host it is kept on /var, #61: "
+                      "ssh-keygen -t ed25519 -N '' -f %s)" % (path, stored(SSH_HOST_KEY[:-len(".pub")])))
     fields = line.split()
     require(len(fields) >= 2 and fields[0] == "ssh-ed25519", "%s is not an ssh-ed25519 public key" % path)
     try:
@@ -775,7 +790,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
     hsm_serials = tokens(journal, module, run)
     ssh_key = ssh_host(journal, ssh_host_key)
-    service = wg_key(journal, "wg_service", wg_service_key, run)
+    service = wg_key(journal, "wg_service", stored(wg_service_key), run)
     boot = wg_key(journal, "wg_boot", os.path.join(directory, "wg-boot.key"), run)
     bundle = {"schema": SCHEMA_BUNDLE, "node_id": node_id,
               "ek_public": ids["ek_public"], "ek_name": ids["ek_name"],
@@ -935,9 +950,11 @@ def _install(journal, step, path, data, prefix=""):
     the bytes go to a temporary file whose exact name is journalled first, and are published with link(2),
     which fails if the target exists (a rename would replace it silently). A file already there, or one that
     appears meanwhile, is accepted only if it is byte-for-byte what this step writes (a resumed run); anything
-    else is refused and left. Enrolment never overwrites a node's configuration (re-enrolment is #76)."""
-    require((path.startswith(CONFIG_DIR) or path == CHRONY_CONF) and os.path.normpath(path) == path and "\0" not in path,
-            "%s is not under %s: enrolment writes configuration only there (and %s)" % (path, CONFIG_DIR, CHRONY_CONF))
+    else is refused and left. Enrolment never overwrites a node's configuration (re-enrolment is #76). `path` is the
+    file's /var name (stored, #61): /etc is made from the image at every boot, and its /etc name links there."""
+    config_dir, chrony_conf = stored(CONFIG_DIR.rstrip("/")) + "/", stored(CHRONY_CONF)
+    require((path.startswith(config_dir) or path == chrony_conf) and os.path.normpath(path) == path and "\0" not in path,
+            "%s is not under %s: enrolment writes configuration only there (and %s)" % (path, config_dir, chrony_conf))
     target = prefix + path
     digest = hashlib.sha256(data).hexdigest()
     facts = {k: v for k, v in journal.get(step).items() if k not in ("state", "at")}
@@ -993,9 +1010,9 @@ def install_config(journal, node_id, root_key, example, site, prefix=""):
     for key in ("site", "measurements"):
         require(config[key].startswith(CONFIG_DIR), "node.json puts %s at %s, outside %s" % (key, config[key], CONFIG_DIR))
     pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
-    _install(journal, "config", config["site"], pretty(site), prefix)
-    _install(journal, "config", CHRONY_CONF, authtime.conf(config["time_servers"]).encode(), prefix)
-    _install(journal, "config", NODE_JSON, pretty(config), prefix)
+    _install(journal, "config", stored(config["site"]), pretty(site), prefix)
+    _install(journal, "config", stored(CHRONY_CONF), authtime.conf(config["time_servers"]).encode(), prefix)
+    _install(journal, "config", stored(NODE_JSON), pretty(config), prefix)
     return config
 
 
@@ -2169,11 +2186,11 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         # no regalia-sync process meanwhile: its service's locks are not these, so only that keeps its writers out
         # while root defines (regalia-kms-d9); it was also the handoff's guard
         _no_sync_process(run)
-        defined = define_anchors(prefix + NODE_JSON, chain, directory, owner_auth, run)
+        defined = define_anchors(prefix + stored(NODE_JSON), chain, directory, owner_auth, run)
         if defined:
             print("DEFINED as root, under the node's policy: %s" % ", ".join(defined), file=out)
     owner = {} if owner_auth is None or production else {"owner_auth": owner_auth}   # a lab chain's owner-written writes
-    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain], **owner)
+    epoch, digest = (as_sync or run_as_sync)(prefix + stored(NODE_JSON), chain if isinstance(chain, list) else [chain], **owner)
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
@@ -2182,14 +2199,14 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         # the network's bootstrap (--bootstrap)
         journal.started("heartbeat_first")
         if production:                              # #419: fetched as regalia-sync, verified and defined here
-            probed = (probe or run_probe_as_sync)(prefix + NODE_JSON)
-            start = define_first_counter(prefix + NODE_JSON, manifest, probed, directory, owner_auth, bootstrap, run)
+            probed = (probe or run_probe_as_sync)(prefix + stored(NODE_JSON))
+            start = define_first_counter(prefix + stored(NODE_JSON), manifest, probed, directory, owner_auth, bootstrap, run)
             sequence, left = start, None
             print("FIRST HEARTBEAT: %s" % ("the counter was defined already" if start is None else
                                           "the counter defined at %d, by this process from heartbeats it verified; the node's "
                                           "sync takes the next at its first pull" % start), file=out)
         else:
-            sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap, **owner)
+            sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + stored(NODE_JSON), bootstrap=bootstrap, **owner)
         journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
         if not production:
             print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
@@ -2202,7 +2219,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
         from deploy.baremetal import node as node_module
-        anchor = node_module.Node(node_module.load(prefix + NODE_JSON), run).anchor()
+        anchor = node_module.Node(node_module.load(prefix + stored(NODE_JSON)), run).anchor()
         record = render_credentials(journal, boot["esp"], site, chain, root_key, anchor)
         print("RENDERED the boot credentials onto the ESP; PCR 12 the peers must expect: %s (from %s)" % (
             record["pcr12"], ", ".join(c["file"] for c in record["credentials"])), file=out)

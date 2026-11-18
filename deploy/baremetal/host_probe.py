@@ -146,7 +146,10 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
   credential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp (the signed PCR 11 policy, #57),
   node_id and unlock_peers (what a root disk enrolled for peer-assisted unlock is judged against, #67).
 
-The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too.
+The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too, and so are the
+kernel's sysctl baseline (kernel_sysctl_baseline) and the separate bootstrap and KMS users
+(bootstrap_and_kms_users_separate), regalia-kms-r1s.5. Every os_probe control is in MEASURED, so the signed
+evidence must carry each one (evidence.validate holds its host section to MEASURED exactly).
 
 NOT MEASURED YET: a signed PCR 11 policy on the ROOT DISK. root_disk_tpm_unlocked still requires a
 LUKS2 token bound to PCR 7 exactly; the signed policy covers the PIN credentials only.

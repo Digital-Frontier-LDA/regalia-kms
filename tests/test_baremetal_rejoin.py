@@ -41,7 +41,7 @@ class FakeEtcd:
 
     def __init__(self, me, cluster, manifest):
         self.me, self.cluster, self.calls = me, cluster, []
-        self.files = {etcdconf.CONFIG_PATH: config_for(me, manifest)}
+        self.files = {etcdconf.STORED_CONFIG: config_for(me, manifest)}
         self.dirs = {etcdconf.DATA_DIR}
         self.running = {tk.UNIT: True, tk.DAEMON: True}
         self.sleeps = []
@@ -209,9 +209,9 @@ class Join(Case):
         record = json.loads(self.b.files[export + ".json"])
         self.assertEqual(record, {"node_id": "b", "epoch": 3, "revision": 4689, "db_sha256": "ab" * 32, "kept_at": export})
         self.assertIn("EXPORTED", said)
-        config = etcdconf.check(self.b.files[etcdconf.CONFIG_PATH])
+        config = etcdconf.check(self.b.files[etcdconf.STORED_CONFIG])
         self.assertEqual((config["initial-cluster"], config["initial-cluster-state"]), (line, "existing"))
-        self.assertEqual(self.b.owner[etcdconf.CONFIG_PATH], (None, 0o644))         # root's, as rendered
+        self.assertEqual(self.b.owner[etcdconf.STORED_CONFIG], (None, 0o644))         # root's, as rendered
         self.assertEqual(self.b.calls[:4], [["systemctl", "stop", tk.DAEMON], ["systemctl", "is-active", tk.DAEMON],
                                             ["systemctl", "stop", tk.UNIT], ["systemctl", "is-active", tk.UNIT]])
         self.assertTrue(self.b.running[tk.UNIT])
@@ -281,7 +281,7 @@ class Join(Case):
     def test_a_wrong_configuration_refuses_before_anything_is_stopped_or_moved(self):
         """CodeRabbit on #515: judged first, so a wrong configuration leaves the node serving and its data where it was."""
         line = self.admitted()
-        self.b.files[etcdconf.CONFIG_PATH] = config_for("c", self.chain[-1])
+        self.b.files[etcdconf.STORED_CONFIG] = config_for("c", self.chain[-1])
         self.refused("etcd's configuration is c's, not b's", rj.join, self.b, self.chain, "b", line, self.member_id)
         self.assertEqual(self.b.calls, [])
         self.assertEqual(self.b.dirs, {etcdconf.DATA_DIR})

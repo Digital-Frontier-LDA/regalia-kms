@@ -93,7 +93,7 @@ func TestTheTokenLabelIsPartOfTheHardwareSlot(t *testing.T) {
 		if label != "" {
 			labelField = `"token_label":"` + label + `",`
 		}
-		return `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1",` + labelField +
+		return `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"a1",` + labelField +
 			`"public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kek_algorithm":"rsa2048","kek_version":"1","state":"planned"}`
 	}
 	load := func(first, second string) error {

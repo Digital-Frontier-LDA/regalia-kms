@@ -20,7 +20,7 @@ class FakeEfibootmgr:
     with -v's hex continuation lines) prints them."""
 
     def __init__(self, style=17):
-        self.style, self.calls, self.fail = style, [], None
+        self.style, self.calls, self.fail, self.data = style, [], None, {}
         self.current, self.next, self.order = "0001", None, ["0001", "0000"]
         self.entries = {"0000": ("UEFI PXE", True, "PciRoot(0x0)/Pci(0x1c,0x0)/MAC(001122334455,0)"),
                         "0001": ("regalia-kms image-1", True, self.disk(ESP_GUID, r"\EFI\Linux\image-1.efi"))}
@@ -30,6 +30,16 @@ class FakeEfibootmgr:
 
     def add(self, number, label, path, guid=ESP_GUID, active=True):
         self.entries[number] = (label, active, self.disk(guid, path))
+
+    def with_options(self, number, text):
+        """Load options on an entry, as each efibootmgr prints them: 17 right after the file node (UCS-2, a dot for
+        each NUL), 18 as the hex of a `data:` line under the entry."""
+        raw = text.encode("utf-16-le")
+        if self.style == 17:
+            label, active, device = self.entries[number]
+            self.entries[number] = (label, active, device + "".join(chr(b) if 32 < b < 127 else "." for b in raw))
+        else:
+            self.data[number] = " ".join("%02x" % b for b in raw)
 
     def report(self):
         lines = ["BootCurrent: %s" % self.current, "Timeout: 0 seconds"]
@@ -41,6 +51,8 @@ class FakeEfibootmgr:
             lines.append("Boot%s%s %s\t%s" % (number, "*" if active else "", label, device))
             if self.style == 18:
                 lines.append("      dp: 04 01 2a 00 01 00 00 00 00 08 00 00")
+                if number in self.data:
+                    lines.append("    data: " + self.data[number])
         return "\n".join(lines) + "\n"
 
     def __call__(self, argv, **kw):
@@ -100,7 +112,7 @@ class Reading(Case):
                 state = bootnext.state(fake)
                 self.assertEqual((state["current"], state["next"], state["order"]), ("0001", None, ["0001", "0000"]))
                 self.assertEqual(state["entries"]["0002"], {"label": "regalia-kms image-2", "active": True, "partition": ESP_GUID,
-                                                            "path": r"\EFI\Linux\image-2.efi"})
+                                                            "path": r"\EFI\Linux\image-2.efi", "options": False})
                 self.assertEqual(state["entries"]["0000"]["path"], None)
 
     def test_what_cannot_be_read_is_refused_not_guessed(self):
@@ -341,6 +353,40 @@ class InstallEntry(unittest.TestCase):
             return done
         with self.assertRaisesRegex(m.Refused, r"Boot0002 loads '\\\\EFI\\\\Linux\\\\other.efi', not"):
             bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=wrong_loader)
+
+    def test_the_entry_carries_no_load_options_and_one_that_does_is_refused_and_deleted_again(self):
+        """95 on #61: with Secure Boot off, systemd-stub takes a loader's command line over the UKI's own, so an entry's
+        options could carry another usrhash=. None are asked for, and one that reads back with any is undone."""
+        for style in (17, 18):
+            with self.subTest(style=style):
+                clean = FakeEfibootmgr(style)
+                done = bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=clean)
+                self.assertIs(done["state"]["entries"]["0002"]["options"], False)
+                create = [c for c in clean.calls if "--create" in c]
+                self.assertEqual(len(create), 1)
+                self.assertFalse({"-u", "--unicode", "-@", "--append-binary-args"} & set(create[0]), create[0])
+                fake = FakeEfibootmgr(style)
+                real = fake.__call__
+
+                def with_options(argv, **kw):
+                    done = real(argv, **kw)
+                    if "--create" in argv:
+                        fake.with_options("0002", " usrhash=" + "0" * 64)
+                        done = subprocess.CompletedProcess(argv, 0, fake.report(), "")
+                    return done
+                with self.assertRaisesRegex(m.Refused, r"Boot0002 carries load options \(optional data\): an installed entry passes none; "
+                                                       r"Boot0002, just created, was deleted again"):
+                    bootnext.install_entry("/dev/sda", 1, ESP_GUID, "regalia image-2", r"\EFI\Linux\image-2.efi", run=with_options)
+                self.assertNotIn("0002", fake.entries)
+
+    def test_load_options_are_read_in_both_styles_and_a_non_disk_entry_is_not_judged(self):
+        for style in (17, 18):
+            fake = FakeEfibootmgr(style)
+            fake.with_options("0001", "x")
+            found = bootnext.parse(fake.report())["entries"]
+            with self.subTest(style=style):
+                self.assertIs(found["0001"]["options"], True)
+                self.assertIsNone(found["0000"]["options"])         # PXE: no disk device path
 
     def test_an_entry_on_another_partition_is_refused_and_deleted_again(self):
         """ed on #474: a wrong --disk/--part reads back with the right loader, first in order, on another partition."""

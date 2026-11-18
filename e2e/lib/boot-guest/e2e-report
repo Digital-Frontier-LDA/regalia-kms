@@ -7,6 +7,68 @@ addresses="$(ip -o addr show scope global | wc -l)"       # IPv4 and IPv6
 link=down; ip -o link show eth0 | grep -q "state UP" && link=up
 mapped=no; [ -e /dev/mapper/root ] && mapped=yes
 echo "REGALIA-E2E-ROOT-UP root=$mapped wg-boot=$mesh table=$table addresses=$addresses link=$link" > /dev/console
+# THE VERITY /usr (#61 K61V-4), a proof on every boot: what /usr, / and /var are, and dm-verity's own word on /usr (its
+# status, verified or corrupted, and the root hash the kernel holds). "root" is the LUKS mapping the initrd's crypttab
+# names; it is /var now (the UKI's systemd.mount-extra=)
+src(){ findmnt -no SOURCE "$1" 2>/dev/null | head -1; }
+fstype(){ findmnt -no FSTYPE "$1" 2>/dev/null | head -1; }
+verity="$(veritysetup status usr 2>&1)"
+vstatus="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1)"
+vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*//p' | head -1)"
+echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
+# which firmware entry booted: BootCurrent, and that entry as efibootmgr reads it (label, then its device path)
+current="$(efibootmgr 2>/dev/null | sed -n 's/^BootCurrent: //p')"
+entry="$(efibootmgr -v 2>/dev/null | grep "^Boot${current:-none}" | tr -s ' \t' ' ' | cut -c1-300)"
+echo "REGALIA-E2E-BOOTENTRY current=${current:-none} entry=${entry:-none}" > /dev/console
+# the machine ID PID 1 started with (from /var/lib/dbus/machine-id, kept on /var: etc-inventory.txt [boot]), whether
+# this boot counts as a first boot, and what is enabled under /etc (nothing: the image's enablement is under /usr, and
+# the preset pass a first boot runs enables nothing, units-enabled.txt)
+firstboot=no; [ -e /run/systemd/first-boot ] && firstboot=yes
+links="$(find /etc/systemd/system -type l 2>/dev/null | wc -l)"
+echo "REGALIA-E2E-MACHINE id=$(cat /etc/machine-id 2>/dev/null || echo none) kept=$(cat /var/lib/dbus/machine-id 2>/dev/null || echo none) first-boot=$firstboot etc-links=$links" > /dev/console
+# the units the image's /etc and its KMS depend on: whether each ran, and how it ended. ExecMainStartTimestampMonotonic
+# is 0 for a service whose main process never started (a failed dependency, a failed assert)
+for u in systemd-firstboot.service regalia-etc-factory.service systemd-sysusers.service apparmor.service chrony.service prometheus-node-exporter.service pcscd.socket regalia-kms.service; do
+  st="$(systemctl show -P LoadState "$u" 2>/dev/null)/$(systemctl show -P ActiveState "$u" 2>/dev/null)/$(systemctl show -P Result "$u" 2>/dev/null)"
+  started="$(systemctl show -P ExecMainStartTimestampMonotonic "$u" 2>/dev/null)"
+  enabled="$(systemctl is-enabled "$u" 2>/dev/null | head -1)"
+  echo "REGALIA-E2E-UNIT $u state=$st started=${started:-none} enabled=${enabled:-none}" > /dev/console
+done
+# THE PER-HOST UNITS (regalia-kms-r1s.8): what the image enables under /usr gated on a per-host file (units-enabled.txt
+# [per-host]): the firewall, and every regalia-* unit its multi-user and timers targets want. ConditionResult says whether
+# the gate let it start ("no": the per-host file is not there), AssertResult whether an assert held (regalia-kms: the ruleset)
+for u in nftables.service regalia-kms.service $(ls /usr/lib/systemd/system/multi-user.target.wants /usr/lib/systemd/system/timers.target.wants 2>/dev/null \
+                                                  | grep -E '^regalia-' | grep -vE '^regalia-(e2e-|kms\.service)' | sort -u); do
+  st="$(systemctl show -P LoadState "$u" 2>/dev/null)/$(systemctl show -P ActiveState "$u" 2>/dev/null)/$(systemctl show -P Result "$u" 2>/dev/null)"
+  started="$(systemctl show -P ExecMainStartTimestampMonotonic "$u" 2>/dev/null)"
+  case "$u" in *.timer|*.path) started="$(systemctl show -P ActiveEnterTimestampMonotonic "$u" 2>/dev/null)" ;; esac
+  echo "REGALIA-E2E-UNIT $u state=$st started=${started:-none} enabled=gated condition=$(systemctl show -P ConditionResult "$u" 2>/dev/null || echo none) assert=$(systemctl show -P AssertResult "$u" 2>/dev/null || echo none)" > /dev/console
+done
+# the firewall the kernel holds: firewall.py's table, and its input chain's policy
+fw=absent; nft --terse list table inet regalia_kms >/dev/null 2>&1 && fw=loaded
+policy="$(nft --terse list chain inet regalia_kms input 2>/dev/null | grep -o 'policy [a-z]*' | head -1 | cut -d' ' -f2)"
+echo "REGALIA-E2E-FIREWALL table=$fw input-policy=${policy:-none} ruleset-file=$(test -e /etc/nftables.d/regalia-kms.nft && echo present || echo absent)" > /dev/console
+# the KMS unit's drop-ins as systemd merged them (the image's, and the generator's for this host's PIN credentials)
+echo "REGALIA-E2E-KMSUNIT dropins=$(systemctl show -P DropInPaths regalia-kms.service 2>/dev/null | tr ' ' ',') credentials=$(systemctl show -P LoadCredentialEncrypted regalia-kms.service 2>/dev/null | tr ' ' ',')" > /dev/console
+# /var was mounted IN THE INITRD (the UKI's systemd.mount-extra=...:x-initrd.mount): the initrd's own journal line for
+# /sysroot/var, kept across switch-root, and the boot's first line naming the real root's var.mount, if any
+initrdvar="$(journalctl -b -o cat --no-pager 2>/dev/null | grep -m1 -o 'Mounted sysroot-var.mount.*' | tr -s ' ' | cut -c1-120)"
+echo "REGALIA-E2E-VARMOUNT initrd=${initrdvar:-none}" > /dev/console
+# whether the factory copy's assert held (AssertPathIsDirectory=/usr/share/factory/etc): "no" on a broken image
+echo "REGALIA-E2E-FACTORY assert=$(systemctl show -P AssertResult regalia-etc-factory.service 2>/dev/null || echo none)" > /dev/console
+# AppArmor: is the daemon's profile loaded, and in which mode (the kernel's own list)
+profile="$(grep -E '^regalia-kms \(' /sys/kernel/security/apparmor/profiles 2>/dev/null | head -1)"
+# ... and chronyd's, by the process: the profile its running chronyd is confined by (attr/current), so "enforce" is
+# AppArmor's own word on the daemon that reads its configuration through /etc's link to /var
+chronyd=""
+for comm in /proc/[0-9]*/comm; do
+  read -r name < "$comm" 2>/dev/null || continue
+  if [ "$name" = chronyd ]; then
+    p="${comm%/comm}"; chronyd="$(cat "$p/attr/apparmor/current" 2>/dev/null || cat "$p/attr/current" 2>/dev/null)"; break
+  fi
+done
+echo "REGALIA-E2E-CHRONYD confined=${chronyd:-none}" > /dev/console
+echo "REGALIA-E2E-APPARMOR enabled=$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo absent) regalia-kms=${profile:-none} etc-passwd=$(test -s /etc/passwd && echo present || echo absent)" > /dev/console
 # What is left, on the running host, of what opened the root volume. MEASURED: nothing that names the
 # key file. The unit the initrd generated is not loaded after switch-root (LoadState=not-found) and
 # /run/systemd/generator holds the real root's units only. A probe on the running host cannot read
