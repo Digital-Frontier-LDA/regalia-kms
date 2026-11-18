@@ -186,9 +186,16 @@ printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "
 printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$want/fstab"
 builder="$(uname -n)"
 echo "        the builder: $builder; its$(for f in hostname hosts resolv.conf fstab; do [ -e "/etc/$f" ] && printf ' /etc/%s' "$f"; done)"
-if [ "$builder" = localhost ] || [ -z "$builder" ]; then
-  bad "this builder's hostname is '$builder': the image's names cannot be told from the builder's here"
-fi
+# CONTROL: the builder must be tellable from the defined files, or "is not the builder's" below measures nothing (and
+# would fail a correct image): its name is no field of the defined hostname or hosts, and none of its files is a
+# defined one. A builder that fails this is the wrong place to run the test; it fails rather than pass on nothing.
+names_in(){ awk -v b="$1" 'BEGIN { b = tolower(b) } { sub(/#.*/, "") } { for (i = 1; i <= NF; i++) if (tolower($i) == b) found = 1 } END { exit !found }' "$2"; }
+same=""
+[ -n "$builder" ] || same="$same (no hostname)"
+for f in hostname hosts; do [ -n "$builder" ] && names_in "$builder" "$want/$f" && same="$same $builder-is-in-the-defined-$f"; done
+for f in hostname hosts fstab; do [ -f "/etc/$f" ] && cmp -s "/etc/$f" "$want/$f" && same="$same /etc/$f-is-the-defined-one"; done
+[ -z "$same" ] && ok "CONTROL: this builder can be told from the image's defined files" \
+  || bad "CONTROL: this builder cannot be told from the image's defined files:$same"
 for tree in "$IMG/etc" "$F"; do
   at="${tree#"$IMG"}"
   for f in hostname hosts fstab; do
@@ -196,8 +203,9 @@ for tree in "$IMG/etc" "$F"; do
     elif cmp -s "$tree/$f" "$want/$f"; then ok "$at/$f is build-rootfs.sh's"
     else bad "$at/$f is not build-rootfs.sh's: $(head -c 200 "$tree/$f" | tr '\n\t' '  ')"; fi
   done
-  [ ! -e "$tree/resolv.conf" ] && [ ! -L "$tree/resolv.conf" ] && ok "$at/resolv.conf is absent (a per-host link at boot)" \
-    || bad "$at/resolv.conf is in the image: $(head -c 200 "$tree/resolv.conf" 2>&1 | tr '\n\t' '  ')"
+  if [ ! -e "$tree/resolv.conf" ] && [ ! -L "$tree/resolv.conf" ]; then ok "$at/resolv.conf is absent (a per-host link at boot)"
+  elif [ -L "$tree/resolv.conf" ] || [ ! -f "$tree/resolv.conf" ]; then bad "$at/resolv.conf is in the image (not a regular file)"
+  else bad "$at/resolv.conf is in the image: $(head -c 200 "$tree/resolv.conf" | tr '\n\t' '  ')"; fi
   leaked=""
   for f in hostname hosts resolv.conf fstab; do
     # regular files only: a FIFO or a device would block cmp (the checks above already fail a non-file)
@@ -206,8 +214,7 @@ for tree in "$IMG/etc" "$F"; do
   # the builder's NAME, where a host name is: hostname's and hosts' fields, comments aside, compared whole (a word in a
   # comment, say "KMS" on a builder named kms, is not a name)
   for f in hostname hosts; do
-    if [ -n "$builder" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] \
-       && awk -v b="$builder" 'BEGIN { b = tolower(b) } { sub(/#.*/, "") } { for (i = 1; i <= NF; i++) if (tolower($i) == b) found = 1 } END { exit !found }' "$tree/$f"; then
+    if [ -n "$builder" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] && names_in "$builder" "$tree/$f"; then
       leaked="$leaked $f(names $builder)"
     fi
   done
