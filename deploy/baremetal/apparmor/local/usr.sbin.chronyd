@@ -2,3 +2,6 @@
 # units/00-regalia-etc.tmpfiles.conf. chronyd -f /etc/chrony/regalia.conf (units/chrony.service.d/regalia.conf) is a link
 # to this host's file on /var, and AppArmor mediates the file the link resolves to: read it, nothing else.
 /var/lib/regalia-etc/chrony/regalia.conf r,
+# The NTS servers are names (authtime renders `server NAME nts`): the distribution's profile reads /etc/resolv.conf
+# (abstractions/nameservice), which here links to this host's resolver on /var (regalia-kms-r1s.6): read it too.
+/var/lib/regalia-etc/resolv.conf r,

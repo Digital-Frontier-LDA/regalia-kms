@@ -16,7 +16,8 @@
 #            systemd-tmpfiles-setup pass. passwd, group, shadow and gshadow must be the image's byte for byte, and
 #            the whole factory tree must be in /etc (type, mode, owner, content), PID 1's machine-id excepted.
 #
-# Also: every per-host /etc path is a link to its /var name and that directory is made; the factory copy holds none
+# Also: the image's hostname, hosts, resolv.conf and fstab are build-rootfs.sh's, never the BUILDER's (this host's: run it
+# where the image was built; regalia-kms-r1s.6). And every per-host /etc path is a link to its /var name and that directory is made; the factory copy holds none
 # of them (L+ ones excepted: a package's file the link replaces); the copied files keep the image's mtimes.
 # It needs root (chroot, ownership), and nothing but the tree: no network, no boot. CI: rootfs-reproducible.sh runs it
 # on the build it has just made. The units' order itself is a boot's: K61V-4's QEMU boots measure it.
@@ -172,6 +173,56 @@ AA="$IMG/usr/lib/systemd/system/apparmor.service"
 if [ ! -f "$AA" ]; then bad "the image has no apparmor.service (packages.txt: apparmor)"
 elif grep -qsE '^[[:space:]]*SuccessExitStatus=' "$AA" "$AA.d"/*.conf; then bad "apparmor.service counts an exit status as success: $(grep -hsE '^[[:space:]]*SuccessExitStatus=' "$AA" "$AA.d"/*.conf)"
 else ok "apparmor.service counts no failed exit as success: a failed cache clear fails it"; fi
+
+echo "### the build environment's identity is not the image's (regalia-kms-r1s.6)"
+# mmdebstrap copies the BUILD host's /etc/hostname, hosts and resolv.conf into the tree it makes (measured, K61V-5
+# #723), and the factory copy carried them to every host. This runs on the host that built the image
+# (rootfs-reproducible.sh runs it right after the build), so this host's files ARE the build environment's. In the
+# image's /etc and in its factory copy, each of the four must be what build-rootfs.sh defines (written here again,
+# not read from it), and none may be the builder's file or name the builder's hostname.
+want="$W/want"; mkdir "$want"
+printf 'localhost\n' > "$want/hostname"
+printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$want/hosts"
+printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$want/fstab"
+builder="$(uname -n)"
+echo "        the builder: $builder; its$(for f in hostname hosts resolv.conf fstab; do [ -e "/etc/$f" ] && printf ' /etc/%s' "$f"; done)"
+# CONTROL: the builder must be tellable from the defined files, or "is not the builder's" below measures nothing (and
+# would fail a correct image): its name is no field of the defined hostname or hosts, and none of its files is a
+# defined one. A builder that fails this is the wrong place to run the test; it fails rather than pass on nothing.
+names_in(){ awk -v b="$1" 'BEGIN { b = tolower(b) } { sub(/#.*/, "") } { for (i = 1; i <= NF; i++) if (tolower($i) == b) found = 1 } END { exit !found }' "$2"; }
+same=""
+[ -n "$builder" ] || same="$same (no hostname)"
+for f in hostname hosts; do [ -n "$builder" ] && names_in "$builder" "$want/$f" && same="$same $builder-is-in-the-defined-$f"; done
+for f in hostname hosts fstab; do [ -f "/etc/$f" ] && cmp -s "/etc/$f" "$want/$f" && same="$same /etc/$f-is-the-defined-one"; done
+[ -z "$same" ] && ok "CONTROL: this builder can be told from the image's defined files" \
+  || bad "CONTROL: this builder cannot be told from the image's defined files:$same"
+for tree in "$IMG/etc" "$F"; do
+  at="${tree#"$IMG"}"
+  for f in hostname hosts fstab; do
+    if [ -L "$tree/$f" ] || [ ! -f "$tree/$f" ]; then bad "$at/$f is not a file"
+    elif cmp -s "$tree/$f" "$want/$f"; then ok "$at/$f is build-rootfs.sh's"
+    else bad "$at/$f is not build-rootfs.sh's: $(head -c 200 "$tree/$f" | tr '\n\t' '  ')"; fi
+  done
+  if [ ! -e "$tree/resolv.conf" ] && [ ! -L "$tree/resolv.conf" ]; then ok "$at/resolv.conf is absent (a per-host link at boot)"
+  elif [ -L "$tree/resolv.conf" ] || [ ! -f "$tree/resolv.conf" ]; then bad "$at/resolv.conf is in the image (not a regular file)"
+  else bad "$at/resolv.conf is in the image: $(head -c 200 "$tree/resolv.conf" | tr '\n\t' '  ')"; fi
+  leaked=""
+  for f in hostname hosts resolv.conf fstab; do
+    # regular files only: a FIFO or a device would block cmp (the checks above already fail a non-file)
+    if [ -f "/etc/$f" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] && cmp -s "/etc/$f" "$tree/$f"; then leaked="$leaked $f(the builder's file)"; fi
+  done
+  # the builder's NAME, where a host name is: hostname's and hosts' fields, comments aside, compared whole (a word in a
+  # comment, say "KMS" on a builder named kms, is not a name)
+  for f in hostname hosts; do
+    if [ -n "$builder" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] && names_in "$builder" "$tree/$f"; then
+      leaked="$leaked $f(names $builder)"
+    fi
+  done
+  [ -z "$leaked" ] && ok "$at holds none of the builder's hostname, hosts, resolv.conf, fstab, nor its name" \
+    || bad "$at carries the build environment's:$leaked"
+done
+# hard-coded here and in build-rootfs.sh: a change to one alone fails above; that both say the same is checked by
+# tests/test_baremetal_etc_inventory.py (BuildIdentity)
 
 echo "### this host's files: links to /var"
 # the directory-backed ones, as the IMAGE's deploy package says (hostpaths.DIRECTORIES), never read from the tmpfiles

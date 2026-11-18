@@ -323,7 +323,10 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
   the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
   (`/var/lib/chrony`, 0750, `_chrony`'s). DNS for the servers' names is an `outbound` entry of the
-  site's; an NTS-KE server that hands out an NTP address outside its declared networks is dropped by the
+  site's, and the resolver is this host's file: on the verity image `/etc/resolv.conf` is a link to
+  `/var/lib/regalia-etc/resolv.conf` (the image has none: regalia-kms-r1s.6), which the operator writes with one
+  `nameserver` line, that entry's address (declare the server for both `udp` and `tcp` port 53, two `outbound` entries: a
+  truncated reply is retried over TCP); until it is written no name resolves and time is not authenticated; an NTS-KE server that hands out an NTP address outside its declared networks is dropped by the
   firewall and refused by authtime, so declare every network an operator uses. A host whose RTC is far off never authenticates, because
   NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other

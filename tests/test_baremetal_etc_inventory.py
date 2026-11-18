@@ -266,6 +266,55 @@ class Directories(unittest.TestCase):
                 self.assertEqual(made[0][3:5], ["root", "root"])
 
 
+class BuildIdentity(unittest.TestCase):
+    """regalia-kms-r1s.6: mmdebstrap copies the BUILD host's hostname, hosts and resolv.conf into the tree, and the factory
+    copy carried them to every verity host (K61V-5, #723). build-rootfs.sh defines each before the factory copy; what
+    fails when the image carries the builder's is e2e/etc-factory.sh, run on the builder (rootfs-reproducible.sh). Here:
+    the two say the same, in that order, and resolv.conf is this host's."""
+
+    SCRIPT = ROOT / "deploy" / "baremetal" / "image" / "build-rootfs.sh"
+    E2E = ROOT / "e2e" / "etc-factory.sh"
+    FIXED = ("hostname", "hosts", "fstab")
+
+    @staticmethod
+    def printfs(text, target):
+        """{name: the printf format} of each `printf '...' > "<target>/<name>"` line."""
+        return {m.group(2): m.group(1) for m in re.finditer(r"^printf '([^']*)' > \"" + re.escape(target) + r"/([a-z.]+)\"$", text, re.M)}
+
+    def test_the_image_s_four_are_defined_before_the_factory_copy(self):
+        script = shell_code(self.SCRIPT.read_text())
+        copy = script.index('cp -a "$ROOT/etc/." "$ROOT/usr/share/factory/etc/"')
+        defined = self.printfs(script[:copy], "$ROOT/etc")
+        for name in self.FIXED:
+            self.assertIn(name, defined, "build-rootfs.sh does not write /etc/%s before the factory copy" % name)
+        self.assertNotIn("resolv.conf", defined)
+        self.assertIn('rm -f -- "$ROOT/etc/resolv.conf"', script[:copy])
+        self.assertNotIn("resolv.conf", self.printfs(script, "$ROOT/etc"))
+        # nothing after the copy writes them back into the tree
+        self.assertFalse(re.search(r"\$ROOT/(?:usr/share/factory/)?etc/(?:hostname|hosts|resolv\.conf|fstab)\b", script[copy:]))
+        self.assertEqual(defined["hostname"], "localhost\\n")
+
+    def test_the_e2e_expects_what_the_builder_writes_and_compares_with_the_builder(self):
+        script = shell_code(self.SCRIPT.read_text())
+        e2e = self.E2E.read_text()
+        defined, wanted = self.printfs(script, "$ROOT/etc"), self.printfs(e2e, "$want")
+        self.assertEqual({n: wanted.get(n) for n in self.FIXED}, {n: defined.get(n) for n in self.FIXED})
+        self.assertTrue(all(defined.get(n) for n in self.FIXED), "build-rootfs.sh does not define them all")
+        self.assertIn('cmp -s "/etc/$f" "$tree/$f"', e2e)                      # the builder's own file
+        self.assertIn('if (tolower($i) == b) found = 1', e2e)                 # the builder's name, a whole field
+        self.assertIn('names_in "$builder" "$tree/$f"', e2e)
+        self.assertIn("CONTROL: this builder cannot be told from the image's defined files", e2e)
+        self.assertIn('for tree in "$IMG/etc" "$F"; do', e2e)                 # the image's /etc and the factory copy
+        self.assertIn("for f in hostname hosts resolv.conf fstab; do", e2e)
+
+    def test_resolv_conf_is_this_host_s(self):
+        self.assertIn("/etc/resolv.conf", hostpaths.PER_HOST)
+        self.assertIn(["L", "/etc/resolv.conf", "-", "-", "-", "-", "/var/lib/regalia-etc/resolv.conf"], tmpfiles_lines())
+        # confined readers check the /var name the link resolves to
+        chronyd = (ROOT / "deploy" / "baremetal" / "apparmor" / "local" / "usr.sbin.chronyd").read_text()
+        self.assertIn("/var/lib/regalia-etc/resolv.conf r,", chronyd.splitlines())
+
+
 class Paths(unittest.TestCase):
     def test_persistent_maps_and_refuses(self):
         self.assertEqual(hostpaths.persistent("/etc/regalia/node.json"), "/var/lib/regalia-etc/regalia/node.json")
