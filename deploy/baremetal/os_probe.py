@@ -56,13 +56,15 @@ and the host's kernel settings and its users (#61 K61V-6, regalia-kms-r1s.5):
   kernel_sysctl_baseline      every setting in SYSCTL_BASELINE (the image's /usr/lib/sysctl.d/90-regalia-kms.conf,
                               less fs.suid_dumpable, which core_dumps_disabled measures) has that value in /proc/sys on the running kernel. A value that differs, or that
                               cannot be read, fails the control. The file is not read: what counts is what the
-                              kernel applies
+                              kernel applies. A "*" key (net.ipv4.conf.*.rp_filter) holds on all, default and every
+                              interface the kernel lists, and a conf directory without all and default fails it
   bootstrap_and_kms_users_separate
                               the KMS daemon (regalia-kms.service) and the bootstrap process (regalia-sync.service,
                               which serves booting peers their unlock contribution) each run as a user of their
                               own: two users, neither root, with different uids and different primary groups. This
                               is read from the units and from getent, and also from the kernel for each running
-                              main process: real, effective, saved and filesystem uids are that user's, and neither
+                              main process: real, effective, saved and filesystem uids are that user's, and so
+                              are its four gids (its primary group is its user's own, whatever Group= says). Neither
                               process holds the other's primary group, as its gid or as a supplementary group.
                               Both must be running
 
@@ -116,20 +118,13 @@ SYSCTL_BASELINE = {
     "fs.protected_regular": "2",
     "net.ipv4.ip_forward": "0",
     "net.ipv6.conf.all.forwarding": "0",
-    "net.ipv4.conf.all.rp_filter": "1",
-    "net.ipv4.conf.default.rp_filter": "1",
-    "net.ipv4.conf.all.accept_redirects": "0",
-    "net.ipv4.conf.default.accept_redirects": "0",
-    "net.ipv4.conf.all.secure_redirects": "0",
-    "net.ipv4.conf.default.secure_redirects": "0",
-    "net.ipv6.conf.all.accept_redirects": "0",
-    "net.ipv6.conf.default.accept_redirects": "0",
-    "net.ipv4.conf.all.send_redirects": "0",
-    "net.ipv4.conf.default.send_redirects": "0",
-    "net.ipv4.conf.all.accept_source_route": "0",
-    "net.ipv4.conf.default.accept_source_route": "0",
-    "net.ipv6.conf.all.accept_source_route": "0",
-    "net.ipv6.conf.default.accept_source_route": "0",
+    "net.ipv4.conf.*.rp_filter": "1",
+    "net.ipv4.conf.*.accept_redirects": "0",
+    "net.ipv4.conf.*.secure_redirects": "0",
+    "net.ipv6.conf.*.accept_redirects": "0",
+    "net.ipv4.conf.*.send_redirects": "0",
+    "net.ipv4.conf.*.accept_source_route": "0",
+    "net.ipv6.conf.*.accept_source_route": "0",
     "net.ipv4.tcp_syncookies": "1",
     "net.ipv4.icmp_echo_ignore_broadcasts": "1",
 }
@@ -757,15 +752,34 @@ def pcscd_clients(host):
     return True, f"{len(client_inodes)} pcscd client(s), all the KMS binary"
 
 
+def sysctl_paths(host, key):
+    """[(name, /proc/sys path)] a baseline key covers. A "*" component is every entry of that directory as the kernel
+    lists it now (net.ipv4.conf.*: all, default and each interface), named by the entry itself: an interface name may
+    hold a dot, which a dotted key cannot say. A directory that does not list "all" and "default" is not the kernel's
+    and gives one unreadable path, so the key fails."""
+    parts = key.split(".")
+    if "*" not in parts:
+        return [(key, "/proc/sys/" + "/".join(parts))]
+    at = parts.index("*")
+    directory = "/proc/sys/" + "/".join(parts[:at])
+    entries = sorted(host.listdir(directory))
+    if not {"all", "default"} <= set(entries):
+        return [(f"{key} (the entries of {directory})", None)]
+    rest = "/".join(parts[at + 1:])
+    return [(".".join(parts[:at]) + f".{entry}." + ".".join(parts[at + 1:]), f"{directory}/{entry}/{rest}") for entry in entries]
+
+
 def sysctl_baseline(host):
-    """Every SYSCTL_BASELINE setting has its value in /proc/sys. All the differences are named, not only the first."""
+    """Every SYSCTL_BASELINE setting has its value in /proc/sys, on every interface for a "*" key. All the
+    differences are named, not only the first."""
     wrong = []
     for key, want in SYSCTL_BASELINE.items():
-        value = host.read("/proc/sys/" + key.replace(".", "/"))
-        if value is None:
-            wrong.append(f"{key} cannot be read (want {want})")
-        elif " ".join(value.split()) != want:
-            wrong.append(f"{key}={' '.join(value.split())!r} (want {want})")
+        for name, path in sysctl_paths(host, key):
+            value = host.read(path) if path else None
+            if value is None:
+                wrong.append(f"{name} cannot be read (want {want})")
+            elif " ".join(value.split()) != want:
+                wrong.append(f"{name}={' '.join(value.split())!r} (want {want})")
     if wrong:
         return False, f"{len(wrong)} kernel setting(s) differ from the baseline {SYSCTL_FILE}: " + "; ".join(wrong)
     return True, f"all {len(SYSCTL_BASELINE)} settings of {SYSCTL_FILE} hold in /proc/sys"
@@ -799,7 +813,12 @@ def service_identity(host, service):
     if set(uids.groups()) != {uid}:
         return None, None, None, None, (f"{service}'s running process (pid {pid}) has uids {' '.join(uids.groups())}, "
                                         f"not {user}'s {uid} throughout")
-    return user, uid, gid, set(gids.groups()) | set(groups.group(1).split()), ""
+    # The running primary group is the user's own group, as the kernel reports it: a unit's Group= can give a process
+    # another one, and two processes sharing it would share what that group may read
+    if set(gids.groups()) != {gid}:
+        return None, None, None, None, (f"{service}'s running process (pid {pid}) has gids {' '.join(gids.groups())}, "
+                                        f"not {user}'s own group {gid} throughout")
+    return user, uid, gid, {gid} | set(groups.group(1).split()), ""
 
 
 def separate_users(host):

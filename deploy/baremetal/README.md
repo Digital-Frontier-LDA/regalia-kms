@@ -173,7 +173,9 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
 - **Kernel settings** (regalia-kms-r1s.5). The image ships `deploy/baremetal/regalia-kms.sysctl.conf` as
   `/usr/lib/sysctl.d/90-regalia-kms.conf`, with the reason for each value: kernel pointers and the kernel log hidden,
   no kexec, no unprivileged eBPF, perf or userfaultfd, ptrace for CAP_SYS_PTRACE only, no SysRq, the protected-file
-  settings, and a host that forwards nothing, filters by reverse path and ignores redirects and source routes.
+  settings, and a host that forwards nothing, filters by reverse path and ignores redirects and source routes. The
+  per-interface settings are written with `*`, so they reach every interface, including one that existed before the
+  file was applied, and are measured on each one the kernel lists.
   Under `/usr`, so dm-verity covers it. Measured: `kernel_sysctl_baseline`, read from `/proc/sys` on the running
   kernel, not from the file. A value that differs or cannot be read fails it, and the failure names every one.
   `fs.suid_dumpable` is `core_dumps_disabled`'s, as before.

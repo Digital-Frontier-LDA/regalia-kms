@@ -95,8 +95,19 @@ def sync_status(uid="990", gid="990", groups="106 993"):
     return "Name:\tpython3\nUid:\t%s\t%s\t%s\t%s\nGid:\t%s\t%s\t%s\t%s\nGroups:\t%s \n" % ((uid,) * 4 + (gid,) * 4 + (groups,))
 
 
+INTERFACES = ("all", "default", "lo", "eno1", "wg-svc")
+
+
+def sysctl_paths(key, interface=None):
+    """The /proc/sys files a baseline key names on the fake host: one, or with "*" one per interface (or only the one given)."""
+    if "*" not in key:
+        return ["/proc/sys/" + key.replace(".", "/")]
+    head, tail = key.split(".*.")
+    return ["/proc/sys/%s/%s/%s" % (head.replace(".", "/"), i, tail.replace(".", "/")) for i in INTERFACES if interface in (None, i)]
+
+
 def sysctl_path(key):
-    return "/proc/sys/" + key.replace(".", "/")
+    return sysctl_paths(key, "eno1")[0]
 
 
 class FakeHost:
@@ -119,9 +130,11 @@ class FakeHost:
         }
         # the kernel as the image's sysctl.d leaves it (the kernel writes each value with a newline)
         for key, value in os_probe.SYSCTL_BASELINE.items():
-            self.files[sysctl_path(key)] = value + "\n"
+            for path in sysctl_paths(key):
+                self.files[path] = value + "\n"
         self.dirs = {"/etc/polkit-1/rules.d": ["50-regalia-kms-pcscd.rules"], "/usr/share/polkit-1/rules.d": ["50-default.rules"],
-                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": []}
+                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": [],
+                     "/proc/sys/net/ipv4/conf": list(INTERFACES), "/proc/sys/net/ipv6/conf": list(INTERFACES)}
         self.unlistable = set()
         self.commands = {
             ("systemctl", "show", os_probe.SERVICE, "-p", "LimitCORE,LoadState"): "LimitCORE=0\nLoadState=loaded\n",
@@ -255,6 +268,13 @@ class OSProbeTests(unittest.TestCase):
             # each setting alone, at another value, and unreadable (a kernel without it)
             other = "1" if value == "0" else "0"
             sysctl += [setting(key, other + "\n"), (lambda k: lambda g: g.files.pop(sysctl_path(k)))(key)]
+            if "*" in key:
+                # an interface that already existed keeps what it was made with: "all" and "default" right is not enough
+                sysctl += [(lambda k, o: lambda g: g.files.__setitem__(sysctl_paths(k, "lo")[0], o + "\n"))(key, other),
+                           (lambda k, o: lambda g: g.files.__setitem__(sysctl_paths(k, "all")[0], o + "\n"))(key, other)]
+        # a conf directory that does not list "all" and "default" is not the kernel's: nothing was measured
+        sysctl += [lambda g: g.dirs.__setitem__("/proc/sys/net/ipv4/conf", []),
+                   lambda g: g.dirs.__setitem__("/proc/sys/net/ipv6/conf", ["lo", "eno1"])]
         cases = {
             "kernel_sysctl_baseline": sysctl,
             "bootstrap_and_kms_users_separate": [
@@ -279,6 +299,13 @@ class OSProbeTests(unittest.TestCase):
                 lambda g: g.files.__setitem__("/proc/40/status", sync_status(uid="995")),
                 lambda g: g.files.__setitem__("/proc/40/status", sync_status().replace("Uid:\t990\t990\t990\t990", "Uid:\t990\t0\t990\t990")),
                 lambda g: g.files.__setitem__("/proc/40/status", "Name:\tpython3\nUid:\t990\t990\t990\t990\n"),
+                # both started under one Group= other than their users' own (the accounts stay 995 and 990): the kernel's
+                # gids decide, not passwd
+                lambda g: (g.files.__setitem__("/proc/20/status", proc_status().replace("Gid:\t995\t995\t995\t995", "Gid:\t123\t123\t123\t123")),
+                           g.files.__setitem__("/proc/40/status", sync_status(gid="123"))),
+                # one of them only, or a saved gid left behind
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status(gid="123")),
+                lambda g: g.files.__setitem__("/proc/40/status", sync_status().replace("Gid:\t990\t990\t990\t990", "Gid:\t990\t990\t995\t990")),
             ],
         }
         for control, breakers in cases.items():
@@ -297,6 +324,8 @@ class OSProbeTests(unittest.TestCase):
         value, why = os_probe.PROBES["kernel_sysctl_baseline"](host)
         self.assertFalse(value)
         self.assertIn("kernel.kptr_restrict='0' (want 2)", why)
+        host.files[sysctl_paths("net.ipv4.conf.*.accept_redirects", "wg-svc")[0]] = "1\n"
+        self.assertIn("net.ipv4.conf.wg-svc.accept_redirects='1' (want 0)", os_probe.PROBES["kernel_sysctl_baseline"](host)[1])
         self.assertIn("kernel.kexec_load_disabled cannot be read", why)
         # a value is compared as the kernel prints it: tabs between the numbers of a multi-value setting are one space
         self.assertEqual(os_probe.SYSCTL_BASELINE["kernel.yama.ptrace_scope"], "2")
