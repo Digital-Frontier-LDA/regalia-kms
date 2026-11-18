@@ -91,7 +91,7 @@ class Topology(Case):
                  "topology.profile must be single-node or multi-node"),
                 ("a profile not text", changed(multi, lambda x: x["topology"].update(profile=3)),
                  "topology.profile must be single-node or multi-node"),
-                ("an extra field", changed(multi, lambda x: x["topology"].update(zone="lisbon")), "topology fields mismatch"),
+                ("an extra field", changed(multi, lambda x: x["topology"].update(zone="alder")), "topology fields mismatch"),
                 ("a multi-node limits digest", changed(multi, lambda x: x["topology"].update(single_node_limits_sha256=LIMITS)),
                  "topology fields mismatch"),
                 ("a single node without its limits digest", changed(single, lambda x: x["topology"].pop("single_node_limits_sha256")),
