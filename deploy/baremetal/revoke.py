@@ -45,6 +45,7 @@ RESTRICTIVE = ("QUARANTINED", "REVOKED_STOLEN")
 # Under the single-node profile a revocation of the only node is a shutdown of the KMS (docs/design/single-node.md 4.4): at
 # import the owner types this phrase, with the node's ID, at the console; the commit records it in the sync trail
 SHUTDOWN_PHRASE = "shut down the KMS on %s"
+COMMIT, HAND_ON = "commit", "hand on"                  # after_cosign's two outcomes
 SHUTDOWN_PROMPT = 'Type "%s" to commit it: '
 # Typed at the node's console, read from its controlling terminal (keyfd.tty_line), never from standard input: a pipe,
 # a script or a cron job cannot confirm a revocation (regalia-kms-51's read)
@@ -108,6 +109,19 @@ def still_needed(current, envelope):
         if short <= len(may_sign):
             left.append(short)
     return min(left) if left else None
+
+
+def after_cosign(current, envelope):
+    """What follows this node's co-signature of `envelope` (cosign's result, its reason kept): (COMMIT, the full envelope,
+    0) once one of the current manifest's revocation rules is met, or (HAND_ON, the envelope as it is, the number of node
+    signatures still missing) when the rule needs yet another node (more than two of them), which co-signs it at its own
+    console. Refused when no rule can be met any more."""
+    more = still_needed(current, envelope)
+    require(more is not None, "the signatures (%s) can meet no revocation rule of the current manifest: nothing is committed"
+            % (", ".join(sorted(met(current, envelope)[1])) or "none"))
+    if more == 0:
+        return COMMIT, {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}, 0
+    return HAND_ON, envelope, more
 
 
 def shutdown_of(current, manifest):
@@ -283,17 +297,14 @@ def main(argv=None):
             signer = node_module.node_beat_signer(node)
             envelope = cosign(current, envelope, node.node_id, signer.key, signer._sign, lambda text: (print(text), keyfd.tty_line(PROMPT))[1])
         full = {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}
-        enough, parties = met(current, full)
-        if not enough and args.op == "cosign":
-            # threshold-driven: a rule of more than two nodes needs yet another node's signature, at its own console
-            more = still_needed(current, full)
-            require(more is not None, "the signatures (%s) can meet no revocation rule of the current manifest: nothing is "
-                    "committed" % (", ".join(sorted(parties)) or "none"))
-            require(args.out, "the revocation needs %d more node signature(s): pass --out to hand it to another node" % more)
-            _write(args.out, envelope)
-            print("WRITTEN: %s (signed by %s; %d more node signature(s) needed, each at its own node's console)"
-                  % (args.out, node.node_id, more))
-            return 0
+        if args.op == "cosign":
+            step, handed, more = after_cosign(current, envelope)
+            if step == HAND_ON:
+                require(args.out, "the revocation needs %d more node signature(s): pass --out to hand it to another node" % more)
+                _write(args.out, handed)
+                print("WRITTEN: %s (signed by %s; %d more node signature(s) needed, each at its own node's console)"
+                      % (args.out, node.node_id, more))
+                return 0
         print("COMMITTED: epoch %d" % committed(args.config, current, full, keyfd.tty_line))
     except (Refused, OSError, ValueError, KeyError, EOFError) as refusal:
         print("REFUSED: %s" % refusal, file=sys.stderr)

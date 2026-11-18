@@ -214,7 +214,48 @@ class Revocation(unittest.TestCase):
         self.assertEqual(revoke.met(m3, self.node_signed(m3, nxt, "a", "b"))[0], False)
         # with c quarantined already, a and b alone can never meet it
         m3q = manifest4(1, "", nodes4(c="QUARANTINED"), revocation_signers=m3["revocation_signers"])
-        self.assertIsNone(revoke.still_needed(m3q, self.node_signed(m3q, revoke.candidate(m3q, "b", "QUARANTINED", T0), "a")))
+        hopeless = dict(self.node_signed(m3q, revoke.candidate(m3q, "b", "QUARANTINED", T0), "a"), reason="x" * 3)
+        self.assertIsNone(revoke.still_needed(m3q, hopeless))
+        with self.assertRaises(m.Refused) as caught:
+            revoke.after_cosign(m3q, hopeless)
+        self.assertIn("can meet no revocation rule", str(caught.exception))
+
+    def cosigned(self, current, envelope, by):
+        _, digest = revoke.shown(current, envelope["manifest"])
+        typed = "%d %s" % (envelope["manifest"]["epoch"], digest[:8])
+        return revoke.cosign(current, envelope, by, pub(NODE_KEYS[by]), signer_of(by), lambda text: typed)
+
+    def test_a_threshold_3_revocation_is_handed_on_to_a_third_node_then_committed(self):
+        m3 = manifest4(1, "", nodes4(), revocation_signers=[{"threshold": 3, "parties": list(THREE)}, {"threshold": 1, "parties": [m.OWNER]}])
+        nxt = revoke.candidate(m3, "c", "QUARANTINED", T0)
+        half = dict(self.node_signed(m3, nxt, "a"), reason="seen on the wrong network")
+        step, handed, more = revoke.after_cosign(m3, self.cosigned(m3, half, "b"))
+        # b's co-signature is not enough: the envelope goes on, its reason kept, and nothing is committed
+        self.assertEqual((step, more, handed["reason"], [s["party"] for s in handed["signatures"]]), (revoke.HAND_ON, 1, half["reason"], ["a", "b"]))
+        self.assertEqual(set(handed), {"manifest", "signatures", "reason"})
+        self.refused_commit(m3, handed)
+        # c, at its own console, co-signs what b handed on: the rule is met and it commits
+        step, full, more = revoke.after_cosign(m3, self.cosigned(m3, json.loads(json.dumps(handed)), "c"))
+        self.assertEqual((step, more, set(full)), (revoke.COMMIT, 0, {"manifest", "signatures"}))
+        self.assertEqual(revoke.met(m3, full), (True, {"a", "b", "c"}))
+        runs = []
+
+        def run(argv, **kw):
+            runs.append(json.loads(kw["input"]))
+            return types.SimpleNamespace(returncode=0, stdout='{"epoch": 2}\n', stderr="")
+        self.assertEqual(revoke.committed("/x/node.json", m3, full, nobody, say=nobody, run=run), 2)
+        self.assertEqual([s["party"] for s in runs[-1]["signatures"]], ["a", "b", "c"])
+
+    def test_under_three_nodes_the_second_node_commits(self):
+        m1 = manifest4(1, "", nodes4())
+        half = dict(self.node_signed(m1, revoke.candidate(m1, "c", "QUARANTINED", T0), "a"), reason="seen on the wrong network")
+        step, full, more = revoke.after_cosign(m1, self.cosigned(m1, half, "b"))
+        self.assertEqual((step, more, revoke.met(m1, full)), (revoke.COMMIT, 0, (True, {"a", "b"})))
+
+    def refused_commit(self, current, envelope):
+        with self.assertRaises(m.Refused) as caught:
+            revoke.committed("/x/node.json", current, envelope, nobody, say=nobody, run=nobody)
+        self.assertIn("meet no revocation rule", str(caught.exception))
 
     def test_only_the_sole_node_s_revocation_is_a_shutdown(self):
         one = single5(1, "")
