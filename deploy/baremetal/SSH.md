@@ -159,6 +159,10 @@ not the administrator being certified.
   effect on software keys, so what it refuses has to be shown with tokens.
 - **Not tested: a `Match` block or an earlier drop-in on a real host.** The example's header says what
   can defeat it; `host_probe.py` will have to measure the effective configuration with `sshd -T -C`.
+- **Whether there is an sshd at all is open.** The image ships none (`image/packages.txt`). #61 asks for
+  administrative SSH, if kept, to be WireGuard-only. This file and `firewall.py` admit it from `admin_cidrs` on the
+  host's own address, and never inside a tunnel. The choice between no sshd and sshd on WireGuard only is owner
+  question q-20 (regalia-kms-r1s.5).
 - **Not done here:** `host_probe.py` does not yet measure sshd (the host key on disk equals the
   manifest's `ssh_host_pub`; this configuration is the one loaded). Nothing installs these files. The
   user CA's public key reaches a node at commissioning; it is not in the manifest.

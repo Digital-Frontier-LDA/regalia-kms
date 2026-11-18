@@ -54,8 +54,10 @@
 #     its per-host file on /var (units-enabled.txt [per-host], regalia-kms-r1s.8): nothing an operator enables is lost
 #     at a reboot, because an operator enables nothing. What lives
 #     outside /usr is the /etc and /var inventory's (etc-inventory.txt).
-#   * NO HARDENING beyond the units' own sandboxes: AppArmor profiles other than the daemon's, sysctl, sshd policy,
-#     removing unwanted binaries (#61's baseline) are later slices.
+#   * HARDENING: the units' own sandboxes, the daemon's AppArmor profile, and the kernel settings in
+#     /usr/lib/sysctl.d/90-regalia-kms.conf (regalia-kms-r1s.5). AppArmor profiles for the other services, and removing
+#     unwanted binaries (#61's baseline), are later slices. There is no sshd in the image (packages.txt); whether one is
+#     ever added is an owner decision (q-20).
 #   * PACKAGES ARE AUTHENTICATED BY APT ONLY: every .deb is checked by apt against the snapshot's signed index with
 #     the pinned keyring. The independent per-file check build-initrd.sh makes (debverify, #246) is not run on the
 #     host tree.
@@ -304,6 +306,9 @@ install -m 0644 "$SRC/deploy/systemd/regalia-kms.service" "$ROOT/usr/lib/systemd
 # from the /var credstore, at every boot (generators/regalia-kms-credentials)
 install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms-hardening.conf.example" "$ROOT/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf"
 install -D -m 0755 "$SRC/deploy/baremetal/generators/regalia-kms-credentials" "$ROOT/usr/lib/systemd/system-generators/regalia-kms-credentials"
+# the kernel settings, each with its reason (regalia-kms-r1s.5): under /usr, so verity covers them; os_probe's
+# kernel_sysctl_baseline measures them on the running kernel
+install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms.sysctl.conf" "$ROOT/usr/lib/sysctl.d/90-regalia-kms.conf"
 for f in "$SRC"/deploy/baremetal/units/*.sysusers.conf "$SRC"/deploy/systemd/*.sysusers.conf; do
   [ -e "$f" ] && install -m 0644 "$f" "$ROOT/usr/lib/sysusers.d/$(basename "$f" .sysusers.conf).conf"
 done
