@@ -327,7 +327,10 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
         # CodeRabbit on #736: no co-signer can say "last grant, N" here, so the floor must survive the record's loss. Under
         # this profile the signer raises the TPM counter (nv_activation, which only rises) TO each epoch it grants, before
         # the record is written (GrantRecord.record, floor=True): counter + 1 is above every epoch granted, record or not.
-        epoch = max(epoch - 1, signer.record.counter.value()) + 1
+        # A record that does not stand still bounds what was granted (CodeRabbit on #736: a raise is one increment at a
+        # time, and one interrupted half-way leaves the counter under the record's epoch, the record intact).
+        held = signer.record._held()
+        epoch = max(epoch - 1, signer.record.counter.value(), held["activation_epoch"] if held else 0) + 1
         return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []
     for attempt in range(2):

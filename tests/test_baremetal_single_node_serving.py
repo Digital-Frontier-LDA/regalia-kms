@@ -156,10 +156,10 @@ class Activation(Case):
     def act(self, a, t, manifest=None):
         return act.propose("a", "site-a", "sha256:" + "ab" * 32, manifest or self.s1, lambda: (t, True), a, None, [], lambda e: None)
 
-    def inherited(self, counter_at, epoch):
+    def inherited(self, counter_at, epoch, counter=None):
         """A reused TPM's node: its counter counted `counter_at` grants, its record's last epoch `epoch` (an earlier
         cluster's, or co-signed under multi-node, where an epoch runs ahead of this node's count)."""
-        counter = Counter(counter_at)
+        counter = counter or Counter(counter_at)
         a = self.node("a", counter)
         with open(a.record.path, "w") as f:
             json.dump({"grants": counter_at, "activation_epoch": epoch, "site": "site-a", "node_id": "a", "expires_at": T0 - 600}, f)
@@ -197,6 +197,26 @@ class Activation(Case):
         self.assertEqual(counter.v, 101)                                   # the counter moved, the record did not
         self.assertIs(os.replace, real)
         self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 102)  # the record (count 2) does not stand: 101 + 1
+
+    def test_a_raise_interrupted_half_way_never_lowers_the_epoch(self):
+        """CodeRabbit on #736 (d43c4423): the raise is one increment at a time; power lost at 50 of 2 -> 101 leaves the
+        counter under the record's epoch and the record not standing. The record still bounds what was granted."""
+        class Interrupted(Counter):
+            stop = 50
+
+            def advance(self, n, allowance=None):
+                if self.stop is not None and n > self.stop:
+                    self.v, self.stop = self.stop, None
+                    raise OSError("power lost during the raise")
+                super().advance(n, allowance)
+        a, counter = self.inherited(2, 100, Interrupted(2))
+        with self.assertRaises(OSError):
+            self.act(a, T0)
+        self.assertEqual(counter.v, 50)                                    # half-way; the record (count 2, epoch 100) intact
+        self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 101)   # not 51
+        self.assertEqual(counter.v, 101)
+        os.unlink(a.record.path)                                         # and once raised, the record may be lost
+        self.assertEqual(self.act(a, T0 + 120)["lease"]["activation_epoch"], 102)
 
     def test_a_raise_past_the_bound_signs_nothing_and_moves_nothing(self):
         a, counter = self.inherited(1, act.MAX_FLOOR_JUMP + 1)              # the next epoch is MAX_FLOOR_JUMP + 1 above the count
