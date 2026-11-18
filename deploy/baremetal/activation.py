@@ -41,6 +41,9 @@ SKEW_S = 60                       # a signer's allowance for not_before ahead of
 # the recovery path's wait, and a node's busy window after a start without its record: any activation lease AND any
 # runtime lease the cut-off side may hold has expired by then (#432, amendment 1). Derived, never a second literal.
 RECOVERY_WAIT_S = max(MAX_LEASE_S, runtime_lease.MAX_LIFETIME) + SKEW_S
+# under the single-node profile the counter is raised to the epoch granted (GrantRecord.record): one raise is at most this
+# many TPM increments, else nothing is signed (a reused TPM far behind its record: a new TPM, or the owner, settles it)
+MAX_FLOOR_JUMP = 4096
 MAX_FENCED_BYTES = 512
 SITE = re.compile(r"[a-z0-9][a-z0-9-]{2,62}")            # a registry site (>= 3 characters), not a node_id
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
@@ -142,6 +145,12 @@ class GrantRecord:
     holding the epoch keeps every advance a single increment, however many leases the others granted while this
     node was away.
 
+    UNDER THE SINGLE-NODE PROFILE (regalia-kms-dx7.3) no co-signer can name this node's last grant after the record is
+    lost, so the counter is raised TO the epoch granted instead (record(..., floor=True)): the counter is then at least
+    every epoch this node granted under that profile, and propose() takes max(last, counter) + 1, above all of them with
+    or without the record. The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
+    cluster's) lifts it from its count to the epoch in one raise of at most MAX_FLOOR_JUMP increments.
+
     BUSY. When the record does not stand, this node cannot know what it granted, so it signs nothing until `started`
     (its authenticated time at THIS start, never persisted) + RECOVERY_WAIT_S: any lease it might have granted has
     expired by then. After that it signs again, and its next grant writes a record that stands. So a NEW cluster
@@ -198,9 +207,12 @@ class GrantRecord:
                                                                                 lease["site"], lease["node_id"], SKEW_S))
         return start, expires
 
-    def record(self, lease, expires):
-        count = self.counter.value() + 1
-        self.counter.advance(count, 1)                       # reserved first: a crash after it costs a count
+    def record(self, lease, expires, floor=False):
+        now = self.counter.value()
+        count = max(now + 1, lease["activation_epoch"]) if floor else now + 1
+        require(count - now <= MAX_FLOOR_JUMP, "raising this node's activation counter from %d to epoch %d is %d increments, above "
+                "%d: nothing is signed" % (now, count, count - now, MAX_FLOOR_JUMP))
+        self.counter.advance(count, count - now)             # reserved first: a crash after it costs a count
         tmp = self.path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
@@ -233,7 +245,7 @@ class Signer:
                 "a signer signs only for its own current manifest (epoch %d)" % manifest["epoch"])
         with _locked(self.record.lock_path):                  # one grant at a time (d9)
             _, expires = self.record.check(lease, now)
-            self.record.record(lease, expires)
+            self.record.record(lease, expires, floor=membership.profile(manifest) == membership.SINGLE_NODE)
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
@@ -312,10 +324,9 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
     last, _ = signer.record.state(now)
     epoch = (last["activation_epoch"] if last else 0) + 1
     if membership.profile(manifest) == membership.SINGLE_NODE:
-        # CodeRabbit on #736: no co-signer can say "last grant, N" here, so the floor must survive the record's loss. The
-        # TPM counter (nv_activation) only rises and advances once for every grant this node signs, before the record is
-        # written; under single-node each grant takes max(last, count) + 1, so every epoch granted is at most the count
-        # after it, and count + 1 is above all of them even when the record is gone.
+        # CodeRabbit on #736: no co-signer can say "last grant, N" here, so the floor must survive the record's loss. Under
+        # this profile the signer raises the TPM counter (nv_activation, which only rises) TO each epoch it grants, before
+        # the record is written (GrantRecord.record, floor=True): counter + 1 is above every epoch granted, record or not.
         epoch = max(epoch - 1, signer.record.counter.value()) + 1
         return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
     refusals = []

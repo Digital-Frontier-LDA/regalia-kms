@@ -153,17 +153,60 @@ class Activation(Case):
         again = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda: (T0 + 60, True), a, None, [], events.append)
         self.assertEqual((again["lease"]["activation_epoch"], a.record.counter.v), (2, 2))
 
+    def act(self, a, t, manifest=None):
+        return act.propose("a", "site-a", "sha256:" + "ab" * 32, manifest or self.s1, lambda: (t, True), a, None, [], lambda e: None)
+
+    def inherited(self, counter_at, epoch):
+        """A reused TPM's node: its counter counted `counter_at` grants, its record's last epoch `epoch` (an earlier
+        cluster's, or co-signed under multi-node, where an epoch runs ahead of this node's count)."""
+        counter = Counter(counter_at)
+        a = self.node("a", counter)
+        with open(a.record.path, "w") as f:
+            json.dump({"grants": counter_at, "activation_epoch": epoch, "site": "site-a", "node_id": "a", "expires_at": T0 - 600}, f)
+        return a, counter
+
     def test_a_lost_grant_record_never_lowers_the_epoch(self):
-        """CodeRabbit on #736: a crash between the counter's advance and the record (or a lost record) leaves no last grant;
-        with no co-signer to name it, the epoch comes from the TPM counter, which only rises."""
+        """CodeRabbit on #736: a lost record leaves no last grant and no co-signer can name it; the counter, raised to each
+        epoch granted, is the floor."""
         counter = Counter()
         a = self.node("a", counter)
         for t in (T0, T0 + 60):
-            act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda t=t: (t, True), a, None, [], lambda e: None)
-        os.unlink(a.record.path)                                         # the record lost; the counter stands at 2
-        later = T0 + 60 + act.RECOVERY_WAIT_S                              # past the busy wait of a record that does not stand
-        again = act.propose("a", "site-a", "sha256:" + "ab" * 32, self.s1, lambda: (later, True), a, None, [], lambda e: None)
+            self.act(a, t)
+        os.unlink(a.record.path)
+        again = self.act(a, T0 + 60 + act.RECOVERY_WAIT_S)                 # past the busy wait of a record that does not stand
         self.assertEqual((again["lease"]["activation_epoch"], counter.v), (3, 3))
+
+    def test_the_counter_is_raised_to_the_epoch_so_a_reused_tpm_never_falls_back_to_its_count(self):
+        """CodeRabbit's case on #736: record epoch 100 at count 2; the next grant is 101; that record is lost. The next epoch
+        must be 102, never 4 (count + 1). Also the TPM reused for a new single-node genesis: the record it brings rules."""
+        for manifest in (self.s1, single5(1, "", issued_at="2026-11-01T00:00:00Z")):     # this genesis, and a new one
+            with self.subTest(m.digest(manifest)[:8]):
+                a, counter = self.inherited(2, 100)
+                self.assertEqual(self.act(a, T0, manifest)["lease"]["activation_epoch"], 101)
+                self.assertEqual(counter.v, 101)                           # raised to the epoch, before the record
+                os.unlink(a.record.path)
+                later = self.act(a, T0 + act.RECOVERY_WAIT_S, manifest)["lease"]["activation_epoch"]
+                self.assertEqual((later, counter.v), (102, 102))
+
+    def test_a_crash_between_the_counter_and_the_record_never_lowers_the_epoch(self):
+        a, counter = self.inherited(2, 100)
+        real = os.replace
+        with unittest.mock.patch("os.replace", side_effect=OSError("crash before the record")):
+            with self.assertRaises(OSError):
+                self.act(a, T0)
+        self.assertEqual(counter.v, 101)                                   # the counter moved, the record did not
+        self.assertIs(os.replace, real)
+        self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 102)  # the record (count 2) does not stand: 101 + 1
+
+    def test_a_raise_past_the_bound_signs_nothing_and_moves_nothing(self):
+        a, counter = self.inherited(1, act.MAX_FLOOR_JUMP + 1)              # the next epoch is MAX_FLOOR_JUMP + 1 above the count
+        self.refused("increments, above %d: nothing is signed" % act.MAX_FLOOR_JUMP, self.act, a, T0)
+        self.assertEqual(counter.v, 1)
+
+    def test_under_multi_node_the_counter_still_counts_grants(self):
+        a, counter = self.inherited(2, 100)
+        a.record.record({"activation_epoch": 101, "site": "site-a", "node_id": "a"}, T0 + 600)
+        self.assertEqual(counter.v, 3)
 
     def test_under_multi_node_one_node_alone_never_activates(self):
         a, events = self.node("a"), []
