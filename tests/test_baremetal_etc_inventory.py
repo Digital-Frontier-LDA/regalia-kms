@@ -301,7 +301,7 @@ class BuildIdentity(unittest.TestCase):
         self.assertEqual({n: wanted.get(n) for n in self.FIXED}, {n: defined.get(n) for n in self.FIXED})
         self.assertTrue(all(defined.get(n) for n in self.FIXED), "build-rootfs.sh does not define them all")
         self.assertIn('cmp -s "/etc/$f" "$tree/$f"', e2e)                      # the builder's own file
-        self.assertIn('grep -qwiF -- "$builder" "$tree/$f"', e2e)             # the builder's name
+        self.assertIn('if (tolower($i) == b) found = 1', e2e)                 # the builder's name, a whole field
         self.assertIn('for tree in "$IMG/etc" "$F"; do', e2e)                 # the image's /etc and the factory copy
         self.assertIn("for f in hostname hosts resolv.conf fstab; do", e2e)
 

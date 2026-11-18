@@ -200,8 +200,16 @@ for tree in "$IMG/etc" "$F"; do
     || bad "$at/resolv.conf is in the image: $(head -c 200 "$tree/resolv.conf" 2>&1 | tr '\n\t' '  ')"
   leaked=""
   for f in hostname hosts resolv.conf fstab; do
-    if [ -e "/etc/$f" ] && [ -e "$tree/$f" ] && cmp -s "/etc/$f" "$tree/$f"; then leaked="$leaked $f(the builder's file)"; fi
-    if [ -n "$builder" ] && [ -f "$tree/$f" ] && grep -qwiF -- "$builder" "$tree/$f"; then leaked="$leaked $f(names $builder)"; fi
+    # regular files only: a FIFO or a device would block cmp (the checks above already fail a non-file)
+    if [ -f "/etc/$f" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] && cmp -s "/etc/$f" "$tree/$f"; then leaked="$leaked $f(the builder's file)"; fi
+  done
+  # the builder's NAME, where a host name is: hostname's and hosts' fields, comments aside, compared whole (a word in a
+  # comment, say "KMS" on a builder named kms, is not a name)
+  for f in hostname hosts; do
+    if [ -n "$builder" ] && [ ! -L "$tree/$f" ] && [ -f "$tree/$f" ] \
+       && awk -v b="$builder" 'BEGIN { b = tolower(b) } { sub(/#.*/, "") } { for (i = 1; i <= NF; i++) if (tolower($i) == b) found = 1 } END { exit !found }' "$tree/$f"; then
+      leaked="$leaked $f(names $builder)"
+    fi
   done
   [ -z "$leaked" ] && ok "$at holds none of the builder's hostname, hosts, resolv.conf, fstab, nor its name" \
     || bad "$at carries the build environment's:$leaked"
