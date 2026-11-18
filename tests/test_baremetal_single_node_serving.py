@@ -138,8 +138,8 @@ class Activation(Case):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
 
-    def node(self, name, counter=None):
-        rec = act.GrantRecord(counter or Counter(), os.path.join(self.d, "%s-grant.json" % name), T0 - 3600)
+    def node(self, name, counter=None, record="grant"):
+        rec = act.GrantRecord(counter or Counter(), os.path.join(self.d, "%s-%s.json" % (name, record)), T0 - 3600)
         return act.Signer(name, rec, lambda raw, k=NODE_KEYS[name]: p256_sig(k, raw), pub(NODE_KEYS[name]))
 
     def test_under_single_node_the_node_activates_itself_one_of_one_and_asks_no_one(self):
@@ -165,16 +165,22 @@ class Activation(Case):
             json.dump({"grants": counter_at, "activation_epoch": epoch, "site": "site-a", "node_id": "a", "expires_at": T0 - 600}, f)
         return a, counter
 
-    def test_a_lost_grant_record_never_lowers_the_epoch(self):
-        """CodeRabbit on #736: a lost record leaves no last grant and no co-signer can name it; the counter, raised to each
-        epoch granted, is the floor."""
+    LOST = "this node's grant record is gone and its activation counter stands at %d: under the single-node profile nothing can " \
+           "name the last epoch it granted, so it signs no activation until the owner re-establishes the floor (regalia-kms-dx7.24)"
+
+    def test_a_lost_grant_record_signs_nothing(self):
+        """#736: a lost record leaves no last grant, no co-signer can name it, and an activation is not bound to its genesis,
+        so the counter of a reused TPM cannot be trusted as the floor: nothing is signed, nothing moves."""
         counter = Counter()
         a = self.node("a", counter)
         for t in (T0, T0 + 60):
             self.act(a, t)
         os.unlink(a.record.path)
-        again = self.act(a, T0 + 60 + act.RECOVERY_WAIT_S)                 # past the busy wait of a record that does not stand
-        self.assertEqual((again["lease"]["activation_epoch"], counter.v), (3, 3))
+        self.refused(self.LOST % 2, self.act, a, T0 + 60 + act.RECOVERY_WAIT_S)
+        self.assertEqual(counter.v, 2)
+        # a TPM whose counter never moved (a new one) still activates, after the busy wait
+        fresh = self.node("a", Counter(), record="new-tpm")
+        self.assertEqual(self.act(fresh, T0 + act.RECOVERY_WAIT_S)["lease"]["activation_epoch"], 1)
 
     def test_the_counter_is_raised_to_the_epoch_so_a_reused_tpm_never_falls_back_to_its_count(self):
         """CodeRabbit's case on #736: record epoch 100 at count 2; the next grant is 101; that record is lost. The next epoch
@@ -184,9 +190,9 @@ class Activation(Case):
                 a, counter = self.inherited(2, 100)
                 self.assertEqual(self.act(a, T0, manifest)["lease"]["activation_epoch"], 101)
                 self.assertEqual(counter.v, 101)                           # raised to the epoch, before the record
-                os.unlink(a.record.path)
-                later = self.act(a, T0 + act.RECOVERY_WAIT_S, manifest)["lease"]["activation_epoch"]
-                self.assertEqual((later, counter.v), (102, 102))
+                os.unlink(a.record.path)                                   # lost: never 4, and not trusted either
+                self.refused(self.LOST % 101, self.act, a, T0 + act.RECOVERY_WAIT_S, manifest)
+                self.assertEqual(counter.v, 101)
 
     def test_a_crash_between_the_counter_and_the_record_never_lowers_the_epoch(self):
         a, counter = self.inherited(2, 100)
@@ -213,10 +219,18 @@ class Activation(Case):
         with self.assertRaises(OSError):
             self.act(a, T0)
         self.assertEqual(counter.v, 50)                                    # half-way; the record (count 2, epoch 100) intact
+        if self._testMethodName.endswith("_lost_at_once"):
+            os.unlink(a.record.path)
+            self.refused(self.LOST % 50, self.act, a, T0 + 60)
+            return
         self.assertEqual(self.act(a, T0 + 60)["lease"]["activation_epoch"], 101)   # not 51
         self.assertEqual(counter.v, 101)
-        os.unlink(a.record.path)                                         # and once raised, the record may be lost
-        self.assertEqual(self.act(a, T0 + 120)["lease"]["activation_epoch"], 102)
+        os.unlink(a.record.path)                                         # interrupted AND lost: the double fault fails closed
+        self.refused(self.LOST % 101, self.act, a, T0 + 120)
+
+    def test_a_raise_interrupted_half_way_and_the_record_lost_at_once(self):
+        """CodeRabbit's residual on #736: the raise stops at 50 AND the inherited record is lost: never 51, nothing signed."""
+        self.test_a_raise_interrupted_half_way_never_lowers_the_epoch()
 
     def test_a_raise_past_the_bound_signs_nothing_and_moves_nothing(self):
         a, counter = self.inherited(1, act.MAX_FLOOR_JUMP + 1)              # the next epoch is MAX_FLOOR_JUMP + 1 above the count

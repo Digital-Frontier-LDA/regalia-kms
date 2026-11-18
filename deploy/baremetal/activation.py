@@ -147,8 +147,9 @@ class GrantRecord:
 
     UNDER THE SINGLE-NODE PROFILE (regalia-kms-dx7.3) no co-signer can name this node's last grant after the record is
     lost, so the counter is raised TO the epoch granted instead (record(..., floor=True)): the counter is then at least
-    every epoch this node granted under that profile, and propose() takes max(last, counter) + 1, above all of them with
-    or without the record. The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
+    every epoch this node granted under that profile, and propose() takes max(last, counter, the held record's epoch) + 1.
+    A record that is GONE with the counter above 0 is refused there instead (Signer): an activation is not bound to its
+    genesis, and a reused TPM's counter need not hold its last epoch (regalia-kms-dx7.24 restores the floor). The first such grant on a reused TPM (a counter that counted multi-node grants, or an old
     cluster's) lifts it from its count to the epoch in one raise of at most MAX_FLOOR_JUMP increments.
 
     BUSY. When the record does not stand, this node cannot know what it granted, so it signs nothing until `started`
@@ -243,9 +244,19 @@ class Signer:
                 "%s does not count toward activation under epoch %d: it signs no activation" % (self.node_id, manifest["epoch"]))
         require(lease["manifest_epoch"] == manifest["epoch"] and lease["manifest_digest"] == membership.digest(manifest),
                 "a signer signs only for its own current manifest (epoch %d)" % manifest["epoch"])
+        single = membership.profile(manifest) == membership.SINGLE_NODE
         with _locked(self.record.lock_path):                  # one grant at a time (d9)
+            if single:
+                # #736: an activation lease is not bound to its genesis (LEASE_KEYS: no genesis or cluster field; verify()
+                # checks manifest_digest only at the current epoch; the signing key persists across a TPM's reuse). With the
+                # record gone and the counter moved, the counter cannot prove the last epoch granted (a reused TPM's counter
+                # counted multi-node grants, or its first raise was interrupted), and no co-signer can name it: fail closed.
+                count = self.record.counter.value()
+                require(count == 0 or self.record._held() is not None, "this node's grant record is gone and its activation counter "
+                        "stands at %d: under the %s profile nothing can name the last epoch it granted, so it signs no activation "
+                        "until the owner re-establishes the floor (regalia-kms-dx7.24)" % (count, membership.SINGLE_NODE))
             _, expires = self.record.check(lease, now)
-            self.record.record(lease, expires, floor=membership.profile(manifest) == membership.SINGLE_NODE)
+            self.record.record(lease, expires, floor=single)
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
