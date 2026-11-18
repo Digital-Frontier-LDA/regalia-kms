@@ -13,11 +13,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CANONICAL = ROOT / "docs" / "single-node-limits.md"
 COPIES = {"README.md": "## 1 node or 3 nodes?", "LIMITATIONS.md": "## Single-node deployments"}
 WORDS = ("supported", "degraded", "not supported")
-VERSION = "Version: regalia.single-node-limits/v1"
+VERSION = "Version: regalia.single-node-limits/v2"     # v2: the activation-after-a-crash row (dx7.3, #736)
 
 # The rows the bead's acceptance criteria name, each by the start of its feature cell.
 REQUIRED = (
-    "Activation", "Survives the loss of a node", "Survives a site", "Unattended reboot",
+    "Activation (who may serve)", "Activation after a crash during a grant", "Survives the loss of a node", "Survives a site", "Unattended reboot",
     "Theft of a powered-off node", "Theft of a running node", "Root compromise", "Revocation", "Heartbeats",
     "Rolling measured-boot update", "Site advance", "Re-anchor after anchor damage", "Recovery after a total outage",
     "Lone-survivor mode, fencing", "Cross-node detection", "Audit trail", "Operation approvals", "Stateful operations",
