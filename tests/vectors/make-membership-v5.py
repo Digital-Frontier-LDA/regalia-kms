@@ -83,8 +83,13 @@ if not result.wasSuccessful():
 text = json.dumps({"about": __doc__.strip().split("\n\n")[0], "cases": cases}, indent=1, sort_keys=True) + "\n"
 if len(sys.argv) > 1:
     partial = sys.argv[1] + ".partial"
-    with open(partial, "w") as out:
-        out.write(text)
-    os.replace(partial, sys.argv[1])
+    try:
+        with open(partial, "w") as out:
+            out.write(text)
+        os.replace(partial, sys.argv[1])
+    except BaseException:
+        if os.path.exists(partial):
+            os.unlink(partial)        # the last good vector stays; no stray .partial beside it
+        raise
 else:
     sys.stdout.write(text)
