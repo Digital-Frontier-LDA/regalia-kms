@@ -12,8 +12,9 @@ so the first node beats on time and the next takes over two minutes after a miss
 for the current epoch (bootstrap, or a revocation just taken) drops the interval and goes at once, by rank. The
 body is for the current manifest, sequence max(held, this node's signing counter) + 1, issued at authenticated
 now, living the manifest's heartbeat_max_lifetime_s. The proposer signs it (Signer), asks the other counting nodes
-in order (beat-sign, sync.py) until one co-signs, and takes the envelope into its own Freshness; the peers pull it
-from there as they pull every heartbeat. Nobody co-signing costs the proposer one number; it tries again after
+in order (beat-sign, sync.py) until threshold - 1 of them co-sign (cosigners_needed: one under three nodes, none
+under the single-node profile, where the node's own signature is the heartbeat), and takes the envelope into its own
+Freshness; the peers pull it from there as they pull every heartbeat. Nobody co-signing costs the proposer one number; it tries again after
 the first retry delay, doubling, at most every interval: the nodes' jump allowance absorbs the numbers spent. The
 takeover, the jitter and the first retry are fixed fractions of the interval (node.json's beat_interval_s): 120 s,
 30 s and 60 s at the production 900 s, and proportionally less where a test beats faster.
@@ -59,6 +60,13 @@ def counting_nodes(manifest):
     nodes = membership.validate(manifest)
     return sorted(p for p in manifest["heartbeat_signers"]["parties"]
                   if p != membership.OWNER and p in nodes and "signing_key" in nodes[p] and nodes[p]["state"] not in membership.NOT_COUNTING)
+
+
+def cosigners_needed(manifest):
+    """How many OTHER nodes co-sign a heartbeat this node proposes: heartbeat_signers' threshold less the proposer's own
+    signature, never a literal (docs/design/single-node.md 3.2, 4.4). Under the single-node profile ({1, [n]}) none: the
+    node signs its own heartbeat on its NV sequence counter. Under three nodes (2 of them) one."""
+    return manifest["heartbeat_signers"]["threshold"] - 1
 
 
 def held_sequence(freshness, manifest):
@@ -193,17 +201,27 @@ class Proposer:
         body = {"schema": heartbeat.SCHEMA, "epoch": manifest["epoch"], "sequence": sequence, "issued_at": stamp(now),
                 "expires_at": stamp(now + lifetime), "manifest_digest": membership.digest(manifest)}
         mine = self.signer(body, manifest)
-        refusals = []
+        needed = cosigners_needed(manifest)
+        theirs, refusals = [], []
         for peer in [n for n in counting_nodes(manifest) if n != self.node_id]:
+            if len(theirs) >= needed:
+                break
             try:
-                theirs = self.ask(peer, body, mine)
-                envelope = {"heartbeat": body, "signatures": [mine, theirs]}
-                heartbeat.verify(envelope, manifest)
+                signature = self.ask(peer, body, mine)
+                # each co-signature counts for its own party before it is taken: one that does not is that peer's refusal
+                require(isinstance(signature, dict) and signature.get("party") == peer, "the co-signature is not %s's" % peer)
+                require(membership.counting_parties(manifest, heartbeat.DOMAIN + membership.canonical(body), [signature],
+                                                    "co-signature") == {peer}, "%s's co-signature does not count" % peer)
             except Refused as refused:
                 refusals.append("%s: %s" % (peer, refused))
                 continue
-            self.freshness.accept(envelope, manifest)
-            self.trail({"event": "beat-propose", "outcome": "ALLOW", "epoch": manifest["epoch"], "sequence": sequence,
-                        "cosigner": peer, "expires_at": body["expires_at"]})
-            return envelope
-        raise Refused("no node co-signed sequence %d (%s)" % (sequence, "; ".join(refusals) or "no other node counts"))
+            theirs.append(signature)
+        if len(theirs) < needed:
+            raise Refused("%s sequence %d (%s)" % ("no node co-signed" if not theirs else "%d of the %d co-signatures needed for" % (len(theirs), needed),
+                                                   sequence, "; ".join(refusals) or "no other node counts"))
+        envelope = {"heartbeat": body, "signatures": [mine] + theirs}
+        heartbeat.verify(envelope, manifest)
+        self.freshness.accept(envelope, manifest)
+        self.trail({"event": "beat-propose", "outcome": "ALLOW", "epoch": manifest["epoch"], "sequence": sequence,
+                    "cosigner": ",".join(s["party"] for s in theirs), "expires_at": body["expires_at"]})
+        return envelope

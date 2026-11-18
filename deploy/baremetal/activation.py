@@ -265,7 +265,7 @@ class Signer:
             return {"party": self.node_id, "key": self.key, "sig": self._sign(message(lease))}
 
 
-# ---- issuance between the nodes (#432 §5): the proposer is the node to be activated; one other node co-signs ----
+# ---- issuance between the nodes (#432 §5): the proposer is the node to be activated; threshold - 1 others co-sign ----
 
 def _now(clock):
     seconds, authenticated = clock()
@@ -323,10 +323,17 @@ def _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail):
     return done
 
 
+def cosigners_needed(manifest):
+    """How many OTHER nodes co-sign this node's activation: activation_signers' threshold less the proposer's own
+    signature, never a literal (docs/design/single-node.md 3.2). One under three nodes (2 of them); none under the
+    single-node profile ({1, [n]}), which _alone() serves."""
+    return manifest["activation_signers"]["threshold"] - 1
+
+
 def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers, trail):
     """This node's activation, the epoch one above the highest this node knows (its grant record's). Its own record is
-    CHECKED first (nothing written); then one co-signer from `peers` (in order) checks, records and signs; only then does
-    this node record and sign (cosign's docstring: a refusal costs the proposer nothing). A co-signer's refusal may name
+    CHECKED first (nothing written); then cosigners_needed() co-signers from `peers` (in order) each check, record and
+    sign; only then does this node record and sign (cosign's docstring: a refusal costs the proposer nothing). A co-signer's refusal may name
     its last epoch ("last grant, N"): the proposal is retried ONCE at the highest such N + 1, never in a loop (ed).
     Returns the envelope the Gate takes, or Refused. `ask(peer, lease)` returns that peer's signature or raises Refused;
     `trail(event)` records each attempt.
@@ -343,29 +350,41 @@ def propose(node_id, site, registry_digest, manifest, clock, signer, ask, peers,
         # #736: no co-signer can say "last grant, N" here; the Signer signs only on a record that stands (or a new TPM),
         # so the last epoch is the record's, and the counter it raised to that epoch keeps the record honest
         return _alone(node_id, site, registry_digest, manifest, epoch, now, signer, trail)
+    needed = cosigners_needed(manifest)
     refusals = []
     for attempt in range(2):
         lease = proposal(node_id, site, registry_digest, manifest, epoch, now)
         signer.record.check(lease, now)                       # this node's own refusal, before anyone is asked
-        seen = []
-        for peer in peers:
+        seen, theirs = [], []
+        for peer in dict.fromkeys(p for p in peers if p != node_id):          # each other node once
+            if len(theirs) >= needed:
+                break
             try:
-                theirs = ask(peer, lease)
+                signature = ask(peer, lease)
+                # each co-signature counts for its own party before it is taken, so this node never records and signs
+                # on one that would not count: one that does not is that peer's refusal
+                require(isinstance(signature, dict) and signature.get("party") == peer, "the co-signature is not %s's" % peer)
+                require(membership.counting_parties(manifest, message(lease), [signature], "co-signature")
+                        & set(manifest["activation_signers"]["parties"]) == {peer}, "%s's co-signature does not count" % peer)
             except Refused as refused:
                 refusals.append("%s: %s" % (peer, refused))
                 found = re.search(r"last grant, (\d+)", str(refused))
                 if found:
                     seen.append(int(found.group(1)))
                 continue
+            theirs.append(signature)
+        if len(theirs) >= needed:
+            cosigned = ", ".join(s["party"] for s in theirs)
             try:
                 own = signer(lease, manifest, now)            # recorded, then signed: a crash here costs a count
             except Refused as refused:                        # this node's record moved since the advisory pre-check
                 trail({"event": "activation", "outcome": "DENY", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
-                       "reason": ("co-signed by %s, refused by this node's own record: %s" % (peer, refused))[:240]})
+                       "reason": ("co-signed by %s, refused by this node's own record: %s" % (cosigned, refused))[:240]})
                 raise
-            done = {"lease": lease, "signatures": [own, theirs]}
+            done = {"lease": lease, "signatures": [own] + theirs}
             verify(done, manifest)
-            trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site, "peer": peer})
+            trail({"event": "activation", "outcome": "ALLOW", "epoch": manifest["epoch"], "activation_epoch": epoch, "site": site,
+                   "peer": cosigned})
             return done
         if attempt or not seen or max(seen) < epoch:
             break
