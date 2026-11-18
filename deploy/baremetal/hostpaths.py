@@ -28,6 +28,8 @@ PER_HOST = {
     "/etc/ssh/ssh_host_ed25519_key.pub": "the SSH host key the manifest names (ssh_host_pub)",
     "/etc/nftables.d/regalia-kms.nft": "the host firewall's ruleset, rendered for this host",
     "/etc/default/prometheus-node-exporter": "node_exporter's ARGS, rendered from the site configuration",
+    "/etc/resolv.conf": "the resolver: this site's DNS server (the site configuration's \"dns\" outbound entry), for the "
+                        "NTS servers' names",
 }
 
 

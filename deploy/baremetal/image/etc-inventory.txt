@@ -31,6 +31,7 @@
 /etc/ssh/ssh_host_ed25519_key | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key | the operator (enrol's refusal says: ssh-keygen -f the /var name) | sshd, if ever installed: [not-on-image] | the SSH host key the manifest names must outlive a reboot
 /etc/ssh/ssh_host_ed25519_key.pub | /var/lib/regalia-etc/ssh/ssh_host_ed25519_key.pub | as the key | enrol init (ssh_host_pub, the manifest's ssh_host_pub) | as the key
 /etc/nftables.d/regalia-kms.nft | /var/lib/regalia-etc/nftables.d/regalia-kms.nft | the operator (README.md, firewall.py: rendered, checked, loaded, then moved into the /var name) | nftables.service (the image's /etc/nftables.conf includes it; enabled under /usr, gated on it: regalia-kms-r1s.8), regalia-kms.service (asserts it) | rendered from this host's site configuration
+/etc/resolv.conf | /var/lib/regalia-etc/resolv.conf | the operator (README.md: `nameserver` and the address of the site configuration's "dns" outbound entry) | glibc's resolver: chronyd, for the NTS servers' names (authtime renders `server NAME nts`), and anything else that resolves a name | the DNS server is this site's (site.json "outbound"); the image has none (build-rootfs.sh removes the BUILDER's, regalia-kms-r1s.6), so before it is written a name does not resolve
 /etc/default/prometheus-node-exporter | /var/lib/regalia-etc/default/prometheus-node-exporter | the operator (MONITORING.md: metrics node-exporter-args) | prometheus-node-exporter.service (EnvironmentFile) | ARGS from this site's monitoring CIDRs and port; L+: the package's own file is in the factory copy and is replaced by the link
 
 [boot]
@@ -59,7 +60,9 @@
 /etc/default | the packages' defaults; only prometheus-node-exporter in it is this host's ([per-host])
 /etc/nftables.d | made by the link's parent
 /etc/nftables.conf | the image's (build-rootfs.sh, regalia-kms-r1s.8): `flush ruleset` and an include of this host's ruleset, /etc/nftables.d/regalia-kms.nft, by name; Debian's accept-everything example table is not kept
-/etc/hostname | build-rootfs.sh writes fixed ones before the factory copy (K61V-4): `localhost`, and /etc/hosts' localhost lines; /etc/resolv.conf and /etc/fstab hold comments only (MEASURED before: the BUILD container's, leaked by mmdebstrap); nothing reads the hostname
+/etc/hostname | build-rootfs.sh writes a fixed one before the factory copy: `localhost` (MEASURED before, K61V-5 #723: the BUILD host's, copied in by mmdebstrap). Not per host: PID 1 sets the hostname before the copy ([early]) and nothing reads it; a node is named by node.json. e2e/etc-factory.sh fails if it is the builder's (regalia-kms-r1s.6)
+/etc/hosts | as /etc/hostname: the loopback names only, fixed (it was the builder's); a name the host must resolve is in DNS (/etc/resolv.conf, [per-host])
+/etc/fstab | build-rootfs.sh writes comments only (it was mmdebstrap's placeholder): / is a tmpfs, /usr and /var come from the kernel command line and the initrd ([early])
 /etc/apt/sources.list.d | emptied by the build: a host is updated by a new image, never by apt
 
 [not-on-image]

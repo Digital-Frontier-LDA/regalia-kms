@@ -161,6 +161,8 @@ profile regalia-kms {
   /etc/hosts r,
   /etc/nsswitch.conf r,
   /etc/resolv.conf r,
+  # on the verity image /etc/resolv.conf links to this host's file on /var (regalia-kms-r1s.6), the name AppArmor checks
+  /var/lib/regalia-etc/resolv.conf r,
 
   # ---- the Go runtime ----
   # GOMAXPROCS from the unit's CPU limit. Refusing these is harmless; allowing them keeps the log

@@ -449,11 +449,21 @@ rm -rf -- "$ROOT/var/lib/apt" "$ROOT/var/cache/apt" "$ROOT/var/cache/debconf" "$
 [ "$(DPKG_ADMINDIR=/usr/lib/sysimage/dpkg chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort)" = "$(cat "$W/packages.txt")" ] \
   || die "the moved dpkg database does not list the packages the tree has"
 
-# ---- what the build host left in /etc (etc-inventory.txt [open]: mmdebstrap copies the BUILD's hostname, hosts,
-# resolv.conf; the fstab is its placeholder): fixed files, the same on every builder, and no backup or lock left
+# ---- what the build host left in /etc: mmdebstrap copies the BUILD's hostname, hosts and resolv.conf into the tree
+# (measured, K61V-5 #723: every verity host booted with the builder's identity and resolver). Defined here, the same on
+# every builder (regalia-kms-r1s.6; etc-inventory.txt says why each; e2e/etc-factory.sh fails on the builder's):
+#   hostname     fixed, `localhost`: PID 1 sets the hostname before /etc is copied (etc-inventory.txt [early]) and
+#                nothing reads it; a node is named by node.json, never by its hostname
+#   hosts        fixed, the loopback names only
+#   resolv.conf  ABSENT from the image: the resolver is this site's (site.json's "dns" outbound entry, for the NTS servers'
+#                names), so it is a per-host file, /etc/resolv.conf a link to /var/lib/regalia-etc/resolv.conf
+#                (hostpaths.PER_HOST, units/00-regalia-etc.tmpfiles.conf)
+#   fstab        fixed, comments only: nothing is mounted from it
+# and no backup or lock left
 printf 'localhost\n' > "$ROOT/etc/hostname"
 printf '127.0.0.1\tlocalhost\n::1\t\tlocalhost ip6-localhost ip6-loopback\n' > "$ROOT/etc/hosts"
-printf '# The KMS host image names no resolver (regalia-kms#61): audit_sink_url and the NTS servers are addresses, or names in the hosts file.\n' > "$ROOT/etc/resolv.conf"
+rm -f -- "$ROOT/etc/resolv.conf"
+[ ! -e "$ROOT/etc/resolv.conf" ] && [ ! -L "$ROOT/etc/resolv.conf" ] || die "/etc/resolv.conf could not be removed from the image"
 printf '# The KMS host mounts nothing from /etc/fstab (regalia-kms#61): / is a tmpfs, /usr the verity image and /var the\n# LUKS2 volume, all from the signed kernel command line.\n' > "$ROOT/etc/fstab"
 # the firewall (regalia-kms-r1s.8): the image's nftables.conf loads THIS host's ruleset and nothing else. Debian's
 # example table (accept everything) is not kept; the file named, not a glob, so a ruleset missing at load fails
