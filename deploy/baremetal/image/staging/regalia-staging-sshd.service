@@ -7,15 +7,22 @@
 Description=Regalia STAGING operator SSH (staging image only, key-only)
 ConditionKernelCommandLine=regalia.staging=1
 ConditionPathExists=/var/lib/regalia-staging/authorized_keys
-After=network.target
+# the ListenAddress is the host's static staging address: sshd cannot bind it before networkd has configured it, so it
+# waits for network-online (systemd-networkd-wait-online, which the staging variant enables) (regalia-kms-dx7.36)
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 RuntimeDirectory=sshd
 RuntimeDirectoryMode=0755
+# the per-host drop-ins may hold ONLY ListenAddress and AllowUsers: any other keyword, Match included, refuses the start
+ExecStartPre=/usr/lib/regalia-staging/sshd-dropins-check.sh
 ExecStartPre=/bin/sh -c 'test -e /var/lib/regalia-staging/ssh/ssh_host_ed25519_key || /usr/bin/ssh-keygen -q -t ed25519 -N "" -f /var/lib/regalia-staging/ssh/ssh_host_ed25519_key'
 ExecStartPre=/usr/sbin/sshd -t -f /usr/lib/regalia-staging/sshd_config
 ExecStart=/usr/sbin/sshd -D -e -f /usr/lib/regalia-staging/sshd_config
 Restart=on-failure
+# a margin, so a late address cannot run out the start limit in one second as it did on build 8 (regalia-kms-dx7.36)
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target

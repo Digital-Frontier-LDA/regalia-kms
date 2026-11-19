@@ -121,7 +121,7 @@ for t in mmdebstrap git python3 gpgv curl tar; do command -v "$t" >/dev/null || 
 case "$VARIANT" in production|staging) ;; *) die "--variant must be production or staging, not '$VARIANT'" ;; esac
 [ "$VARIANT" = production ] || REPO_FILES+=("$STAGING_DIR"/packages.txt "$STAGING_DIR"/regalia-staging-sshd.service \
   "$STAGING_DIR"/sshd_config "$STAGING_DIR"/banner "$STAGING_DIR"/journald.conf "$STAGING_DIR"/networkd.conf \
-  "$STAGING_DIR"/regalia-staging.tmpfiles.conf "$STAGING_DIR"/issue)
+  "$STAGING_DIR"/regalia-staging.tmpfiles.conf "$STAGING_DIR"/issue "$STAGING_DIR"/sshd-dropins-check.sh)
 
 # the commit, clean, read as its owner (build-initrd.sh's rules, the same file)
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
@@ -389,12 +389,13 @@ if [ "$VARIANT" = staging ]; then
   install -D -m 0644 "$SRC/$STAGING_DIR/networkd.conf" "$ROOT/usr/lib/systemd/system/systemd-networkd.service.d/regalia-staging.conf"
   install -D -m 0644 "$SRC/$STAGING_DIR/sshd_config" "$ROOT/usr/lib/regalia-staging/sshd_config"
   install -D -m 0644 "$SRC/$STAGING_DIR/banner" "$ROOT/usr/lib/regalia-staging/banner"
+  install -D -m 0755 "$SRC/$STAGING_DIR/sshd-dropins-check.sh" "$ROOT/usr/lib/regalia-staging/sshd-dropins-check.sh"
   install -D -m 0644 "$SRC/$STAGING_DIR/journald.conf" "$ROOT/usr/lib/systemd/journald.conf.d/90-regalia-staging.conf"
   install -D -m 0644 "$SRC/$STAGING_DIR/regalia-staging.tmpfiles.conf" "$ROOT/usr/lib/tmpfiles.d/regalia-staging.conf"
   install -D -m 0644 "$SRC/$STAGING_DIR/issue" "$ROOT/etc/issue"
   printf 'staging\n' > "$ROOT/usr/lib/regalia-staging/VARIANT"
   for w in multi-user.target.wants/regalia-staging-sshd.service multi-user.target.wants/systemd-networkd.service \
-           sockets.target.wants/systemd-networkd.socket; do
+           sockets.target.wants/systemd-networkd.socket network-online.target.wants/systemd-networkd-wait-online.service; do
     [ -f "$ROOT/usr/lib/systemd/system/$(basename "$w")" ] || die "the staging variant enables $(basename "$w"), and the image has no such unit"
     mkdir -p "$ROOT/usr/lib/systemd/system/$(dirname "$w")"; ln -sfn "../$(basename "$w")" "$ROOT/usr/lib/systemd/system/$w"
   done

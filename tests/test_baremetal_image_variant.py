@@ -10,6 +10,8 @@ import io
 import json
 import pathlib
 import re
+import subprocess
+import tempfile
 import unittest
 
 from deploy.baremetal import imagevariant as v
@@ -142,6 +144,86 @@ class TheStagingFiles(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(v.main(["packages"]), 0)
         self.assertEqual(out.getvalue(), ",".join(STAGING_PACKAGES) + "\n")
+
+
+
+CHECK = STAGING / "sshd-dropins-check.sh"
+
+
+def judge_dropin(text, name="10-staging.conf"):
+    """Run the image's drop-in check on a directory holding one drop-in; (exit code, stderr)."""
+    with tempfile.TemporaryDirectory() as d:
+        pathlib.Path(d, name).write_text(text)
+        p = subprocess.run(["sh", str(CHECK), d], capture_output=True, text=True, timeout=30)
+        return p.returncode, p.stderr
+
+
+class TheSshdDropIns(unittest.TestCase):
+    """PA decision on #741 (CodeRabbit, sshd_config:22): the per-host sshd drop-ins may hold ONLY ListenAddress and
+    AllowUsers. First-value-wins does not hold for a Match block, so the unit refuses to start on anything else."""
+
+    def test_the_check_runs_first_and_is_installed_where_the_unit_runs_it(self):
+        unit = (STAGING / "regalia-staging-sshd.service").read_text()
+        pre = [l for l in unit.splitlines() if l.startswith("ExecStartPre=")]
+        self.assertEqual(pre[0], "ExecStartPre=/usr/lib/regalia-staging/sshd-dropins-check.sh")
+        self.assertIn('install -D -m 0755 "$SRC/$STAGING_DIR/sshd-dropins-check.sh" '
+                      '"$ROOT/usr/lib/regalia-staging/sshd-dropins-check.sh"', BUILD.read_text())
+        self.assertIn("./usr/lib/regalia-staging/sshd-dropins-check.sh", v.STAGING_PATHS)
+        # the check judges the very directory sshd_config includes
+        include = (STAGING / "sshd_config").read_text().splitlines()[-1]
+        self.assertEqual(include, "Include /var/lib/regalia-staging/sshd_config.d/*.conf")
+        self.assertIn("dir=${1:-/var/lib/regalia-staging/sshd_config.d}", CHECK.read_text())
+
+    def test_a_drop_in_with_only_listenaddress_and_allowusers_passes(self):
+        rc, err = judge_dropin("# TEST per-host\n\nListenAddress 192.0.2.10\n  allowusers=root@192.0.2.1\n")
+        self.assertEqual((rc, err), (0, ""))
+
+    def test_match_all_password_authentication_yes_is_refused(self):
+        # the review's case: a Match block's settings apply to what it matches, whatever came first
+        rc, err = judge_dropin("ListenAddress 192.0.2.10\nMatch all\n  PasswordAuthentication yes\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("10-staging.conf:2: Match is not allowed", err)
+        self.assertIn("10-staging.conf:3: PasswordAuthentication is not allowed", err)
+        self.assertIn("refusing to start regalia-staging-sshd", err)
+
+    def test_every_other_keyword_is_refused_in_any_spelling(self):
+        for line in ("PasswordAuthentication yes", "PermitRootLogin yes", "AuthenticationMethods none",
+                     "match User root", "  MATCH all", "Include /tmp/x.conf", "HostKey /tmp/k",
+                     "AuthorizedKeysFile /tmp/k", "PermitRootLogin=yes", "\tUsePAM yes", "ListenAddressX 1"):
+            with self.subTest(line=line.strip()):
+                rc, err = judge_dropin("ListenAddress 192.0.2.10\n%s\n" % line)
+                self.assertEqual(rc, 1, err)
+
+    def test_any_drop_in_file_is_judged_not_just_ours(self):
+        rc, err = judge_dropin("Match all\nPermitRootLogin yes\n", name="99-other.conf")
+        self.assertEqual(rc, 1)
+        self.assertIn("99-other.conf:1: Match is not allowed", err)
+
+    def test_a_missing_drop_in_dir_refuses(self):
+        p = subprocess.run(["sh", str(CHECK), "/nonexistent/regalia-staging/sshd_config.d"],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 1)
+
+    def test_the_header_states_the_rule(self):
+        head = (STAGING / "sshd_config").read_text()
+        self.assertIn("ONLY ListenAddress and AllowUsers", head)
+        self.assertIn("Match included", head)
+
+
+class TheSshdWaitsForItsAddress(unittest.TestCase):
+    """regalia-kms-dx7.36: on build 8, sshd bound the static ListenAddress at 16.1s; eno1 gained carrier at 18.7s, and
+    five quick restarts had run out the start limit at 17.1s."""
+
+    def test_sshd_starts_after_network_online_with_a_restart_margin(self):
+        unit = (STAGING / "regalia-staging-sshd.service").read_text().splitlines()
+        self.assertIn("Wants=network-online.target", unit)
+        self.assertIn("After=network-online.target", unit)
+        self.assertIn("RestartSec=5s", unit)
+
+    def test_the_staging_variant_enables_networkd_wait_online(self):
+        link = "network-online.target.wants/systemd-networkd-wait-online.service"
+        self.assertIn("./usr/lib/systemd/system/" + link, v.STAGING_PATHS)
+        self.assertIn(link, BUILD.read_text())
 
 
 if __name__ == "__main__":
