@@ -289,6 +289,26 @@ class Exchange(Case):
         with open(self.d + "/" + ownerunlock.ISSUED_FILE) as f:
             self.assertEqual(json.load(f)["targets"], {"a": [1, 2]})
 
+    def test_an_issued_epoch_is_recorded_durably_before_it_is_used(self):
+        import stat
+        synced, real = [], os.fsync
+
+        def fsync(fd):
+            synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real(fd)
+        issued = ownerunlock.IssuedPaths(self.d + "/durable-paths.json")
+        with unittest.mock.patch.object(ownerunlock.os, "fsync", fsync):
+            self.assertEqual(issued.next("a", 1), 1)
+        self.assertEqual(synced, [False, True], "the file, then its directory")
+
+        def failing(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(5, "Input/output error")
+            return real(fd)
+        with unittest.mock.patch.object(ownerunlock.os, "fsync", failing):
+            with self.assertRaises(OSError):
+                issued.next("a", 1)                           # not returned: an epoch whose record may be lost is never used
+
     def test_the_owner_key_must_be_one_of_the_manifest_s(self):
         self.refused("is not one of the manifest's ed25519 owner_keys", ownerunlock.OwnerPeer, self.m1, self.attester,
                      ownerunlock.read_plaintext(self.plain), SoftOwner(Ed25519PrivateKey.generate()), self.events.append)
@@ -357,6 +377,7 @@ class Disk(Case):
         self.cs(["token", "import", "--json-file", "-", self.disk], b'{"type":"systemd-recovery","keyslots":["0"]}')
         self.local = os.urandom(32)
         self.given = []
+        self.owner_paths = self.d + "/disk-owner-paths.json"     # the owner machine's record of issued path epochs
 
     def cs(self, args, stdin=None):
         done = run(["cryptsetup", *args], input=stdin, capture_output=True)
@@ -366,7 +387,7 @@ class Disk(Case):
         """The owner's machine: owner.contribute's judgement and mint, with the cards' envelope kept in this test's memory."""
         attester = ownerunlock.verifier(self.m1, self.doc, self.d + "/attest.json")
         wrapped, plain = ownerunlock.contribute(self.m1, json.loads(json.dumps(request)), fingerprint, attester, os.urandom,
-                                                ownerunlock.IssuedPaths(self.d + "/disk-owner-paths.json"))
+                                                ownerunlock.IssuedPaths(self.owner_paths))
         self.given.append(ownerunlock.read_plaintext(plain))
         return json.loads(json.dumps(wrapped))
 
@@ -465,10 +486,26 @@ class Disk(Case):
         self.refused("only under the single-node profile", enrolpeer.request_owner_path, multi, "a", self.exchange, self.keys["a"].ak_public,
                      self.local, fake_seal(self.local), self.disk, RECOVERY, run=run)
         ahead = self.single(2, m.digest(self.m1))          # the node holds epoch 2; the owner answers from epoch 1
-        self.refused("the owner answered path epoch 1, below this node's manifest epoch 2: refused, nothing was written",
+        self.refused("the owner answered path epoch 1, below this node's manifest epoch 2: refused; nothing was written to the disk",
                      enrolpeer.request_owner_path, ahead, "a", self.exchange, self.keys["a"].ak_public, self.local, fake_seal(self.local),
                      self.disk, RECOVERY, run=run)
         self.assertEqual(sorted(unlock.luks_meta(self.disk, run)["keyslots"]), ["0"])
+        # with a stale owner token removed first, the refusal says so: the header did change (another owner machine's
+        # record, one that answers path epoch 1 again)
+        self.owner_paths = self.d + "/other-owner-paths.json"
+        stale = {"type": unlock.TOKEN_TYPE, "keyslots": [], "version": unlock.VERSION, "target": "a", "peer": "owner", "path_epoch": 1,
+                 "local": fake_seal(self.local)}
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(stale))
+        (stale_id, _), = unlock.path_tokens(unlock.luks_meta(self.disk, run))
+        self.refused("below this node's manifest epoch 2: refused; the stale owner tokens %s were removed already" % stale_id,
+                     enrolpeer.request_owner_path, ahead, "a", self.exchange, self.keys["a"].ak_public, self.local, fake_seal(self.local),
+                     self.disk, RECOVERY, run=run)
+        # a MAINTENANCE node is refused a NEW owner path before any cleanup, and the owner is not asked
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(stale))
+        asked = len(self.given)
+        self.refused("a is MAINTENANCE under epoch 2, not ACTIVE", enrolpeer.request_owner_path, self.single(2, m.digest(self.m1), "MAINTENANCE"),
+                     "a", self.exchange, self.keys["a"].ak_public, self.local, fake_seal(self.local), self.disk, RECOVERY, run=run)
+        self.assertEqual((len(unlock.path_tokens(unlock.luks_meta(self.disk, run))), len(self.given)), (1, asked), "nothing removed, nobody asked")
 
     def test_the_contribution_is_written_nowhere_on_the_node(self):
         self.enrol()
@@ -633,14 +670,15 @@ class OwnerCommands(Case):
         self.assertEqual([line[:30] for line in said if line.startswith(("SENT", "STOPPED"))],
                          ["SENT: signed response 1 to a, ", "STOPPED: 1 signed response(s) "])
 
-    def serve_in_thread(self, signer, stopping):
+    def serve_in_thread(self, signer, stopping, clock=None):
         listener = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(listener.close)
         said, outcome = [], []
 
         def run_it():
             try:
-                outcome.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, signer, listener, say=said.append, stop=stopping.is_set))
+                outcome.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, signer, listener, say=said.append, stop=stopping.is_set,
+                                                  clock=clock))
             except m.Refused as refusal:
                 outcome.append(refusal)
         worker = threading.Thread(target=run_it, daemon=True)
@@ -677,6 +715,117 @@ class OwnerCommands(Case):
         already.latched = {"reason": "CKR_PIN_LOCKED"}
         self.refused("refused its PIN before (latched: CKR_PIN_LOCKED)", ownerunlock.OwnerPeer, self.m1, self.attester,
                      ownerunlock.read_plaintext(self.plain), already, self.events.append)
+
+    def test_a_failing_audit_sink_neither_hides_a_latch_nor_reaches_the_node(self):
+        class Latching(SoftOwner):
+            latched = None
+
+            def sign(self, message):
+                self.latched = {"reason": "CKR_PIN_INCORRECT"}
+                raise m.Refused("the token refused the PIN (CKR_PIN_INCORRECT): latched")
+
+        class Failing(SoftOwner):
+            def sign(self, message):
+                raise m.Refused("the touch timed out")
+
+        def sink(event):
+            if event["event"] == "unlock-sign":
+                raise OSError(28, "No space left on device")
+            self.events.append(event)
+        for signer, halted in ((Latching(OWNER_KEYS[0]), True), (Failing(OWNER_KEYS[0]), False)):
+            with self.subTest(halted=halted):
+                peer = ownerunlock.OwnerPeer(self.m1, self.attester, ownerunlock.read_plaintext(self.plain), signer, sink)
+                self.refused("unlock: the peer refused (DENIED)", self.ask, session=self.boot(), transport=self.transport(peer))
+                self.assertEqual(json.loads(self.wire[-1][1]), {"v": 1, "error": "DENIED"})
+                self.assertEqual(bool(peer.halted), halted)
+
+    def test_a_latch_at_the_end_of_the_window_is_still_reported(self):
+        now = [0.0]
+
+        class LateLatching(SoftOwner):
+            latched = None
+
+            def sign(self, message):
+                now[0] = 10 ** 6                                  # the window ends while the token is busy
+                self.latched = {"reason": "CKR_PIN_INCORRECT"}
+                raise m.Refused("the token refused the PIN (CKR_PIN_INCORRECT): latched; one correct login resets the counter")
+        stopping = threading.Event()
+        self.addCleanup(stopping.set)
+        worker, said, outcome, transport, wire = self.serve_in_thread(LateLatching(OWNER_KEYS[0]), stopping, clock=lambda: now[0])
+        self.refused("unlock: the peer refused (DENIED)", self.ask, transport=transport)
+        worker.join(10)
+        self.assertIsInstance(outcome[0], m.Refused)
+        self.assertIn("its PIN is latched", str(outcome[0]))
+        self.assertIn("one correct login resets the counter", str(outcome[0]))
+
+    def test_no_exchange_starts_after_the_window(self):
+        now, answered, timeouts = [0.0], [], []
+
+        class Conn:
+            def settimeout(self, t):
+                timeouts.append(t)
+
+            def recv(self, n):
+                return b""
+
+            def sendall(self, data):
+                answered.append(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Listener:
+            def getsockname(self):
+                return ("192.0.2.9", 7443)
+
+            def settimeout(self, t):
+                pass
+
+            def accept(self):
+                now[0] = 11.0                                     # the connection arrives after the 10 s window
+                return Conn(), ("192.0.2.1", 1)
+        self.refused("no signed response was sent to a while this ran", owner.serve_unlock, self.m1, self.doc, self.d, self.plain, self.signer,
+                     Listener(), say=lambda line: None, serve_for=10, clock=lambda: now[0])
+        self.assertEqual((answered, timeouts), ([], []), "a connection after the window was touched")
+
+    def test_a_connection_near_the_end_gets_only_what_is_left_of_the_window(self):
+        now, timeouts, accepted = [0.0], [], []
+
+        class Conn:
+            def settimeout(self, t):
+                timeouts.append(t)
+
+            def recv(self, n):
+                return b""
+
+            def sendall(self, data):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Listener:
+            def getsockname(self):
+                return ("192.0.2.9", 7443)
+
+            def settimeout(self, t):
+                pass
+
+            def accept(self):
+                if accepted:
+                    raise OSError("closed")
+                accepted.append(1)
+                now[0] = 9.5                                      # half a second of the 10 s window left
+                return Conn(), ("192.0.2.1", 1)
+        self.refused("no signed response was sent", owner.serve_unlock, self.m1, self.doc, self.d, self.plain, self.signer, Listener(),
+                     say=lambda line: None, serve_for=10, clock=lambda: now[0])
+        self.assertTrue(timeouts and max(timeouts) <= 0.5 + 1e-6, timeouts)
 
     def test_a_signing_failure_that_is_not_a_latch_is_recorded_and_serving_goes_on(self):
         class OnceFailing(SoftOwner):
@@ -813,12 +962,17 @@ class OnSwtpm(unittest.TestCase):
         stopping = threading.Event()
         self.addCleanup(listener.close)
         self.addCleanup(stopping.set)
-        self.said = []
+        self.said, self.sent = [], threading.Event()
+
+        def say(line):
+            self.said.append(line)
+            if line.startswith("SENT"):
+                self.sent.set()
 
         def answer():
             with contextlib.suppress(m.Refused, attest.Refused, OSError):
                 owner.serve_unlock(manifest or self.m1, self.doc, self.state, self.cards[self.d + "/owner-env.asc"], self.signer, listener,
-                                   say=self.said.append, stop=stopping.is_set)
+                                   say=say, stop=stopping.is_set)
         threading.Thread(target=answer, daemon=True).start()
         return "127.0.0.1:%d" % listener.getsockname()[1]
 
@@ -847,6 +1001,7 @@ class OnSwtpm(unittest.TestCase):
         self.reboot("a", "the approved image")
         rc, out, err, slot = self.native(None, "-attempts", "3", config_text=self.config(self.serve()))
         self.assertEqual((rc, slot), (0, 1), err)
+        self.assertTrue(self.sent.wait(10), self.said)               # the owner logs SENT once its write returned
         self.assertTrue(any(line.startswith("SENT: signed response 1 to a") for line in self.said), self.said)
         # 3. the reference client, on the next boot
         self.reboot("a", "the approved image")

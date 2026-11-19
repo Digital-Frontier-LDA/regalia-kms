@@ -257,6 +257,8 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
     # local half
     if any(malformed(t) is None and refs(t)[0] in keyslots and t.get("local") == sealed_local for _, t in mine):
         return {"path_epoch": None, "keyslot": None, "existing": True}
+    # a NEW owner path only for a node the owner would mint one for (ACTIVE: ownerunlock.contribute), before any cleanup
+    ownerunlock.single_node(manifest, node_id)
     # Every conflict is refused BEFORE anything is removed. A token that names any existing keyslot is never removed:
     # malformed, it is refused by name; well-formed (over another local half: a reseal), it is refused too.
     live = [t for _, t in mine if any(r in keyslots for r in refs(t))]
@@ -278,8 +280,9 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
     enrolment = unlock.Enrolment(node_id)
     wrapped = exchange(ownerunlock.path_request(node_id, enrolment, ak_public), enrolment.fingerprint)
     path_epoch, contribution = enrolment.open(wrapped, unlock.OWNER)
-    require(path_epoch >= manifest["epoch"], "the owner answered path epoch %d, below this node's manifest epoch %d: refused, nothing "
-            "was written to the disk" % (path_epoch, manifest["epoch"]))
+    require(path_epoch >= manifest["epoch"], "the owner answered path epoch %d, below this node's manifest epoch %d: refused; %s"
+            % (path_epoch, manifest["epoch"], ("the stale owner tokens %s were removed already, nothing else was written" % ", ".join(removed))
+               if removed else "nothing was written to the disk"))
     slot = unlock.enrol_path(device, node_id, unlock.OWNER, path_epoch, local, sealed_local, contribution, recovery, run=run)
     return {"path_epoch": path_epoch, "keyslot": slot}
 

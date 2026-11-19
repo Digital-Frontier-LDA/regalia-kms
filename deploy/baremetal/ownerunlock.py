@@ -143,6 +143,13 @@ class IssuedPaths:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp)
             raise
+        # the rename lasts a power cut only once the directory is synced: an epoch whose record could be lost is never
+        # handed out (a failure here refuses, and the epoch is not used)
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
     def next(self, target, floor):
         """A new path epoch for `target`: at least `floor` (the manifest's epoch) and above every one issued, recorded
@@ -293,13 +300,15 @@ class OwnerPeer:
         try:
             sig = self.signer.sign(unlock.owner_signed_message(response))
         except Exception as error:      # noqa: BLE001 - the requester is told only DENIED; the owner is told why
-            latched = getattr(self.signer, "latched", None)
-            reason = convergence._printable(error, membership.REASON_LIMIT)
-            self.audit({"event": "unlock-sign", "epoch": self.manifest["epoch"], "manifest_digest": membership.digest(self.manifest),
-                        "subject": requester, "peer": OWNER, "outcome": "ERROR", "reason": reason})
-            if latched:
-                # a latched PIN never signs again in this process: stop, with the signer's own way out
+            if getattr(self.signer, "latched", None):
+                # a latched PIN never signs again in this process: stop, with the signer's own way out. Set before the
+                # audit sink is called, so a sink that fails cannot keep the owner serving with a key that cannot sign
                 self.halted = str(error)
+            try:
+                self.audit({"event": "unlock-sign", "epoch": self.manifest["epoch"], "manifest_digest": membership.digest(self.manifest),
+                            "subject": requester, "peer": OWNER, "outcome": "ERROR", "reason": convergence._printable(error, membership.REASON_LIMIT)})
+            except Exception:           # noqa: BLE001 - the record failed; the node is still told DENIED, the latch still stands
+                pass
             raise Refused("the owner key did not sign") from None
         require(isinstance(sig, bytes) and len(sig) == 64, "the owner key did not give a 64-byte Ed25519 signature")
         self.signed += 1

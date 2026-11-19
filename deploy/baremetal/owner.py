@@ -250,13 +250,18 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
     say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d for at most %d s; touch the key when it blinks, and stop "
         "this (Ctrl-C) once the node's console shows its volume open" % (contribution[0], contribution[1], tip["epoch"], host, port, serve_for))
     until, sent = clock() + serve_for, 0
-    listener.settimeout(1.0)                               # to look at the clock and at stop() between connections
-    while not stop() and clock() < until:
+
+    def halt_if_latched():
         if peer.halted:
             # the token latched its PIN: it signs nothing more, so serving on would only answer DENIED for ever. The node
             # was told DENIED and nothing else; the owner reads the token's own way out here
             say("HALTED: the owner key signs nothing more: %s" % peer.halted)
             raise Refused("the owner key signs nothing more (its PIN is latched), after %d signed response(s) sent: %s" % (sent, peer.halted))
+    # No exchange starts after the window: accept waits at most what is left of it, a connection accepted after it is
+    # closed unanswered, and a connection's I/O is bounded by what is left. A token operation already started (the
+    # card's touch) is not interrupted: it can outlast the window by its own duration, and no more.
+    while not stop() and clock() < until:
+        listener.settimeout(max(min(1.0, until - clock()), 0.001))
         try:
             conn, _ = listener.accept()
         except socket.timeout:
@@ -264,10 +269,13 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
         except OSError:
             break                                        # the listener was closed
         with conn:
-            conn.settimeout(unlock.IO_TIMEOUT)
-            reply = None
+            left = until - clock()
+            if left <= 0:
+                break                                    # arrived after the window: closed unanswered
+            reply, failed = None, False
             try:
-                deadline = time.monotonic() + unlock.IO_TIMEOUT
+                deadline = time.monotonic() + min(unlock.IO_TIMEOUT, left)
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
                 reply = peer.handle(unlock._read_all(conn, deadline))
                 conn.settimeout(max(deadline - time.monotonic(), 0.001))
                 conn.sendall(membership.canonical(reply))
@@ -276,8 +284,9 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
                     audit({"event": "unlock-send", "epoch": tip["epoch"], "manifest_digest": membership.digest(tip), "subject": contribution[0],
                            "peer": unlock.OWNER, "outcome": "ERROR", "reason": "the signed response was not sent (%s): it does not count, "
                            "and the node's next request is answered" % type(error).__name__})
-                continue
-        if "response" in reply:
+                failed = True
+        halt_if_latched()                                # after every connection, sent or not, before the window is looked at
+        if not failed and "response" in reply:
             sent += 1
             say("SENT: signed response %d to %s, under manifest epoch %d. The node opens its disk with the first valid one it "
                 "receives; if its console does not show the volume open, it asks again and is answered" % (sent, contribution[0], tip["epoch"]))
