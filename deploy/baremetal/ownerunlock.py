@@ -13,7 +13,7 @@ ways and are never written in clear anywhere:
     ownerauth envelopes are), so that one lost card does not strand the node (Q6). Its plaintext is
     canonical {"schema": ENVELOPE_SCHEMA, "target", "path_epoch", "secret": <64 hex>} and one newline.
 
-AT BOOT (owner.py unlock). The operator decrypts the envelope with a card (gpg's touch) on a pipe into the tool, which
+AT BOOT (owner.py unlock). The operator decrypts the envelope with a card (gpg's touch) onto a pipe the tool reads, which
 listens on the boot mesh, where the owner is the node's only WireGuard peer (dx7.6), and answers as a peer does:
   * hello: a nonce from the owner's own attest.Verifier, only for the manifest's one node while it is ACTIVE;
   * unlock: may_unlock(), the same verification a peer makes (lease.reattest in the initrd phase, under the measurements

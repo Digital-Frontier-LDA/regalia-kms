@@ -34,12 +34,12 @@ THE OWNER AS A SINGLE-NODE HOST'S UNLOCK PEER (regalia-kms-dx7.5; ownerunlock.py
 
     python3 -Es -m deploy.baremetal.owner contribute --chain CHAIN.json --root-key ROOT --measurements DOC.json --state DIR \\
          --request owner-path-request.json --recipient FPR --recipient FPR --envelope-out ENV.asc --wrapped-out ANSWER.json
-    gpg --decrypt ENV.asc | python3 -Es -m deploy.baremetal.owner unlock --chain CHAIN.json --root-key ROOT --measurements DOC.json \\
-         --state DIR --listen ADDRESS:PORT --module ... --serial ... --key-id ...
+    python3 -Es -m deploy.baremetal.owner unlock --contribution-fd 3 3< <(gpg --decrypt ENV.asc) --chain CHAIN.json --root-key ROOT \\
+         --measurements DOC.json --state DIR --listen ADDRESS:PORT --module ... --serial ... --key-id ...
 
 contribute answers the node's enrol paths (the enrolment key's fingerprint typed here, as the node's console shows it): the
 contribution is minted here, encrypted to both owner cards' decryption subkeys (gpg, the envelope written first) and
-wrapped to the node's one-time key. unlock answers every boot: the envelope decrypted with a card on the pipe, the PIN of
+wrapped to the node's one-time key. unlock answers every boot: the envelope decrypted with a card onto a pipe, the PIN of
 the signing key typed once before anything is served, and one touch for each response. It answers until the operator
 stops it (Ctrl-C) or for --serve-for seconds: the exchange has no acknowledgement, so a response sent ends nothing.
 
@@ -426,8 +426,9 @@ def main(argv=None):
                    help="an owner card's decryption subkey fingerprint (the card record's ownerauth_recipients); twice")
     c.add_argument("--envelope-out", required=True, help="the OpenPGP envelope to keep, for both owner cards")
     c.add_argument("--wrapped-out", required=True, help="the answer to carry to the node's console")
-    u = sub.add_parser("unlock", help="(off the nodes, on the boot mesh) answer a single-node host's boot unlock as its peer (dx7.5); "
-                       "the decrypted envelope on standard input (gpg --decrypt ENVELOPE | ...)")
+    u = sub.add_parser("unlock", help="(off the nodes, on the boot mesh) answer a single-node host's boot unlock as its peer (dx7.5)")
+    u.add_argument("--contribution-fd", type=int, required=True,
+                   help="the decrypted envelope, on a pipe: --contribution-fd 3 3< <(gpg --decrypt ENVELOPE)")
     u.add_argument("--chain", required=True, help="the signed chain this machine holds (a JSON list of envelopes)")
     u.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     u.add_argument("--measurements", required=True, help="the measurement document the chain's tip commits to (policy_version)")
@@ -511,9 +512,11 @@ def main(argv=None):
         if args.op == "unlock":
             off_the_nodes()
             import socket
-            from deploy.baremetal import manifest as manifest_tool, measurements, ownerunlock
-            require(not sys.stdin.isatty(), "standard input is a terminal: it carries the decrypted envelope (gpg --decrypt ENVELOPE | ...), never typed")
-            decrypted = sys.stdin.buffer.read(ownerunlock.MAX_PLAINTEXT + 1)
+            from deploy.baremetal import manifest as manifest_tool, measurements
+            # the decrypted envelope on a pipe, never a file or standard input (keyfd.read, as fence's credentials)
+            raw = keyfd.read(args.contribution_fd, "the decrypted contribution")
+            decrypted = bytes(raw)
+            keyfd.zero(raw)
             tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
             with open(args.measurements, "rb") as f:
                 document = measurements.load(f.read(measurements.MAX_BYTES + 1))

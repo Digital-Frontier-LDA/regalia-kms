@@ -43,7 +43,7 @@ cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "peer-unlock-swtpm: run as root (systemd-creds seals to a TPM only as root; it makes a loop device and a dm-crypt mapping)"; exit 2; }
 for t in swtpm tpm2_createek tpm2_createak tpm2_makecredential tpm2_quote tpm2_nvdefine tpm2_pcrextend tpm2_readclock openssl systemd-creds \
-         cryptsetup losetup mkfs.ext4 mount umount python3 softhsm2-util pkcs11-tool; do
+         cryptsetup losetup mkfs.ext4 mount umount python3 softhsm2-util; do
   command -v "$t" >/dev/null || { echo "peer-unlock-swtpm: $t is required (swtpm, tpm2-tools, openssl, systemd, cryptsetup-bin, util-linux, e2fsprogs, python3)"; exit 2; }
 done
 echo "peer-unlock-swtpm: $(systemd-creds --version | head -1), $(cryptsetup --version), swtpm $(swtpm --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
