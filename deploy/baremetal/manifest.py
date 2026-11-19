@@ -243,13 +243,14 @@ def single_node_limits(path=None):
 
 def acknowledge_single_node(confirm, say, path=None):
     """Prints the shipped limits text verbatim, then reads the acknowledgement phrase through `confirm` (the console,
-    keyfd.tty_line: never an argument, refused without a terminal). Refused unless the phrase is typed exactly."""
+    keyfd.tty_line: never an argument, refused without a terminal). Refused unless the phrase is typed exactly, with no
+    whitespace around it."""
     text = single_node_limits(path)
     say(text[:-1] if text.endswith("\n") else text)
     phrase = ACKNOWLEDGEMENT % SINGLE_NODE_LIMITS_SHA256[:8]
     say("SINGLE-NODE GENESIS: the text above is the single-node limits, SHA-256 %s; this genesis records that digest, "
         "under the root's signature" % SINGLE_NODE_LIMITS_SHA256)
-    typed = confirm("type, to accept these limits: %s\n> " % phrase).strip()
+    typed = confirm("type, to accept these limits: %s\n> " % phrase)       # exactly: tty_line already drops the line end
     require(hmac.compare_digest(typed.encode(), phrase.encode()), "the acknowledgement typed is not \"%s\": nothing was written" % phrase)
 
 

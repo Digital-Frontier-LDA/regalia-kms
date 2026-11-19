@@ -161,7 +161,8 @@ class SingleNodeAcknowledgement(unittest.TestCase):
         self.assertIn("SINGLE-NODE (1 node)", out)
 
     def test_a_wrong_or_absent_phrase_writes_nothing(self):
-        for typed in ("", "yes", self.phrase.upper(), PHRASE % "00000000", self.phrase + " please", "single node: I accept the limits"):
+        for typed in ("", "yes", self.phrase.upper(), PHRASE % "00000000", self.phrase + " please", "single node: I accept the limits",
+                      " " + self.phrase, self.phrase + " ", self.phrase + "\t", "\t" + self.phrase + " "):     # exactly, no padding (#738)
             with self.subTest(typed=typed):
                 code, _, err, path = self.g.run_cli(typed=self.console(typed), topology="single-node")
                 self.assertEqual(code, 2)
