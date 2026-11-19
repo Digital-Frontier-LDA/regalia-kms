@@ -30,6 +30,19 @@ HARM BOUND, stated (regalia-kms-24): a compromised node with the owner at its co
 co-signature on a heartbeat that lives at most owner_heartbeat_lifetime_s, for the manifest it already has. The owner's
 key alone meets no rule that adds, restores or re-keys a node; that is the root's alone (membership's transitions).
 
+THE OWNER AS A SINGLE-NODE HOST'S UNLOCK PEER (regalia-kms-dx7.5; ownerunlock.py), off the nodes:
+
+    python3 -Es -m deploy.baremetal.owner contribute --chain CHAIN.json --root-key ROOT --measurements DOC.json --state DIR \\
+         --request owner-path-request.json --recipient FPR --recipient FPR --envelope-out ENV.asc --wrapped-out ANSWER.json
+    python3 -Es -m deploy.baremetal.owner unlock --contribution-fd 3 3< <(gpg --decrypt ENV.asc) --chain CHAIN.json --root-key ROOT \\
+         --measurements DOC.json --state DIR --listen ADDRESS:PORT --module ... --serial ... --key-id ...
+
+contribute answers the node's enrol paths (the enrolment key's fingerprint typed here, as the node's console shows it): the
+contribution is minted here, encrypted to both owner cards' decryption subkeys (gpg, the envelope written first) and
+wrapped to the node's one-time key. unlock answers every boot: the envelope decrypted with a card onto a pipe, the PIN of
+the signing key typed once before anything is served, and one touch for each response. It answers until the operator
+stops it (Ctrl-C) or for --serve-for seconds: the exchange has no acknowledgement, so a response sent ends nothing.
+
 --pin-env exists for tests only and is refused unless REGALIA_OWNER_TEST=1 is also set, as manifest.py's.
 """
 import argparse
@@ -174,6 +187,114 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
     return {"statement": st, "key": signer.public(), "sig": signer.sign(recover.message(st)).hex()}
 
 
+# ---- the owner as a single-node host's unlock peer (regalia-kms-dx7.5; ownerunlock.py): off the nodes ----
+
+def contribute_path(tip, document, request, fingerprint, state_dir, fingerprints, envelope_out, wrapped_out, run=subprocess.run,
+                    rand=os.urandom, say=print):
+    """`owner.py contribute`: the owner path of the single-node host that wrote `request` (enrol paths), under `tip`, the
+    chain this machine verified. The envelope for the two owner cards is written FIRST (gpg, `envelope_out`), then the
+    wrap for the node (`wrapped_out`): a node never holds a path whose contribution the owner could not decrypt again.
+    Neither output may exist. Returns the path epoch."""
+    from deploy.baremetal import ownerunlock
+    for path in (envelope_out, wrapped_out):
+        require(not os.path.lexists(path), "%s exists already: nothing was made" % path)
+    attester = ownerunlock.verifier(tip, document, os.path.join(state_dir, "attest.json"))
+    issued = ownerunlock.IssuedPaths(os.path.join(state_dir, ownerunlock.ISSUED_FILE))
+    wrapped, plain = ownerunlock.contribute(tip, request, fingerprint, attester, rand, issued)
+    ownerunlock.gpg_encrypt(plain, fingerprints, envelope_out, run)
+    del plain
+    require(os.path.isfile(envelope_out), "gpg wrote no envelope at %s: nothing was given to the node" % envelope_out)
+    fd = os.open(wrapped_out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w") as f:
+        json.dump(wrapped, f, sort_keys=True)
+    say("WRITTEN: %s (keep it: both owner cards decrypt it, at every boot of %s) and %s (carry it to %s's console)"
+        % (envelope_out, wrapped["target"], wrapped_out, wrapped["target"]))
+    return wrapped["path_epoch"]
+
+
+def listen_address(text):
+    """(family, host, port) of `--listen`: `ADDRESS:PORT`, an IPv6 address in brackets."""
+    import re
+    import socket
+    found = re.fullmatch(r"\[([0-9A-Fa-f:.]{2,45})\]:([0-9]{1,5})|([0-9.]{7,15}):([0-9]{1,5})", text or "")
+    require(found is not None, "--listen is ADDRESS:PORT, an IPv6 address in brackets")
+    six = found.group(1) is not None
+    port = int(found.group(2) if six else found.group(4))
+    require(0 <= port <= 65535, "--listen is ADDRESS:PORT, the port 0-65535")
+    return (socket.AF_INET6 if six else socket.AF_INET), (found.group(1) if six else found.group(3)), port
+
+
+SERVE_FOR = 1800                       # owner.py unlock answers for at most this long (s), unless --serve-for says otherwise
+
+
+def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=print, serve_for=SERVE_FOR, stop=None, clock=None):
+    """`owner.py unlock`: answer the single-node host's unlock requests on `listener` (a bound, listening socket on the
+    boot mesh), one connection at a time, as its peer (ownerunlock.OwnerPeer).
+
+    The exchange has no acknowledgement: a reply written in full may still never reach the node (its client may have
+    given up, its connection may break), and the node then asks again. So a response SENT does not end the serving: the
+    owner answers until stopped (Ctrl-C, or `stop()` true) or for `serve_for` seconds, whichever comes first, and
+    stops it once the node's console shows the volume open. Each signed response is a card touch. A response whose
+    sending fails is recorded (unlock-send, ERROR). `decrypted` is the envelope as gpg printed it; `signer` an owner
+    key. Returns the number of signed responses written in full; refused if none was."""
+    import socket
+    import time
+    from deploy.baremetal import ownerunlock, unlock
+    clock = clock or time.monotonic
+    stop = stop or (lambda: False)
+    contribution = ownerunlock.read_plaintext(decrypted)
+    attester = ownerunlock.verifier(tip, document, os.path.join(state_dir, "attest.json"))
+    audit = lambda event: say(ownerunlock.printed_event(event))      # noqa: E731
+    peer = ownerunlock.OwnerPeer(tip, attester, contribution, signer, audit)
+    host, port = listener.getsockname()[:2]
+    say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d for at most %d s; touch the key when it blinks, and stop "
+        "this (Ctrl-C) once the node's console shows its volume open" % (contribution[0], contribution[1], tip["epoch"], host, port, serve_for))
+    until, sent = clock() + serve_for, 0
+
+    def halt_if_latched():
+        if peer.halted:
+            # the token latched its PIN: it signs nothing more, so serving on would only answer DENIED for ever. The node
+            # was told DENIED and nothing else; the owner reads the token's own way out here
+            say("HALTED: the owner key signs nothing more: %s" % peer.halted)
+            raise Refused("the owner key signs nothing more (its PIN is latched), after %d signed response(s) sent: %s" % (sent, peer.halted))
+    # No exchange starts after the window: accept waits at most what is left of it, a connection accepted after it is
+    # closed unanswered, and a connection's I/O is bounded by what is left. A token operation already started (the
+    # card's touch) is not interrupted: it can outlast the window by its own duration, and no more.
+    while not stop() and clock() < until:
+        listener.settimeout(max(min(1.0, until - clock()), 0.001))
+        try:
+            conn, _ = listener.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            break                                        # the listener was closed
+        with conn:
+            left = until - clock()
+            if left <= 0:
+                break                                    # arrived after the window: closed unanswered
+            reply, failed = None, False
+            try:
+                deadline = time.monotonic() + min(unlock.IO_TIMEOUT, left)
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                reply = peer.handle(unlock._read_all(conn, deadline))
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                conn.sendall(membership.canonical(reply))
+            except OSError as error:
+                if reply is not None and "response" in reply:
+                    audit({"event": "unlock-send", "epoch": tip["epoch"], "manifest_digest": membership.digest(tip), "subject": contribution[0],
+                           "peer": unlock.OWNER, "outcome": "ERROR", "reason": "the signed response was not sent (%s): it does not count, "
+                           "and the node's next request is answered" % type(error).__name__})
+                failed = True
+        halt_if_latched()                                # after every connection, sent or not, before the window is looked at
+        if not failed and "response" in reply:
+            sent += 1
+            say("SENT: signed response %d to %s, under manifest epoch %d. The node opens its disk with the first valid one it "
+                "receives; if its console does not show the volume open, it asks again and is answered" % (sent, contribution[0], tip["epoch"]))
+    require(sent > 0, "no signed response was sent to %s while this ran" % contribution[0])
+    say("STOPPED: %d signed response(s) sent to %s" % (sent, contribution[0]))
+    return sent
+
+
 # The marks of a KMS node: its configuration and its installed services. The owner's revocation signature is made off
 # the nodes, so that no node's root can watch the token session (regalia-kms-24, 51's read).
 NODE_MARKS = ("/etc/regalia/node.json", "/usr/lib/systemd/system/regalia-sync.service", "/etc/systemd/system/regalia-sync.service")
@@ -310,6 +431,29 @@ def main(argv=None):
         for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                          ("--opensc-conf", {}), ("--pin-env", {})):
             parser_.add_argument(flag, **kw)
+    c = sub.add_parser("contribute", help="(off the nodes) a single-node host's owner path: its contribution, for the node and for both owner cards (dx7.5)")
+    c.add_argument("--chain", required=True, help="the signed chain this machine holds (a JSON list of envelopes)")
+    c.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    c.add_argument("--measurements", required=True, help="the measurement document the chain's tip commits to (policy_version)")
+    c.add_argument("--state", required=True, help="this machine's directory for the node's verifier state (its AK, nonces, sessions)")
+    c.add_argument("--request", required=True, help="owner-path-request.json, as the node's enrol paths wrote it")
+    c.add_argument("--recipient", action="append", default=[], required=True,
+                   help="an owner card's decryption subkey fingerprint (the card record's ownerauth_recipients); twice")
+    c.add_argument("--envelope-out", required=True, help="the OpenPGP envelope to keep, for both owner cards")
+    c.add_argument("--wrapped-out", required=True, help="the answer to carry to the node's console")
+    u = sub.add_parser("unlock", help="(off the nodes, on the boot mesh) answer a single-node host's boot unlock as its peer (dx7.5)")
+    u.add_argument("--contribution-fd", type=int, required=True,
+                   help="the decrypted envelope, on a pipe: --contribution-fd 3 3< <(gpg --decrypt ENVELOPE)")
+    u.add_argument("--chain", required=True, help="the signed chain this machine holds (a JSON list of envelopes)")
+    u.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    u.add_argument("--measurements", required=True, help="the measurement document the chain's tip commits to (policy_version)")
+    u.add_argument("--state", required=True, help="the directory contribute used for this node's verifier state")
+    u.add_argument("--listen", required=True, help="ADDRESS:PORT or [IPv6]:PORT on the boot mesh (the boot configuration's owner endpoint)")
+    u.add_argument("--serve-for", type=int, default=SERVE_FOR, help="answer for at most this many seconds (default %d); Ctrl-C ends it "
+                   "sooner, once the node's console shows its volume open" % SERVE_FOR)
+    for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                     ("--opensc-conf", {}), ("--pin-env", {})):
+        u.add_argument(flag, **kw)
     for name in ("_propose", "_accept"):
         s = sub.add_parser(name)
         s.add_argument("--config", required=True)
@@ -352,6 +496,16 @@ def main(argv=None):
             print("WRITTEN: %s; carry it to the offline laptop: sign-survivor --fence-evidence %s --inventory <the same inventory>"
                   % (args.out, args.out))
             return 0
+        if args.op == "contribute":
+            off_the_nodes()
+            from deploy.baremetal import manifest as manifest_tool, measurements
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            with open(args.measurements, "rb") as f:
+                document = measurements.load(f.read(measurements.MAX_BYTES + 1))
+            request = manifest_tool.read_json(args.request, 65536)
+            typed = keyfd.tty_line("The enrolment key's SHA-256, as the node's console shows it: ")   # never standard input
+            contribute_path(tip, document, request, typed, args.state, args.recipient, args.envelope_out, args.wrapped_out)
+            return 0
         if args.op == "beat" and os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
             return 2
@@ -370,6 +524,29 @@ def main(argv=None):
         def open_signer():
             return p11sign.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
                                           only_token=True, pin=pin, alg="ed25519")
+        if args.op == "unlock":
+            off_the_nodes()
+            import socket
+            from deploy.baremetal import manifest as manifest_tool, measurements
+            # the decrypted envelope on a pipe, never a file or standard input (keyfd.read, as fence's credentials)
+            raw = keyfd.read(args.contribution_fd, "the decrypted contribution")
+            decrypted = bytes(raw)
+            keyfd.zero(raw)
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            with open(args.measurements, "rb") as f:
+                document = measurements.load(f.read(measurements.MAX_BYTES + 1))
+            family, host, port = listen_address(args.listen)
+            # the PIN once, before anything is served: a node's request waits seconds, not for a PIN to be typed
+            once = pin()
+            signer = p11sign.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
+                                          only_token=True, pin=lambda: once, alg="ed25519")
+            require(args.serve_for > 0, "--serve-for is a number of seconds above 0")
+            with socket.create_server((host, port), family=family) as listener:
+                try:
+                    serve_unlock(tip, document, args.state, decrypted, signer, listener, serve_for=args.serve_for)
+                except KeyboardInterrupt:
+                    print("STOPPED by the operator")
+            return 0
 
         def confirm(text):
             print(text)

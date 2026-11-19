@@ -1460,7 +1460,28 @@ def _quote_with(node):
     return quote
 
 
-def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run, aks=None, out=sys.stdout, config_path=None):
+def owner_exchange(directory, out=sys.stdout, typed=None):
+    """enrolpeer.request_owner_path's `exchange` at the console (single-node, regalia-kms-dx7.5): the request is written to
+    owner-path-request.json in the enrolment directory (public values only), the enrolment key's fingerprint is shown, and
+    the path of the owner's answer (owner.py contribute --wrapped-out) is typed at the host's console. This process keeps
+    the one-time key until then."""
+    def exchange(request, fingerprint):
+        path = os.path.join(directory, "owner-path-request.json")
+        _atomic_json(path, request)
+        os.chmod(path, 0o644)
+        print("OWNER PATH: carry %s to the owner's machine and run there:\n"
+              "  owner.py contribute --request owner-path-request.json ... (it asks for the fingerprint below)\n"
+              "  the enrolment key's SHA-256: %s\n"
+              "Keep this command running; then bring back the file it writes (--wrapped-out)." % (path, fingerprint), file=out)
+        from deploy.baremetal import keyfd
+        answer = (typed or keyfd.tty_line)("Path of the owner's answer file: ")
+        require(answer, "no answer file was given: nothing was written to the disk")
+        with open(answer.strip(), "rb") as f:
+            return membership.load(f.read(membership.MAX_BYTES + 1), membership.MAX_BYTES)
+    return exchange
+
+
+def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run, aks=None, out=sys.stdout, config_path=None, owner=None):
     """Design steps 6 and 7 of #190, after `commit` (resumable, run again until it finishes):
       1. the AKs both ways, as regalia-sync (`aks`, default run_aks_as_sync);
       2. as root, this node's LUKS path from every peer that may authorize (enrolpeer.request_path), each
@@ -1470,6 +1491,8 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
          removes it.
     A path the journal holds but the header no longer has (a reseal, a killed keyslot) is asked for again.
     `recovery()` returns the recovery key (typed at the console) as a bytearray, zeroed here once used.
+    Under the single-node profile (regalia-kms-dx7.5) the one peer is the owner: no AK step, and the path comes from
+    the owner's machine through `owner` (owner_exchange by default; enrolpeer.request_owner_path).
     Returns the peers still without a path."""
     from deploy.baremetal import enrolpeer, node as node_module, unlock
     node_id = _bundle(directory)["node_id"]
@@ -1494,9 +1517,11 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
     config_path = config_path or NODE_JSON
     node = node_module.Node(node_module.load(config_path), run)
     manifest = node.manifest()
-    peers = peers_to_enrol(manifest, node.node_id)
+    single = membership.profile(manifest) == membership.SINGLE_NODE
+    # under single-node the owner is the one peer (docs/design/single-node.md 4.5): there is no other node to ask
+    peers = [unlock.OWNER] if single else peers_to_enrol(manifest, node.node_id)
     require(peers, "no other node may authorize under epoch %d: no path can be made" % manifest["epoch"])
-    ak_results = (aks or run_aks_as_sync)(config_path)
+    ak_results = {unlock.OWNER: "ok"} if single else (aks or run_aks_as_sync)(config_path)
     local = local_contribution(journal, directory)
     session = node_module.boot_session(node.runtime)      # (ID hex, key): the one this boot presents to everyone
     lost = set(without_path(peers))
@@ -1513,8 +1538,14 @@ def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run
             if key is None:
                 key = recovery()
             try:
-                result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
-                                                local, sealed_local, device, key, run)
+                if single:
+                    with open(os.path.join(directory, "bundle.json"), "rb") as f:
+                        ak_public = bytes.fromhex(membership.load(f.read(membership.MAX_BYTES + 1))["ak_public"])
+                    result = enrolpeer.request_owner_path(manifest, node.node_id, owner or owner_exchange(directory, out), ak_public,
+                                                          local, sealed_local, device, key, run)
+                else:
+                    result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
+                                                    local, sealed_local, device, key, run)
             except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
                 missing.append("%s (%s)" % (peer, refusal))
                 continue
@@ -1559,6 +1590,12 @@ def _tool():
     return text if re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", text) else "unknown"
 
 
+def record_peers(nodes, peers):
+    """The record's `peers`: the AK of each peer that gave a path. The owner (a single-node host's one peer, dx7.5) has no
+    AK and no manifest entry: only its path is recorded."""
+    return [{"peer": p, "ak_name": nodes[p]["ak_name"]} for p in peers if p != membership.OWNER]
+
+
 def write_record(journal, directory, node, manifest, peers, run=subprocess.run, now=time.time, tool=_tool):
     """Design step 8 of #190: the enrolment record, public values only, signed by this node's AK in a TPM quote over
     its system-phase PCRs (attest.quote_document: qualifying data = the record's digest under its own label), so it
@@ -1587,7 +1624,7 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
                                 "epoch": hw.value(), "record": list(hw.record())},
                      "heartbeat": {"index": counter.index, "base": counter.base_index}},
               "espcreds": {k: v for k, v in journal.get("espcreds").items() if k not in ("state", "at")},
-              "peers": [{"peer": p, "ak_name": nodes[p]["ak_name"]} for p in peers], "paths": paths,
+              "peers": record_peers(nodes, peers), "paths": paths,
               "tool": tool(), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now()))}
     payload = membership.canonical(record)
     from deploy.baremetal import trails

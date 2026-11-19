@@ -1144,6 +1144,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools cryptsetup-bin
+          # the single-node owner unlock (dx7.5): the owner key on SoftHSM, through PKCS#11 in process
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc python3-pykcs11
           # systemd-cryptsetup is its own package from systemd 256 on; before that it is part of systemd
           sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup 2>/dev/null || true
       - name: Build the pre-root client (static, no cgo)

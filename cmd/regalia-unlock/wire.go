@@ -120,6 +120,26 @@ type peerSignature struct {
 	Sig      string `json:"sig"`
 }
 
+// ownerResponseDomain is unlock.OWNER_RESPONSE_DOMAIN: what an owner key signs is this, then the response's
+// canonical bytes (Ed25519 over the message itself).
+const ownerResponseDomain = "regalia-unlock/v1/owner-response\x00"
+
+// ownerSignature is the owner's signature of a response (a single-node host, regalia-kms-dx7.5).
+type ownerSignature struct {
+	Alg string `json:"alg"`
+	Key string `json:"key"`
+	Sig string `json:"sig"`
+}
+
+// receivedReply is an unlock reply as it is read: its signature kept as it came, to be read strictly as the kind
+// the boot configuration expects of the peer that was asked (a TPM's or an owner key's), never as the reply says.
+type receivedReply struct {
+	V         int             `json:"v"`
+	Error     string          `json:"error"`
+	Response  *response       `json:"response"`
+	Signature json.RawMessage `json:"signature"`
+}
+
 type unlockReply struct {
 	V         int            `json:"v"`
 	Error     string         `json:"error"`

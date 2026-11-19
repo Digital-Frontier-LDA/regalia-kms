@@ -229,6 +229,64 @@ def request_path(manifest, node_id, peer, ask, session, quote, local, sealed_loc
     return {"path_epoch": path_epoch, "keyslot": slot}
 
 
+def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_local, device, recovery, run=None):
+    """A single-node host's one LUKS path, from the owner (regalia-kms-dx7.5; ownerunlock.py), as root at the console.
+    `exchange(request, fingerprint)` carries ownerunlock.path_request's request to the owner's machine (owner.py contribute)
+    while this process holds the one-time enrolment key, shows the key's `fingerprint` for the owner to check, and
+    returns the owner's wrap. The contribution is opened in this process's memory, used for the keyslot, and written
+    nowhere. Returns as request_path does."""
+    from deploy.baremetal import ownerunlock
+    ownerunlock.single_node(manifest, node_id, states=tuple(s for s, can in membership.CAPABILITIES.items() if "request" in can))
+    run = run or subprocess.run
+    meta = unlock.luks_meta(device, run)
+    keyslots = set(meta.get("keyslots") or {})
+    mine = [(i, t) for i, t in unlock.path_tokens(meta) if t.get("peer") == unlock.OWNER and t.get("target") == node_id]
+
+    def refs(token):
+        """Every keyslot the token names (LUKS2 lets one token name several), as text."""
+        slots = token.get("keyslots")
+        return [str(s) for s in slots] if isinstance(slots, list) else []
+
+    def malformed(token):
+        try:
+            unlock.validate_token(token)
+        except Refused as refusal:
+            return str(refusal)
+        return None
+    # a LIVE owner path, by enrol._without_path's criteria: a well-formed token whose keyslot exists, over this enrolment's
+    # local half
+    if any(malformed(t) is None and refs(t)[0] in keyslots and t.get("local") == sealed_local for _, t in mine):
+        return {"path_epoch": None, "keyslot": None, "existing": True}
+    # a NEW owner path only for a node the owner would mint one for (ACTIVE: ownerunlock.contribute), before any cleanup
+    ownerunlock.single_node(manifest, node_id)
+    # Every conflict is refused BEFORE anything is removed. A token that names any existing keyslot is never removed:
+    # malformed, it is refused by name; well-formed (over another local half: a reseal), it is refused too.
+    live = [t for _, t in mine if any(r in keyslots for r in refs(t))]
+    for token in live:
+        why = malformed(token)
+        require(why is None, "the owner token naming keyslot %s is malformed (%s): inspect the header, then remove that token (cryptsetup "
+                "token remove) and, only if no other path uses it, its keyslot. Nothing was written"
+                % (", ".join(r for r in refs(token) if r in keyslots), why))
+    require(not live, "the disk has an owner path in keyslot %s over another local half (a reseal): remove it first "
+            "(unlock.remove_path), then enrol again. Nothing was written" % ", ".join(sorted(refs(t)[0] for t in live)))
+    # a token that names no existing keyslot opens nothing: it is removed, so the path is made again (a killed keyslot)
+    removed = []
+    for token_id, token in mine:
+        done = run(["cryptsetup", "token", "remove", "--token-id", token_id, device], stdin=subprocess.DEVNULL, capture_output=True)
+        require(done.returncode == 0, "the stale owner token %s (no keyslot of it exists) could not be removed (exit %d); %s. Run "
+                "enrol paths again: it starts from the header as it is now" % (token_id, done.returncode,
+                ("tokens %s were removed already" % ", ".join(removed)) if removed else "nothing was written"))
+        removed.append(token_id)
+    enrolment = unlock.Enrolment(node_id)
+    wrapped = exchange(ownerunlock.path_request(node_id, enrolment, ak_public), enrolment.fingerprint)
+    path_epoch, contribution = enrolment.open(wrapped, unlock.OWNER)
+    require(path_epoch >= manifest["epoch"], "the owner answered path epoch %d, below this node's manifest epoch %d: refused; %s"
+            % (path_epoch, manifest["epoch"], ("the stale owner tokens %s were removed already, nothing else was written" % ", ".join(removed))
+               if removed else "nothing was written to the disk"))
+    slot = unlock.enrol_path(device, node_id, unlock.OWNER, path_epoch, local, sealed_local, contribution, recovery, run=run)
+    return {"path_epoch": path_epoch, "keyslot": slot}
+
+
 def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, session, quote, local, sealed_local, device, recovery,
               run=None):
     """Both halves in one process (tests; a tool that is both users): enrol_aks, then request_path."""

@@ -525,6 +525,28 @@ class Verifier:
             record = state["nodes"].get(node_id, {})
             return ak_identity(bytes.fromhex(record["ak_public"]))[0].hex() if "ak_public" in record else None
 
+    def adopt(self, node_id, ak_public, ak_name):
+        """Enrol `ak_public` for `node_id` WITHOUT a credential challenge, only because its Name is `ak_name`, the one a
+        root-signed manifest names for that node (68 lowercase hex). For a verifier that is not a node and holds no TPM:
+        the owner's, of a single-node host (ownerunlock.py, regalia-kms-dx7.5). The binding of that AK to that EK is the
+        root's: its intake activated a credential for it before it signed the manifest, and every quote is still checked
+        against the qualified name under the manifest's EK. A DIFFERENT AK already enrolled is refused (a replacement,
+        #76). Returns the AK's Name."""
+        self.node(node_id)
+        require(is_hex(ak_name, 68), "the manifest's ak_name must be 68 lowercase hex")
+        require(isinstance(ak_public, bytes) and 0 < len(ak_public) <= 1024, "an AK public area is 1 to 1024 bytes")
+        offered, _ = ak_identity(ak_public)
+        require(hmac.compare_digest(offered.hex(), ak_name), "the AK offered is not the one the manifest names for this node")
+        with locked_state(self.state_path) as (state, save):
+            record = state["nodes"].setdefault(node_id, {})
+            held = record.get("ak_public")
+            require(held is None or ak_identity(bytes.fromhex(held))[0].hex() == ak_name,
+                    "the node already has another enrolled AK: that is a replacement, not an adoption")
+            if held is None:
+                record["ak_public"] = ak_public.hex()
+                save()
+        return offered
+
     def nonce(self, node_id):
         self.node(node_id)
         nonce = self.rand(32)

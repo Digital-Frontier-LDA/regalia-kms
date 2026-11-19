@@ -26,6 +26,10 @@
 # a skip here is a failure. The decisions that need no TPM and no root (every binding of the exchange,
 # the store, enrolment, rotation, the header's judgement) run with the Python guards and are run here too.
 #
+#   8  single-node (dx7.5): the owner is the one peer, its key on SoftHSM (tests/test_baremetal_owner_unlock.py's
+#      OnSwtpm): enrolled beside the recovery keyslot, unlocked by the native and the reference client, a retired image
+#      and a node not ACTIVE refused, and with no owner the disk stays locked although the TPM releases its half
+#
 #   7  with a running systemd: the shipped units (deploy/baremetal/initrd/) are installed, the real
 #      systemd-cryptsetup is given the socket as its key file, and the volume is mapped; with no peer it
 #      gets no key, gives up, and the socket goes on listening; a retired image gets nothing
@@ -39,7 +43,7 @@ cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "peer-unlock-swtpm: run as root (systemd-creds seals to a TPM only as root; it makes a loop device and a dm-crypt mapping)"; exit 2; }
 for t in swtpm tpm2_createek tpm2_createak tpm2_makecredential tpm2_quote tpm2_nvdefine tpm2_pcrextend tpm2_readclock openssl systemd-creds \
-         cryptsetup losetup mkfs.ext4 mount umount python3; do
+         cryptsetup losetup mkfs.ext4 mount umount python3 softhsm2-util; do
   command -v "$t" >/dev/null || { echo "peer-unlock-swtpm: $t is required (swtpm, tpm2-tools, openssl, systemd, cryptsetup-bin, util-linux, e2fsprogs, python3)"; exit 2; }
 done
 echo "peer-unlock-swtpm: $(systemd-creds --version | head -1), $(cryptsetup --version), swtpm $(swtpm --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
@@ -75,3 +79,14 @@ if ! grep -q '^test_tpm_plus_one_peer_opens_the_disk.*ok$' <<< "$out" || { [ "$S
 fi
 [ "$SYSTEMD" = 1 ] || echo "peer-unlock-swtpm: NOTE: no running systemd here, the units were not started (one test skipped)"
 echo "peer-unlock-swtpm: $ran passed, 0 failed"
+
+# Single-node (regalia-kms-dx7.5): the owner is the one peer. The same TPM, systemd-creds and LUKS2 volume, the owner key
+# on SoftHSM, the native client and the reference one; no test of this module may be skipped here.
+out="$(REGALIA_EXPECT_SWTPM=1 REGALIA_EXPECT_CRYPTSETUP=1 REGALIA_UNLOCK_DEVICE="$LOOP" python3 -BEs -m unittest -v tests.test_baremetal_owner_unlock </dev/null 2>&1)"; rc=$?
+printf '%s\n' "$out"
+[ "$rc" = 0 ] || { echo "peer-unlock-swtpm: the owner unlock FAILED"; exit 1; }
+owner_ran="$(grep -oE '^Ran [0-9]+ tests?' <<< "$out" | grep -oE '[0-9]+')"
+if ! grep -q '^test_the_owner_unlocks_the_single_node_host_and_the_tpm_alone_never_does.*ok$' <<< "$out" || grep -q 'skipped' <<< "$out"; then
+  echo "peer-unlock-swtpm: the owner rehearsal did not run, or a test was skipped"; exit 1
+fi
+echo "peer-unlock-swtpm: owner unlock: $owner_ran passed, 0 failed"

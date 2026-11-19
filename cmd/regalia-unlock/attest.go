@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/go-tpm/tpm2"
@@ -143,6 +145,40 @@ func verifyPeerSignature(signature *peerSignature, peer pin, digest []byte) erro
 	}
 	if subtle.ConstantTimeCompare(extraData, digest) != 1 {
 		return errors.New("the peer's quote is not over this response")
+	}
+	return nil
+}
+
+// verifyOwnerSignature is unlock.verify_owner_signature: the response of the owner peer of a single-node host is
+// signed by one of the owner keys its boot configuration holds, Ed25519 over ownerResponseDomain and the response's
+// canonical bytes.
+func verifyOwnerSignature(raw json.RawMessage, keys []ed25519.PublicKey, canonical []byte) error {
+	var signature ownerSignature
+	if _, err := exactKeys(raw, []string{"alg", "key", "sig"}); err != nil {
+		return errors.New("the owner's signature is malformed")
+	}
+	if err := decodeReply(raw, &signature); err != nil {
+		return errors.New("the owner's signature is malformed")
+	}
+	key, err1 := lowerHex(signature.Key)
+	sig, err2 := lowerHex(signature.Sig)
+	switch {
+	case signature.Alg != "ed25519":
+		return errors.New("the owner's response is not signed with ed25519")
+	case err1 != nil || err2 != nil || len(key) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize:
+		return errors.New("the owner's signature is malformed")
+	}
+	known := false
+	for _, k := range keys {
+		if bytes.Equal(k, key) {
+			known = true
+		}
+	}
+	if !known {
+		return errors.New("the response is not signed by one of the owner_keys the boot configuration holds")
+	}
+	if !ed25519.Verify(ed25519.PublicKey(key), append([]byte(ownerResponseDomain), canonical...), sig) {
+		return errors.New("the owner's signature does not verify over this response")
 	}
 	return nil
 }
