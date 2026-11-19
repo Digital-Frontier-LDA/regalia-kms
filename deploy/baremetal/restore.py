@@ -216,11 +216,19 @@ class NotDurable(OSError):
 
 
 def _state(host, unit):
-    """`unit`'s state as systemctl reads it back now: "running", "stopped", or "unknown" (the read itself failed)."""
+    """`unit`'s state as systemctl reads it back now, by the state it prints and not its exit code alone (is-active exits 3
+    for "activating" and "deactivating" too): "running" (active), "stopped" (inactive or failed), or "unknown", with the
+    state systemctl gave, for anything in between or a read that failed."""
     try:
-        return "running" if _active(host, unit) else "stopped"
-    except (Refused, subprocess.SubprocessError, OSError):
-        return "unknown"
+        done = host.run(["systemctl", "is-active", unit])
+    except (subprocess.SubprocessError, OSError):
+        return "unknown (is-active could not be run)"
+    state = (done.stdout or "").strip()
+    if done.returncode == 0 and state == "active":
+        return "running"
+    if done.returncode == 3 and state in ("inactive", "failed"):
+        return "stopped"
+    return "unknown (%s)" % (membership.printable(state, 40) or "exit %d" % done.returncode)
 
 
 def _first_steps_back(host, error, live=True):

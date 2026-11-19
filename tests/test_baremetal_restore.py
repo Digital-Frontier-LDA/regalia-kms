@@ -79,6 +79,7 @@ class FakeHost:
         self.sha = SNAPSHOT_SHA
         self.restore_fails = self.txn_lies = self.exchange_lies = self.exchange_fails = self.not_durable = self.restore_hangs = False
         self.start_fails = False
+        self.transitional = {}                  # unit: a state is-active prints with exit 3 that is not "stopped"
         self.staging_exists = False
 
     # the host's files
@@ -126,6 +127,8 @@ class FakeHost:
     def run(self, argv, input=None):
         self.calls.append(argv)
         if argv[:2] == ["systemctl", "is-active"]:
+            if argv[2] in self.transitional:
+                return self.done(3, self.transitional[argv[2]] + "\n")
             up = self.daemon if argv[2] == rs.DAEMON else self.etcd
             return self.done(0 if up else 3, "active" if up else "inactive")
         if argv[:2] == ["systemctl", "show"]:
@@ -333,6 +336,20 @@ class Restore(unittest.TestCase):
                      % (rs.DAEMON, rs.DAEMON, rs.UNIT, rs.DAEMON))
         self.assertTrue(self.host.etcd)
         self.assertFalse(self.host.daemon)
+
+    def test_a_unit_still_changing_state_is_reported_unknown_not_stopped(self):
+        """is-active exits 3 for "activating" too: the state it prints is read (CodeRabbit on #740)."""
+        self.host.restore_fails = True
+        self.host.start_fails = (rs.DAEMON,)
+        real_run = self.host.run
+
+        def run(argv, input=None):
+            done = real_run(argv, input)
+            if argv[:2] == ["systemctl", "start"] and argv[-1] == rs.DAEMON:
+                self.host.transitional[rs.DAEMON] = "activating"     # its start timed out; systemd is still starting it
+            return done
+        self.host.run = run
+        self.refused("as read back, %s running, %s unknown (activating)" % (rs.UNIT, rs.DAEMON))
 
     def test_with_etcd_stopped_the_live_store_is_read_all_the_same(self):
         """etcd stopped and the live store there: etcd is started on it for the read, and an unraised epoch is refused."""
