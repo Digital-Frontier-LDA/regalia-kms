@@ -38,6 +38,12 @@ THE NODE, at its console, by root (`run`). Each step is refused unless the one b
   8. THE DAEMON ONLY ON A RAISED EPOCH: etcd restarted on its normal configuration, the drop-in read back absent, the
      state epoch read back from the live store; only if it is R is the daemon started.
 
+THE LIVE STORE'S EPOCH. R must also raise the epoch the live store holds, read before anything stops (etcd is started
+on it for the read if it was stopped; a store etcd will not start on is refused). Only when the live store is gone (the
+lost disk) is it not read: then the statement's floor stands for it, and a statement is single-use BY PROCEDURE. The owner
+keeps it off the node until the restore and destroys it after (sign-statement writes it with O_EXCL; the ledger issues
+each R once); its window is at most a day; and the collector's spend audit detects a history replayed under one epoch.
+
 A crash or a refusal from step 5 on leaves the daemon stopped. A reboot drops the drop-in, and etcd comes back on the
 live directory: the old store before step 7, the restored one holding R after it. A second run refuses while STAGING
 exists: the operator looks at it first.
@@ -209,27 +215,44 @@ class NotDurable(OSError):
     whether the rename survives a power loss is not known."""
 
 
-def _first_steps_back(host, error):
-    """Before etcd runs on staging, a refusal (or a command that timed out, or a file error) starts etcd and the daemon
-    again on the live store, untouched, as they were. The refusal stays the one raised; a start that fails too is
-    added to it, never in its place."""
+def _state(host, unit):
+    """`unit`'s state as systemctl reads it back now: "running", "stopped", or "unknown" (the read itself failed)."""
     try:
-        _start(host, UNIT, DAEMON)
-    except (Refused, subprocess.SubprocessError, OSError) as again:
-        raise Refused("%s; and starting %s and %s again failed too (%s): both are stopped, the live store is untouched, and "
-                      "%s is kept for inspection" % (_reason(error), UNIT, DAEMON, _reason(again), STAGING)) from error
+        return "running" if _active(host, unit) else "stopped"
+    except (Refused, subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
+def _first_steps_back(host, error, live=True):
+    """Before etcd runs on staging, a refusal (or a command that timed out, or a file error) starts etcd and the daemon
+    again on the live store, untouched, as they were (etcd only when there is a live store: never a new empty cluster).
+    The refusal stays the one raised; a start that fails is added to it, with each unit's state as read back."""
+    failed = []
+    for unit in ((UNIT, DAEMON) if live else (DAEMON,)):
+        try:
+            _start(host, unit)
+        except (Refused, subprocess.SubprocessError, OSError) as again:
+            failed.append("%s: %s" % (unit, _reason(again)))
+    if failed:
+        states = ", ".join("%s %s" % (unit, _state(host, unit)) for unit in (UNIT, DAEMON))
+        raise Refused("%s; and starting again failed (%s): as read back, %s; the live store is untouched and %s is kept for "
+                      "inspection" % (_reason(error), "; ".join(failed), states, STAGING)) from error
     if isinstance(error, Refused):
         raise error
-    raise Refused("%s; %s and %s are started again on the untouched live store" % (_reason(error), UNIT, DAEMON)) from error
+    raise Refused("%s; started again on the untouched live store: %s" % (_reason(error), ", ".join(
+        "%s %s" % (unit, _state(host, unit)) for unit in (UNIT, DAEMON)))) from error
 
 
-def _off_staging(host, error):
+def _off_staging(host, error, live=True):
     """Once etcd ran on staging and before the exchange, a refusal puts etcd back on the live store: stopped, the drop-in
     and its configuration removed, systemd reloaded, started on its normal configuration. The daemon stays stopped and
     STAGING is kept for inspection. The refusal stays the one raised; a step that fails is added to it."""
     failed = []
-    for step in (lambda: takeover._stop(host, UNIT), lambda: host.remove(DROPIN), lambda: host.remove(RESTORE_CONFIG),
-                 lambda: _start(host, UNIT, verb="restart")):
+    steps = [lambda: takeover._stop(host, UNIT), lambda: host.remove(DROPIN), lambda: host.remove(RESTORE_CONFIG),
+             lambda: host.run(["systemctl", "daemon-reload"])]
+    if live:                                    # never restart etcd onto a missing live store: it would form an empty cluster
+        steps.append(lambda: _start(host, UNIT, verb="restart"))
+    for step in steps:
         try:
             step()
         except (Refused, subprocess.SubprocessError, OSError) as again:
@@ -237,6 +260,9 @@ def _off_staging(host, error):
     if failed:
         raise Refused("%s; and putting etcd back on its live store failed (%s): remove %s, reload systemd and restart %s by hand; "
                       "the daemon is stopped" % (_reason(error), "; ".join(failed), DROPIN, UNIT)) from error
+    if not live:
+        raise Refused("%s; etcd is left stopped (there is no live store to put it back on) and so is the daemon; %s is kept"
+                      % (_reason(error), STAGING)) from error
     raise Refused("%s; etcd is back on its live store, the daemon is left stopped (start %s once %s has been looked at)"
                   % (_reason(error), DAEMON, STAGING)) from error
 
@@ -280,8 +306,18 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
     staged = staged_config(config_text)
     for path in (STAGING, VERIFIED_SNAPSHOT):
         require(not host.exists(path), "%s exists, left by an earlier restore: look at it, move it away, then run again" % path)
-    # 2b. the live store's state epoch, while etcd still runs on it: R must raise it too, not only the snapshot's
-    if _active(host, UNIT):
+    # 2b. the live store's state epoch: R must raise it too, not only the snapshot's. Read whenever the store exists, etcd
+    # started on it for the read if it was stopped; only a store that is gone (the lost disk) is not read
+    live_exists = host.exists(MEMBER)
+    if live_exists:
+        if not _active(host, UNIT):
+            try:
+                _start(host, UNIT)
+            except (Refused, subprocess.SubprocessError, OSError) as error:
+                raise Refused("the live store %s exists and etcd does not start on it (%s): its state epoch cannot be read, so the "
+                              "statement cannot be shown to raise it. If that store is lost, move it away (the lost-disk case) "
+                              "and run again" % (MEMBER, _reason(error))) from None
+            say("etcd started on the live store to read its state epoch")
         live_cluster, _ = one_member(host, node_id)
         _, live = held_epoch(host, chain, live_cluster)
         live_held = live["state_epoch"] if live is not None else 0
@@ -289,8 +325,8 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
                 "is stopped (the owner issues a new statement)" % (live_held, epoch))
         say("the live store holds state epoch %d" % live_held)
     else:
-        say("etcd is not running: the live store's state epoch is not read; the statement's floor (the collector's and the owner's "
-            "ledger's) stands for it")
+        say("there is no live store (%s): the lost-disk case. The statement's floor (the collector's highest and the owner's "
+            "ledger's) stands for its state epoch; the statement is single-use by procedure (module docstring)" % MEMBER)
     # 3. the daemon, then etcd; 4. the snapshot, verified as it is copied, restored into staging
     say("%s stopped (%s)" % (DAEMON, takeover._stop(host, DAEMON)))
     try:
@@ -305,7 +341,7 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
         done = host.run(["chown", "-R", "--no-dereference", "%s:%s" % (ETCD_USER, ETCD_USER), STAGING])
         require(done.returncode == 0, "chown of %s failed (%d)" % (STAGING, done.returncode))
     except (Refused, subprocess.SubprocessError, OSError) as error:
-        _first_steps_back(host, error)
+        _first_steps_back(host, error, live=live_exists)
     say("the snapshot is restored into %s; the live store is untouched" % STAGING)
     facts.update(staged=True)
     # 5. etcd on the staging store; 6. the raise. A refusal from here puts etcd back on the live store, the daemon stopped
@@ -336,7 +372,7 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
         host.remove(DROPIN)
         host.remove(RESTORE_CONFIG)
     except (Refused, subprocess.SubprocessError, OSError) as error:
-        _off_staging(host, error)
+        _off_staging(host, error, live=live_exists)
     try:
         how = host.exchange(STAGING + "/member", MEMBER)
     except NotDurable as error:

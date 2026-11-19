@@ -98,6 +98,8 @@ class FakeHost:
             return self.staging is not None or self.staging_exists
         if path in (rs.DROPIN, rs.VERIFIED_SNAPSHOT):
             return path in self.files
+        if path == rs.MEMBER:
+            return self.live is not None
         raise AssertionError(path)
 
     def copy_verified(self, source, copy):
@@ -132,7 +134,7 @@ class FakeHost:
             verb, unit = argv[1], argv[-1]
             if verb == "daemon-reload":
                 return self.done()
-            if self.start_fails and verb != "stop":
+            if (self.start_fails is True or unit in (self.start_fails or ())) and verb != "stop":
                 return self.done(1)
             if unit == rs.DAEMON:
                 self.daemon = verb != "stop"
@@ -291,11 +293,18 @@ class Restore(unittest.TestCase):
                 self.assertTrue(self.host.daemon and self.host.etcd)
                 self.assertNotIn(["systemctl", "stop", rs.DAEMON], self.host.calls)
 
-    def test_with_etcd_down_the_live_epoch_is_not_read_and_the_floor_stands_for_it(self):
+    def test_with_etcd_down_it_is_started_on_the_live_store_to_read_its_epoch(self):
         self.host.etcd, self.host.serving = False, None
         epoch, said = self.go()
         self.assertEqual(epoch, 3)
-        self.assertIn("etcd is not running: the live store's state epoch is not read", said)
+        self.assertIn("etcd started on the live store to read its state epoch", said)
+        self.assertIn("the live store holds state epoch 0", said)
+
+    def test_with_no_live_store_the_floor_stands_for_its_epoch(self):
+        self.host.live, self.host.etcd, self.host.serving = None, False, None
+        epoch, said = self.go()
+        self.assertEqual(epoch, 3)
+        self.assertIn("there is no live store (%s): the lost-disk case" % rs.MEMBER, said)
 
     def test_a_drop_in_left_by_an_earlier_run_is_refused_before_anything_stops(self):
         self.host.files[rs.DROPIN] = rs.dropin()
@@ -311,8 +320,40 @@ class Restore(unittest.TestCase):
     def test_a_restart_that_fails_too_is_added_to_the_refusal(self):
         self.host.restore_fails = True
         self.host.start_fails = True
-        self.refused("etcdutl snapshot restore failed (1): snapshot file has wrong CRC; and starting %s and %s again failed too"
-                     % (rs.UNIT, rs.DAEMON))
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+        self.assertIn("etcdutl snapshot restore failed (1): snapshot file has wrong CRC; and starting again failed (", str(caught.exception))
+        self.assertIn("as read back, %s stopped, %s stopped" % (rs.UNIT, rs.DAEMON), str(caught.exception))
+
+    def test_a_partial_restart_says_each_unit_s_state_as_read_back(self):
+        """etcd comes back and the daemon does not: the refusal says so, never "both stopped" (CodeRabbit on #740)."""
+        self.host.restore_fails = True
+        self.host.start_fails = (rs.DAEMON,)
+        self.refused("and starting again failed (%s: systemctl start %s failed (1)): as read back, %s running, %s stopped"
+                     % (rs.DAEMON, rs.DAEMON, rs.UNIT, rs.DAEMON))
+        self.assertTrue(self.host.etcd)
+        self.assertFalse(self.host.daemon)
+
+    def test_with_etcd_stopped_the_live_store_is_read_all_the_same(self):
+        """etcd stopped and the live store there: etcd is started on it for the read, and an unraised epoch is refused."""
+        self.host.etcd, self.host.serving = False, None
+        self.host.live.kv = held(self.chain, 3, revision_before=4999, mod_revision=5000)
+        self.refused("REFUSED: the live store holds state epoch 3, and the statement's 3 does not raise it: nothing is stopped")
+        self.assertIn(["systemctl", "start", rs.UNIT], self.host.calls)
+        self.assertNotIn(["systemctl", "stop", rs.DAEMON], self.host.calls)
+
+    def test_a_live_store_etcd_will_not_start_on_is_refused(self):
+        self.host.etcd, self.host.serving = False, None
+        self.host.start_fails = (rs.UNIT,)
+        self.refused("the live store %s exists and etcd does not start on it" % rs.MEMBER)
+        self.assertNotIn(["systemctl", "stop", rs.DAEMON], self.host.calls)
+
+    def test_with_no_live_store_a_refusal_never_starts_etcd_on_an_empty_directory(self):
+        self.host = FakeHost(self.chain, snapshot_kv=held(self.chain, 3))
+        self.host.live, self.host.etcd, self.host.serving = None, False, None
+        self.refused("etcd is left stopped (there is no live store to put it back on) and so is the daemon")
+        self.assertFalse(self.host.etcd)
+        self.assertNotIn(["systemctl", "restart", rs.UNIT], self.host.calls)
 
     def test_a_window_that_ends_before_the_entry_is_written_is_refused(self):
         with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):

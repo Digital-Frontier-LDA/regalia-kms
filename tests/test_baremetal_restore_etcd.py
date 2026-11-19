@@ -185,15 +185,18 @@ class RestoreRealEtcd(unittest.TestCase):
         self.assertEqual(self.host.ctl("put", opstate.STATE_EPOCH_KEY, json.dumps(value, sort_keys=True, separators=(",", ":"))).returncode, 0)
         sha = self.save()
         self.after()
-        self.host.stop()                  # the lost disk: etcd is down, so only the snapshot's own epoch can be read
+        # the lost disk: etcd down and its member directory gone, so only the snapshot's own epoch can be read
+        self.host.stop()
+        os.rename(os.path.join(self.root, "data", "member"), os.path.join(self.root, "lost-member"))
         with self.assertRaises(rs.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
             rs.run(self.host, statement(self.chain, epoch=3, floor=2, sha=sha), self.chain, "a", self.snapshot, NOW, sign)
         self.assertIn("the restored store holds state epoch 3, and the statement's 3 does not raise it: the daemon is not started",
                       str(caught.exception))
         self.assertFalse(self.host.daemon)
-        # etcd is back on its live store, untouched: it holds the history after the snapshot; staging is kept
+        # with no live store, etcd is left stopped (never a new empty cluster), the drop-in gone, staging kept
+        self.assertNotIn("a", self.host.procs)
         self.assertNotIn(rs.DROPIN, self.host.files)
-        self.assertEqual(self.keys(), ["/regalia/v1/k%d" % i for i in range(9)])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "data", "member")))
         self.assertTrue(os.path.isdir(os.path.join(self.root, "data", "restore", "member")))
         self.assertFalse(os.path.exists(os.path.join(self.root, "data", "restore.snapshot")))
 

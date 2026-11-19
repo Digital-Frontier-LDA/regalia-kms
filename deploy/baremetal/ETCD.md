@@ -63,7 +63,14 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     /var/lib/regalia-etcd/restore/member" when a live member directory existed (the two were exchanged: the old store
     is kept for the operator to inspect, then remove), or "there was no live store to replace" when it did not (a
     replacement disk: the staging directory was renamed into place, and nothing is kept).
-  - A refusal before the swap leaves the live store untouched. Before etcd ran on staging, both units are started again
+  - The statement must raise the **live** store's epoch too, read before anything stops. If etcd is stopped, it is started
+    on the live store for the read, and a store it will not start on is refused. Only when the live member directory is
+    gone (the lost disk) is no live epoch read; then the statement's floor stands for it, and the statement is single-use
+    **by procedure**. The owner keeps it off the node until the restore and destroys it afterwards. `sign-statement`
+    writes it with `O_EXCL`, and the ledger issues each epoch once. Its window is at most a day, and the collector's
+    spend audit detects a history replayed under one epoch.
+  - A refusal before the swap leaves the live store untouched. With no live store, etcd is never restarted onto the
+    empty directory. Before etcd ran on staging, both units are started again
     as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
     directory is kept for inspection, and a new run refuses until it is moved away.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
