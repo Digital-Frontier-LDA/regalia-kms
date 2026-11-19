@@ -55,6 +55,7 @@ class RealSingle(rs.Host):
             if self.ctl("endpoint", "status").returncode == 0:
                 return
             time.sleep(0.2)
+        self.stop()                                        # never leave a child behind a failed start
         raise AssertionError("etcd never answered")
 
     def stop(self):
@@ -81,14 +82,21 @@ class RealSingle(rs.Host):
     def write(self, path, text, owner=None, mode=0o644):
         self.files[path] = text
 
-    def remove(self, path):
-        self.files.pop(path, None)
-
     def exists(self, path):
+        if path in (rs.DROPIN, rs.RESTORE_CONFIG):           # played in memory, as systemctl is
+            return path in self.files
         return super().exists(self.path(path))
 
+    def remove(self, path):
+        self.files.pop(path, None)
+        if path == rs.VERIFIED_SNAPSHOT and os.path.lexists(self.path(path)):
+            os.unlink(self.path(path))
+
+    def copy_verified(self, source, copy):
+        return super().copy_verified(source, self.path(copy))
+
     def exchange(self, staged, live):
-        super().exchange(self.path(staged), self.path(live))
+        return super().exchange(self.path(staged), self.path(live))
 
     def run(self, argv, input=None):
         if argv[0] == "systemctl" and argv[-1] == rs.DAEMON:
@@ -182,11 +190,21 @@ class RestoreRealEtcd(unittest.TestCase):
         self.assertIn("the restored store holds state epoch 3, and the statement's 3 does not raise it: the daemon is not started",
                       str(caught.exception))
         self.assertFalse(self.host.daemon)
-        # the live store is the one it was: reboot (the drop-in in /run is gone) and it holds the history after the snapshot
-        self.host.files.pop(rs.DROPIN, None)
-        self.host.stop()
-        self.host.start()
+        # etcd is back on its live store, untouched: it holds the history after the snapshot; staging is kept
+        self.assertNotIn(rs.DROPIN, self.host.files)
         self.assertEqual(self.keys(), ["/regalia/v1/k%d" % i for i in range(9)])
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "data", "restore", "member")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "data", "restore.snapshot")))
+
+    def test_a_live_store_that_already_holds_the_epoch_is_refused_before_anything_stops(self):
+        sha = self.save()
+        first, _ = self.restore(statement(self.chain, epoch=1, floor=0, sha=sha))
+        self.assertEqual(first, 1)
+        shutil.rmtree(os.path.join(self.root, "data", "restore"))       # the operator moved the old store away
+        with self.assertRaises(rs.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, statement(self.chain, epoch=1, floor=0, sha=sha), self.chain, "a", self.snapshot, NOW, sign)
+        self.assertIn("the live store holds state epoch 1, and the statement's 1 does not raise it: nothing is stopped", str(caught.exception))
+        self.assertTrue(self.host.daemon)
 
 
 if __name__ == "__main__":

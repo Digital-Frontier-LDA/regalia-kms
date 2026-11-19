@@ -282,11 +282,18 @@ doc["boot_mesh"]["owner"] = {"underlay": "198.18.0.50", "address": "10.89.0.9"}
 doc["service_mesh"] = None
 json.dump(doc, sys.stdout)
 PY
-python3 -Es "$BM/firewall.py" "$T/site-single.json" > "$T/single.nft" && x kms nft -c -f "$T/single.nft" \
-  && P "the single-node ruleset renders and passes nft -c (no rule over an empty peer set)" || F "the single-node ruleset did not render or nft -c refused it"
+if python3 -Es "$BM/firewall.py" "$T/site-single.json" > "$T/single.nft" && x kms nft -c -f "$T/single.nft"; then
+  P "the single-node ruleset renders and passes nft -c (no rule over an empty peer set)"
+else
+  F "the single-node ruleset did not render or nft -c refused it"
+fi
 if grep -qE 'udp dport 5182[01]|wg-unlock|wg-svc' "$T/single.nft"; then F "the single-node ruleset opens a mesh port"; else P "it opens no boot-mesh and no service-mesh port"; fi
-x kms nft flush ruleset >/dev/null 2>&1; x kms nft -f "$T/single.nft" && tcpok client "${IP[kms]}" 8443 \
-  && P "loaded inside the KMS namespace, the KMS port still answers a client" || F "the single-node ruleset did not load, or the KMS port no longer answers"
+x kms nft flush ruleset >/dev/null 2>&1
+if x kms nft -f "$T/single.nft" && tcpok client "${IP[kms]}" 8443; then
+  P "loaded inside the KMS namespace, the KMS port still answers a client"
+else
+  F "the single-node ruleset did not load, or the KMS port no longer answers"
+fi
 
 echo; echo "baremetal-firewall-netns: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

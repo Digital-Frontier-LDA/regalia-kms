@@ -170,7 +170,10 @@ func ReadSite(raw []byte) (Site, error) {
 	if doc["boot_mesh"] == nil {
 		return site, refuse("no-mesh", "regalia.site: boot_mesh must not be null")
 	}
-	return site, readMesh(doc["boot_mesh"], host, &site)
+	// readMesh fills site (its Owner too) before site is read for the return: in one return statement the order of the
+	// two is unspecified (CodeRabbit on #740)
+	err = readMesh(doc["boot_mesh"], host, &site)
+	return site, err
 }
 
 // readMesh is sitecfg._boot_mesh, in the context read_site gives it (no KMS or SSH port, no zones).

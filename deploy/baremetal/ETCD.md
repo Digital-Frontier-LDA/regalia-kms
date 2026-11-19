@@ -59,6 +59,13 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
   the state-epoch entry carrying the statement (`opstate.verify_restore`, in Python and Go), and exchanges the staging and
   live member directories in one `renameat2(RENAME_EXCHANGE)`. The daemon starts only once the live store holds the raised
   epoch. A statement that does not raise the store's epoch is refused, and the daemon stays stopped.
+  - **Two outcomes of the swap**, which the run says on stdout: "the store it replaced is kept in
+    /var/lib/regalia-etcd/restore/member" when a live member directory existed (the two were exchanged: the old store
+    is kept for the operator to inspect, then remove), or "there was no live store to replace" when it did not (a
+    replacement disk: the staging directory was renamed into place, and nothing is kept).
+  - A refusal before the swap leaves the live store untouched. Before etcd ran on staging, both units are started again
+    as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
+    directory is kept for inspection, and a new run refuses until it is moved away.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
 
 ## The disks: an fdatasync measurement plan for the DL360s (before production)

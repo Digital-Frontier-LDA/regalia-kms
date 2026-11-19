@@ -43,9 +43,11 @@ live directory: the old store before step 7, the restored one holding R after it
 exists: the operator looks at it first.
 """
 import argparse
+import fcntl
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -59,6 +61,8 @@ DROPIN = takeover.DROPIN_DIR + "/50-restore.conf"
 RESTORE_CONFIG = "/run/regalia-etcd/restore.conf.yml"
 STAGING = etcdconf.DATA_DIR + "/restore"              # inside the unit's StateDirectory: etcd may write there, nobody else
 MEMBER = etcdconf.DATA_DIR + "/member"
+# the snapshot as hashed: copied while its digest is computed, and only this copy is restored (never the path again)
+VERIFIED_SNAPSHOT = etcdconf.DATA_DIR + "/restore.snapshot"
 ETCD_USER = takeover.ETCD_USER
 SKEW_S = heartbeat.FUTURE_SKEW
 LEDGER_SCHEMA = "regalia.restore-ledger/v1"
@@ -98,20 +102,32 @@ class Ledger:
         return doc
 
     def issue(self, cluster, floor):
-        """R above `floor` and above every epoch issued for `cluster`, recorded; returns (R, the floor used)."""
-        doc = self.read()
-        issued = doc["clusters"].get(cluster, [])
-        used = max([floor] + issued)
-        epoch = used + 1
-        doc["clusters"][cluster] = issued + [epoch]
-        tmp = self.path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(json.dumps(doc, sort_keys=True, indent=1) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self.path)
-        return epoch, used
+        """R above `floor` and above every epoch issued for `cluster`, recorded; returns (R, the floor used). The read, the
+        increment and the durable write (the file and its directory fsynced) are one step under an exclusive lock on
+        `path`.lock, released before the card is touched: a second signer waits, then reads R and issues R + 1."""
+        lock = os.open(self.path + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            doc = self.read()
+            issued = doc["clusters"].get(cluster, [])
+            used = max([floor, *issued])
+            epoch = used + 1
+            doc["clusters"][cluster] = [*issued, epoch]
+            tmp = self.path + ".tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(json.dumps(doc, sort_keys=True, indent=1) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+            directory = os.open(os.path.dirname(os.path.abspath(self.path)), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory)                  # the rename survives a power loss before anything is signed
+            finally:
+                os.close(directory)
+            return epoch, used
+        finally:
+            os.close(lock)                           # the lock goes with the descriptor
 
 
 def statement_body(chain, node_id, snapshot_sha256, epoch, floor, now, life_s=6 * 3600):
@@ -188,11 +204,61 @@ def held_epoch(host, chain, cluster_id):
     return takeover.current_state_epoch(host, chain, cluster_id)
 
 
-def run(host, signed, chain, node_id, snapshot, now, sign, facts=None):
-    """The restore (module docstring) on `host` (takeover.Host's interface, and sha256(path)). `chain`: the verified
-    membership chain, oldest first. `snapshot`: the snapshot file's path. `sign(raw)`: r || s hex by this node's signing
-    key. Returns the state epoch the store holds when the daemon starts."""
+class NotDurable(OSError):
+    """The exchange's rename completed, and the fsync of its directory after it did not: the restored store is live, and
+    whether the rename survives a power loss is not known."""
+
+
+def _first_steps_back(host, error):
+    """Before etcd runs on staging, a refusal (or a command that timed out, or a file error) starts etcd and the daemon
+    again on the live store, untouched, as they were. The refusal stays the one raised; a start that fails too is
+    added to it, never in its place."""
+    try:
+        _start(host, UNIT, DAEMON)
+    except (Refused, subprocess.SubprocessError, OSError) as again:
+        raise Refused("%s; and starting %s and %s again failed too (%s): both are stopped, the live store is untouched, and "
+                      "%s is kept for inspection" % (_reason(error), UNIT, DAEMON, _reason(again), STAGING)) from error
+    if isinstance(error, Refused):
+        raise error
+    raise Refused("%s; %s and %s are started again on the untouched live store" % (_reason(error), UNIT, DAEMON)) from error
+
+
+def _off_staging(host, error):
+    """Once etcd ran on staging and before the exchange, a refusal puts etcd back on the live store: stopped, the drop-in
+    and its configuration removed, systemd reloaded, started on its normal configuration. The daemon stays stopped and
+    STAGING is kept for inspection. The refusal stays the one raised; a step that fails is added to it."""
+    failed = []
+    for step in (lambda: takeover._stop(host, UNIT), lambda: host.remove(DROPIN), lambda: host.remove(RESTORE_CONFIG),
+                 lambda: _start(host, UNIT, verb="restart")):
+        try:
+            step()
+        except (Refused, subprocess.SubprocessError, OSError) as again:
+            failed.append(_reason(again))
+    if failed:
+        raise Refused("%s; and putting etcd back on its live store failed (%s): remove %s, reload systemd and restart %s by hand; "
+                      "the daemon is stopped" % (_reason(error), "; ".join(failed), DROPIN, UNIT)) from error
+    raise Refused("%s; etcd is back on its live store, the daemon is left stopped (start %s once %s has been looked at)"
+                  % (_reason(error), DAEMON, STAGING)) from error
+
+
+def _active(host, unit):
+    """Whether `unit` runs (systemctl is-active: 0), or not (3); anything else is a refusal, never read as either."""
+    done = host.run(["systemctl", "is-active", unit])
+    require(done.returncode in (0, 3), "systemctl is-active %s failed (%d)" % (unit, done.returncode))
+    return done.returncode == 0
+
+
+def _reason(error):
+    return str(error) if isinstance(error, Refused) else "%s: %s" % (type(error).__name__, error)
+
+
+def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=None):
+    """The restore (module docstring) on `host` (takeover.Host's interface, and exists, copy_verified, exchange). `chain`:
+    the verified membership chain, oldest first. `snapshot`: the snapshot file's path. `now`: authenticated unix seconds;
+    `clock()`: a fresh authenticated reading for the entry's issued_at (default: `now`). `sign(raw)`: r || s hex by this
+    node's signing key. Returns the state epoch the store holds when the daemon starts."""
     facts = {} if facts is None else facts
+    clock = clock or (lambda: now)
     current = chain[-1]
     # 1. the statement
     require(membership.profile(current) == membership.SINGLE_NODE, "an etcd restore is refused under the %s profile (epoch %d): a "
@@ -205,60 +271,86 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None):
     require(start - SKEW_S <= now < end, "the restore statement is valid from %s to %s, not now" % (statement["not_before"], statement["expires_at"]))
     epoch = statement["state_epoch"]
     say("the owner's restore statement to state epoch %d (above the floor %d) holds" % (epoch, statement["floor"]))
-    # 2. the snapshot and the configuration
-    require(host.sha256(snapshot) == statement["snapshot_sha256"], "the snapshot %s is not the one the statement names" % snapshot)
+    # 2. nothing left over, and the configuration
+    require(not host.exists(DROPIN), "%s is still in place: an earlier restore stopped part way. Put etcd back on its live store "
+            "first (remove it and %s, reload systemd, restart %s)" % (DROPIN, RESTORE_CONFIG, UNIT))
     config_text = host.read(etcdconf.CONFIG_PATH)
     config = etcdconf.check(config_text, membership.SINGLE_NODE)
     require(config["name"] == node_id, "etcd's configuration is %s's, not %s's" % (config["name"], node_id))
     staged = staged_config(config_text)
-    require(not host.exists(STAGING), "%s exists, left by an earlier restore: look at it, move it away, then run again" % STAGING)
-    # 3. the daemon, then etcd
+    for path in (STAGING, VERIFIED_SNAPSHOT):
+        require(not host.exists(path), "%s exists, left by an earlier restore: look at it, move it away, then run again" % path)
+    # 2b. the live store's state epoch, while etcd still runs on it: R must raise it too, not only the snapshot's
+    if _active(host, UNIT):
+        live_cluster, _ = one_member(host, node_id)
+        _, live = held_epoch(host, chain, live_cluster)
+        live_held = live["state_epoch"] if live is not None else 0
+        require(epoch > live_held, "REFUSED: the live store holds state epoch %d, and the statement's %d does not raise it: nothing "
+                "is stopped (the owner issues a new statement)" % (live_held, epoch))
+        say("the live store holds state epoch %d" % live_held)
+    else:
+        say("etcd is not running: the live store's state epoch is not read; the statement's floor (the collector's and the owner's "
+            "ledger's) stands for it")
+    # 3. the daemon, then etcd; 4. the snapshot, verified as it is copied, restored into staging
     say("%s stopped (%s)" % (DAEMON, takeover._stop(host, DAEMON)))
     try:
         say("etcd stopped (%s)" % takeover._stop(host, UNIT))
-        # 4. the restore, into staging
+        digest = host.copy_verified(snapshot, VERIFIED_SNAPSHOT)
+        require(digest == statement["snapshot_sha256"], "the snapshot %s is not the one the statement names" % snapshot)
         url = config["initial-advertise-peer-urls"]
-        done = host.run([ETCDUTL, "snapshot", "restore", snapshot, "--data-dir", STAGING, "--name", node_id, "--initial-cluster",
+        done = host.run([ETCDUTL, "snapshot", "restore", VERIFIED_SNAPSHOT, "--data-dir", STAGING, "--name", node_id, "--initial-cluster",
                          config["initial-cluster"], "--initial-cluster-token", config["initial-cluster-token"], "--initial-advertise-peer-urls", url])
         require(done.returncode == 0, "etcdutl snapshot restore failed (%d): %s" % (done.returncode, (done.stderr or done.stdout or "").strip()[-300:]))
+        host.remove(VERIFIED_SNAPSHOT)
         done = host.run(["chown", "-R", "--no-dereference", "%s:%s" % (ETCD_USER, ETCD_USER), STAGING])
         require(done.returncode == 0, "chown of %s failed (%d)" % (STAGING, done.returncode))
-    except Refused:
-        _start(host, UNIT, DAEMON)
-        raise
+    except (Refused, subprocess.SubprocessError, OSError) as error:
+        _first_steps_back(host, error)
     say("the snapshot is restored into %s; the live store is untouched" % STAGING)
     facts.update(staged=True)
-    # 5. etcd on the staging store. From here a refusal leaves the daemon stopped
-    host.write(RESTORE_CONFIG, staged, owner=ETCD_USER, mode=0o600)
-    host.write(DROPIN, dropin())
-    _start(host, UNIT)
-    cluster_id, revision = one_member(host, node_id)
-    facts.update(cluster_id=cluster_id, revision_before=revision)
-    # 6. the raise
-    version, previous = held_epoch(host, chain, cluster_id)
-    held = previous["state_epoch"] if previous is not None else 0
-    require(epoch > held, "REFUSED: the restored store holds state epoch %d, and the statement's %d does not raise it: the daemon is not "
-            "started (the owner issues a new statement)" % (held, epoch))
-    entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": epoch, "node_id": node_id, "authorization": signed,
-             "cluster_id": cluster_id, "revision_before": revision, "issued_at": stamp(now)}
-    value = {"entry": entry, "signature": sign(opstate.state_epoch_message(entry))}
-    opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, value, chain, previous)
-    require(takeover.put_state_epoch(host, value, version), "the state-epoch key changed while this ran: the daemon is not started")
-    _, now_held = held_epoch(host, chain, cluster_id)
-    require(now_held is not None and now_held["state_epoch"] == epoch, "the staging store does not hold state epoch %d after its write: "
-            "the daemon is not started" % epoch)
-    say("state epoch %d written over %d, the first write after revision %d" % (epoch, held, revision))
-    # 7. the exchange
-    takeover._stop(host, UNIT)
-    host.remove(DROPIN)
-    host.remove(RESTORE_CONFIG)
+    # 5. etcd on the staging store; 6. the raise. A refusal from here puts etcd back on the live store, the daemon stopped
     try:
-        host.exchange(STAGING + "/member", MEMBER)
+        host.write(RESTORE_CONFIG, staged, owner=ETCD_USER, mode=0o600)
+        host.write(DROPIN, dropin())
+        _start(host, UNIT)
+        cluster_id, revision = one_member(host, node_id)
+        facts.update(cluster_id=cluster_id, revision_before=revision)
+        version, previous = held_epoch(host, chain, cluster_id)
+        held = previous["state_epoch"] if previous is not None else 0
+        require(epoch > held, "REFUSED: the restored store holds state epoch %d, and the statement's %d does not raise it: the daemon is "
+                "not started (the owner issues a new statement)" % (held, epoch))
+        issued = clock()
+        require(start - SKEW_S <= issued < end, "the restore statement's window (%s to %s) ended before its entry was written: the "
+                "owner issues a new statement" % (statement["not_before"], statement["expires_at"]))
+        entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": epoch, "node_id": node_id, "authorization": signed,
+                 "cluster_id": cluster_id, "revision_before": revision, "issued_at": stamp(issued)}
+        value = {"entry": entry, "signature": sign(opstate.state_epoch_message(entry))}
+        opstate.verify_state_epoch(opstate.STATE_EPOCH_KEY, value, chain, previous)
+        require(takeover.put_state_epoch(host, value, version), "the state-epoch key changed while this ran: the daemon is not started")
+        _, now_held = held_epoch(host, chain, cluster_id)
+        require(now_held is not None and now_held["state_epoch"] == epoch, "the staging store does not hold state epoch %d after its write: "
+                "the daemon is not started" % epoch)
+        say("state epoch %d written over %d, the first write after revision %d" % (epoch, held, revision))
+        # 7. the exchange: etcd stopped and the drop-in removed first
+        takeover._stop(host, UNIT)
+        host.remove(DROPIN)
+        host.remove(RESTORE_CONFIG)
+    except (Refused, subprocess.SubprocessError, OSError) as error:
+        _off_staging(host, error)
+    try:
+        how = host.exchange(STAGING + "/member", MEMBER)
+    except NotDurable as error:
+        raise Refused("the restored store is live (%s), but the fsync of its directory failed (%s): whether the rename survives a power "
+                      "loss is not known. The daemon is not started; sync the file system, check %s, then start %s by hand"
+                      % (MEMBER, error, MEMBER, DAEMON)) from None
     except OSError as error:
         raise Refused("the exchange of %s/member and %s failed (%s): the live store is as it was; the daemon is not started"
                       % (STAGING, MEMBER, error)) from None
-    facts.update(exchanged=True)
-    say("the restored store is live; the store it replaced is kept in %s" % STAGING)
+    facts.update(exchanged=how)
+    if how == "exchanged":
+        say("the restored store is live; the store it replaced is kept in %s/member" % STAGING)
+    else:
+        say("the restored store is live; there was no live store to replace (%s/member is gone)" % STAGING)
     # 8. the daemon, only on a raised epoch
     _start(host, UNIT, verb="restart")
     require(not takeover.forcing(host) and not restoring(host), "%s still carries a drop-in after its removal: the daemon is not started" % UNIT)
@@ -293,31 +385,51 @@ class Host(takeover.Host):
 
     def exchange(self, staged, live):
         """`staged` becomes `live` in one rename: the two exchanged (renameat2 RENAME_EXCHANGE) when `live` exists, else
-        renamed into place; then their directory fsynced. Never a moment with no live directory."""
+        renamed into place; then their directories fsynced. Never a moment with no live directory. Returns "exchanged" or
+        "renamed"; an OSError means the rename did not happen, NotDurable that it did and a directory fsync failed."""
         import ctypes
         if os.path.lexists(live):
             libc = ctypes.CDLL(None, use_errno=True)
             if libc.renameat2(AT_FDCWD, os.fsencode(staged), AT_FDCWD, os.fsencode(live), RENAME_EXCHANGE) != 0:
                 code = ctypes.get_errno()
                 raise OSError(code, os.strerror(code), live)
+            how = "exchanged"
         else:
             os.rename(staged, live)
-        for directory in {os.path.dirname(staged), os.path.dirname(live)}:
-            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            how = "renamed"
+        try:
+            for directory in sorted({os.path.dirname(staged), os.path.dirname(live)}):
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except OSError as error:
+            raise NotDurable(error.errno, error.strerror, live) from error
+        return how
 
-    def sha256(self, path):
+    def copy_verified(self, source, copy):
+        """`source` copied to `copy` (new, 0600, fsynced) while its SHA-256 is computed: the digest of the very bytes the
+        copy holds, which is then what is restored, whatever happens to `source` afterwards."""
         h = hashlib.sha256()
         size = 0
-        with open(path, "rb") as f:
-            for block in iter(lambda: f.read(1024 * 1024), b""):
-                size += len(block)
-                require(size <= MAX_SNAPSHOT_BYTES, "the snapshot is over %d bytes" % MAX_SNAPSHOT_BYTES)
-                h.update(block)
+        fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            with open(source, "rb") as f, os.fdopen(fd, "wb", closefd=False) as out:
+                for block in iter(lambda: f.read(1024 * 1024), b""):
+                    size += len(block)
+                    require(size <= MAX_SNAPSHOT_BYTES, "the snapshot is over %d bytes" % MAX_SNAPSHOT_BYTES)
+                    h.update(block)
+                    out.write(block)
+                out.flush()
+                os.fsync(fd)
+        except BaseException:
+            os.close(fd)
+            os.unlink(copy)
+            raise
+        os.close(fd)
         return h.hexdigest()
+
 
 
 def main(argv=None, host=None, now=None, signer=None):
@@ -379,7 +491,12 @@ def main(argv=None, host=None, now=None, signer=None):
             from deploy.baremetal import signkey
             pem = host.read(signkey.PCR_PUBLIC_KEY_PATH).encode()
             signer = lambda raw: signkey.sign(raw, pem, node.tcti, node.run)  # noqa: E731
-        run(host, signed, chain, node.node_id, args.snapshot, now if now is not None else node.clock()(), signer)
+        def authenticated():
+            seconds, ok = node.clock()()
+            require(ok, "the time is not authenticated (authtime): a restore is dated by authenticated time only")
+            return int(seconds)
+        run(host, signed, chain, node.node_id, args.snapshot, now if now is not None else authenticated(), signer,
+            clock=None if now is not None else authenticated)
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1

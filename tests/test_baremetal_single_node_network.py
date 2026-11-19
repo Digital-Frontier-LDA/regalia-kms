@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import subprocess
 import unittest
+import unittest.mock
 
 import tests.test_baremetal_node as tn
 from deploy.baremetal import bootcreds, bootnet, firewall, membership as m, node, sitecfg, wgsvc
@@ -69,6 +70,13 @@ class SiteShape(Refuses):
         for reason, doc in cases:
             with self.subTest(reason):
                 self.refused(reason, sitecfg.validate, doc)
+
+    def test_the_owner_s_unlock_port_may_be_a_port_this_host_serves_and_a_peer_s_may_not(self):
+        """Nothing listens on unlock_port on a single-node host: it is the owner's port, at the owner's address."""
+        self.assertEqual(sitecfg.validate(single_site(unlock_port=8443))["boot_mesh"]["unlock_port"], 8443)
+        doc = multi_site()
+        doc["boot_mesh"]["unlock_port"] = 8443
+        self.refused("boot_mesh.unlock_port must differ from kms_port", sitecfg.validate, doc)
 
     def test_a_single_node_host_has_no_service_mesh(self):
         doc = single_site()
@@ -189,6 +197,27 @@ class SingleNodeHost(tn.Case):
         host, n = self.applying(manifest5(1, "", nodes4()))
         self.refused("the site configuration is for a single-node host and the manifest is multi-node", node.wg_apply, n)
         self.assertEqual([c for c in host.calls if c[0] in ("ip", "wg")], [])
+
+    def sync_for(self, manifest):
+        """node.Sync's pull round and run, on this node, with the store and the publication played."""
+        host, n = self.applying(manifest)
+        n.documents = lambda: None
+        s = object.__new__(node.Sync)
+        s.node, s.store, s.freshness, s.trail, s.published_calls = n, None, None, (lambda event: None), []
+        s.manifest = lambda: manifest
+        s.publish = lambda: s.published_calls.append(1) or True
+        return s
+
+    def test_a_round_with_no_peer_still_publishes_the_chain(self):
+        s = self.sync_for(single5(1, ""))
+        with unittest.mock.patch.object(node.sync, "Client"):
+            self.assertTrue(s.pull_round())
+        self.assertEqual(s.published_calls, [1])
+
+    def test_sync_refuses_a_site_of_the_other_profile_before_publishing_or_binding(self):
+        s = self.sync_for(manifest5(1, "", nodes4()))
+        self.refused("the site configuration is for a single-node host and the manifest is multi-node", s.run, lambda: True)
+        self.assertEqual(s.published_calls, [])
 
     def test_a_multi_node_site_still_needs_its_service_mesh(self):
         with open(self.cfg["site"], "w") as f:

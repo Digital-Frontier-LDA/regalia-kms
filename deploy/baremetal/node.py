@@ -1227,6 +1227,10 @@ class Sync:
                 applies = [e["epoch"] for e in seen if e.get("event") == "sync-apply"]
                 self.rounds.pulled(name, applies[0] if applies and applies[0] else None, now_at["epoch"])
             changed = self.publish() or changed
+        if not sources:
+            # dx7.6: a single-node host pulls from no peer; its chain is still published each round, so an epoch committed
+            # by hand (revoke import, deliver) whose publication failed is published again here, not only at a restart
+            changed = self.publish() or changed
         return changed
 
     def watch(self):
@@ -1234,7 +1238,13 @@ class Sync:
                                      self.node.path("heartbeat-watch.json"))
 
     def run(self, stop):
-        """Until `stop()`: the listeners in threads, then the pull loop and the watch in this one."""
+        """Until `stop()`: the listeners in threads, then the pull loop and the watch in this one. Refused, before anything is
+        published or bound, when the site's shape is not for the verified manifest's profile (dx7.6: a single-node boot mesh
+        only under single-node, node peers only under multi-node)."""
+        try:
+            sitecfg.require_profile(self.node.site, membership.profile(self.manifest()))
+        except sitecfg.InvalidSite as invalid:
+            raise Refused(str(invalid)) from None
         self.publish()
         mesh, svc = self.node.site["boot_mesh"], self.node.site["service_mesh"]
         listeners, threads = [], []

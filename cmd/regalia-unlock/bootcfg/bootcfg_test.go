@@ -18,7 +18,32 @@ func vector(t *testing.T) map[string]any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return document.(map[string]any)
+	v := document.(map[string]any)
+	v["manifests"] = restored(v["manifests"])
+	return v
+}
+
+// restored undoes the vector's composition (make-bootcreds-v1.py, composed): every "public" field of a manifest is "key"
+// again, as bootcreds.render was given it.
+func restored(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for k, item := range v {
+			if k == "public" {
+				k = "key"
+			}
+			out[k] = restored(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = restored(item)
+		}
+		return out
+	}
+	return value
 }
 
 // Every render of the vector, byte for byte as bootcreds.render gave it, and every refusal a refusal.
@@ -57,6 +82,22 @@ func TestEveryRenderIsTheSameBytes(t *testing.T) {
 	}
 	if rendered < 80 || refused < 20 {
 		t.Fatalf("%d rendered and %d refused", rendered, refused)
+	}
+}
+
+// A single-node regalia.site (dx7.6) reads back with its owner, the boot mesh's one peer, and no node peer.
+func TestASingleNodeSiteReadsItsOwner(t *testing.T) {
+	sites := vector(t)["sites"].(map[string]any)
+	site, err := ReadSite([]byte(sites["a, single-node"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Owner == nil || *site.Owner != (Peer{membership.OwnerParty, "203.0.113.50", "10.89.0.9"}) || len(site.Peers) != 0 {
+		t.Fatalf("the owner is %+v and the peers %v", site.Owner, site.Peers)
+	}
+	multi, err := ReadSite([]byte(sites["a"].(string)))
+	if err != nil || multi.Owner != nil || len(multi.Peers) != 2 {
+		t.Fatalf("a multi-node site reads as %+v (%v)", multi, err)
 	}
 }
 

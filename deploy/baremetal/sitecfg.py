@@ -212,7 +212,9 @@ def _boot_mesh(mesh, cfg):
     require(isinstance(mesh["interface"], str) and re.fullmatch(r"wg-[a-z0-9-]{1,12}", mesh["interface"]) and mesh["interface"] != "wg-boot",
             "boot_mesh.interface must be a WireGuard interface of its own, named wg-… (at most 15 characters, and not wg-boot, the initrd's)")
     listen, unlock = _port(mesh["listen_port"], "boot_mesh.listen_port"), _port(mesh["unlock_port"], "boot_mesh.unlock_port")
-    require(unlock not in (cfg["kms_port"], cfg["ssh_port"], NODE_EXPORTER_PORT),
+    # the host listens on unlock_port only as a node peer's unlock service; on a single-node host it is the owner's port, at
+    # the owner's address (dx7.6, CodeRabbit on #740), so the local conflict check is the node-peer mesh's alone
+    require(single or unlock not in (cfg["kms_port"], cfg["ssh_port"], NODE_EXPORTER_PORT),
             "boot_mesh.unlock_port must differ from kms_port, ssh_port and node_exporter's %d" % NODE_EXPORTER_PORT)
     out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
            "address": _address(mesh["address"], "boot_mesh.address"), "peers": []}

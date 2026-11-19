@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 from deploy.baremetal import etcdconf, membership as m, opstate, restore as rs, takeover as tk
 from tests.test_baremetal_etcdconf import GENESIS, bound
@@ -76,7 +77,8 @@ class FakeHost:
         self.serving = self.live
         self.members, self.cluster = ["a"], CLUSTER
         self.sha = SNAPSHOT_SHA
-        self.restore_fails = self.txn_lies = self.exchange_lies = self.exchange_fails = False
+        self.restore_fails = self.txn_lies = self.exchange_lies = self.exchange_fails = self.not_durable = self.restore_hangs = False
+        self.start_fails = False
         self.staging_exists = False
 
     # the host's files
@@ -94,12 +96,14 @@ class FakeHost:
     def exists(self, path):
         if path == rs.STAGING:
             return self.staging is not None or self.staging_exists
-        if path == rs.MEMBER:
-            return self.live is not None
+        if path in (rs.DROPIN, rs.VERIFIED_SNAPSHOT):
+            return path in self.files
         raise AssertionError(path)
 
-    def sha256(self, path):
-        assert path == SNAPSHOT, path
+    def copy_verified(self, source, copy):
+        assert (source, copy) == (SNAPSHOT, rs.VERIFIED_SNAPSHOT), (source, copy)
+        self.calls.append(["copy", source, copy])
+        self.files[copy] = "the snapshot's bytes"
         return self.sha
 
     def exchange(self, staged, live):
@@ -107,8 +111,12 @@ class FakeHost:
         self.calls.append(["exchange", staged, live])
         if self.exchange_fails:
             raise OSError(22, "Invalid argument", live)
+        how = "exchanged" if self.live is not None else "renamed"
         if not self.exchange_lies:
             self.live, self.staging = self.staging, self.live
+        if self.not_durable:
+            raise rs.NotDurable(5, "Input/output error", live)
+        return how
 
     def done(self, rc=0, out=""):
         return subprocess.CompletedProcess([], rc, out, "")
@@ -124,6 +132,8 @@ class FakeHost:
             verb, unit = argv[1], argv[-1]
             if verb == "daemon-reload":
                 return self.done()
+            if self.start_fails and verb != "stop":
+                return self.done(1)
             if unit == rs.DAEMON:
                 self.daemon = verb != "stop"
             else:
@@ -131,7 +141,9 @@ class FakeHost:
                 self.serving = (self.staging if rs.DROPIN in self.files else self.live) if self.etcd else None
             return self.done()
         if argv[0] == rs.ETCDUTL:
-            assert argv[1:4] == ["snapshot", "restore", SNAPSHOT] and argv[argv.index("--data-dir") + 1] == rs.STAGING, argv
+            assert argv[1:4] == ["snapshot", "restore", rs.VERIFIED_SNAPSHOT] and argv[argv.index("--data-dir") + 1] == rs.STAGING, argv
+            if self.restore_hangs:
+                raise subprocess.TimeoutExpired(argv, 120)
             if self.restore_fails:
                 return self.done(1, "snapshot file has wrong CRC")
             self.staging = Store(self.snapshot.revision, self.snapshot.kv)
@@ -198,9 +210,12 @@ class Restore(unittest.TestCase):
         ctl = [rs.ETCDCTL, "--endpoints", rs.ENDPOINT]
         config = json.loads(self.host.files[etcdconf.CONFIG_PATH])
         self.assertEqual(self.host.calls, [
+            ["systemctl", "is-active", rs.UNIT],                                                 # the live store's epoch, first
+            ctl + ["endpoint", "status", "-w", "json"], ctl + ["member", "list", "-w", "json"], ctl + ["get", opstate.STATE_EPOCH_KEY, "-w", "json"],
             ["systemctl", "stop", rs.DAEMON], ["systemctl", "is-active", rs.DAEMON],
             ["systemctl", "stop", rs.UNIT], ["systemctl", "is-active", rs.UNIT],
-            [rs.ETCDUTL, "snapshot", "restore", SNAPSHOT, "--data-dir", rs.STAGING, "--name", "a", "--initial-cluster", "a=https://127.0.0.1:2380",
+            ["copy", SNAPSHOT, rs.VERIFIED_SNAPSHOT],
+            [rs.ETCDUTL, "snapshot", "restore", rs.VERIFIED_SNAPSHOT, "--data-dir", rs.STAGING, "--name", "a", "--initial-cluster", "a=https://127.0.0.1:2380",
              "--initial-cluster-token", config["initial-cluster-token"], "--initial-advertise-peer-urls", "https://127.0.0.1:2380"],
             ["chown", "-R", "--no-dereference", "regalia-etcd:regalia-etcd", rs.STAGING],
             ["systemctl", "daemon-reload"], ["systemctl", "start", rs.UNIT],
@@ -219,7 +234,9 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.host.staging.revision, 5000)                                 # the store it replaced, kept
         self.assertNotIn(rs.DROPIN, self.host.files)
         self.assertNotIn(rs.RESTORE_CONFIG, self.host.files)
+        self.assertNotIn(rs.VERIFIED_SNAPSHOT, self.host.files)
         self.assertIn("state epoch 3 written over 0", said)
+        self.assertIn("the store it replaced is kept in %s/member" % rs.STAGING, said)
 
     def test_the_staged_configuration_is_the_checked_one_with_its_data_dir_moved(self):
         staged = json.loads(rs.staged_config(self.host.files[etcdconf.CONFIG_PATH]))
@@ -248,6 +265,10 @@ class Restore(unittest.TestCase):
                 self.assertIs(self.host.live, live)
                 self.assertFalse(any(c[0] == "exchange" for c in self.host.calls))
                 self.assertFalse(any(c[0] == rs.ETCDCTL and "txn" in c for c in self.host.calls))
+                # etcd is back on its live store, the drop-in gone, staging kept: a second run is not stranded
+                self.assertNotIn(rs.DROPIN, self.host.files)
+                self.assertIs(self.host.serving, live)
+                self.assertIsNotNone(self.host.staging)
 
     def test_a_write_that_did_not_land_leaves_the_daemon_stopped(self):
         self.host.txn_lies = True
@@ -259,6 +280,68 @@ class Restore(unittest.TestCase):
         self.host.exchange_lies = True
         self.refused("the live store holds state epoch none, not 3: the daemon is not started")
         self.assertFalse(self.daemon_started_after_its_stop())
+
+    def test_a_live_store_at_or_above_the_epoch_is_refused_before_anything_stops(self):
+        for live_epoch in (3, 4):
+            with self.subTest(live_epoch):
+                self.host = FakeHost(self.chain)
+                self.host.live.kv = held(self.chain, live_epoch, revision_before=4999, mod_revision=5000)
+                self.refused("REFUSED: the live store holds state epoch %d, and the statement's 3 does not raise it: nothing is stopped"
+                             % live_epoch)
+                self.assertTrue(self.host.daemon and self.host.etcd)
+                self.assertNotIn(["systemctl", "stop", rs.DAEMON], self.host.calls)
+
+    def test_with_etcd_down_the_live_epoch_is_not_read_and_the_floor_stands_for_it(self):
+        self.host.etcd, self.host.serving = False, None
+        epoch, said = self.go()
+        self.assertEqual(epoch, 3)
+        self.assertIn("etcd is not running: the live store's state epoch is not read", said)
+
+    def test_a_drop_in_left_by_an_earlier_run_is_refused_before_anything_stops(self):
+        self.host.files[rs.DROPIN] = rs.dropin()
+        self.refused("%s is still in place: an earlier restore stopped part way" % rs.DROPIN)
+        self.assertEqual(self.host.calls, [])
+
+    def test_a_restore_that_times_out_starts_both_again_on_the_untouched_store(self):
+        self.host.restore_hangs = True
+        self.refused("TimeoutExpired")
+        self.assertTrue(self.host.daemon and self.host.etcd)
+        self.assertNotIn(rs.DROPIN, self.host.files)
+
+    def test_a_restart_that_fails_too_is_added_to_the_refusal(self):
+        self.host.restore_fails = True
+        self.host.start_fails = True
+        self.refused("etcdutl snapshot restore failed (1): snapshot file has wrong CRC; and starting %s and %s again failed too"
+                     % (rs.UNIT, rs.DAEMON))
+
+    def test_a_window_that_ends_before_the_entry_is_written_is_refused(self):
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign, clock=lambda: NOW + 6 * 3600)
+        self.assertIn("the restore statement's window (2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z) ended before its entry was "
+                      "written", str(caught.exception))
+        self.assertFalse(self.daemon_started_after_its_stop())
+        self.assertNotIn(rs.DROPIN, self.host.files)
+
+    def test_the_entry_is_dated_by_a_fresh_reading(self):
+        epoch, _ = self.go_clock(lambda: NOW + 600)
+        self.assertEqual(json.loads(self.host.live.kv[1])["entry"]["issued_at"], "2026-10-06T12:10:00Z")
+
+    def go_clock(self, clock):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            epoch = rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign, clock=clock)
+        return epoch, out.getvalue()
+
+    def test_an_exchange_whose_sync_failed_says_the_restored_store_is_live_and_starts_nothing(self):
+        self.host.not_durable = True
+        self.refused("the restored store is live (%s), but the fsync of its directory failed" % rs.MEMBER)
+        self.assertFalse(self.daemon_started_after_its_stop())
+
+    def test_a_restore_with_no_live_store_renames_it_into_place_and_says_so(self):
+        self.host.live = None
+        self.host.etcd, self.host.serving = False, None
+        epoch, said = self.go()
+        self.assertEqual(epoch, 3)
+        self.assertIn("there was no live store to replace", said)
 
     def test_a_failed_exchange_leaves_the_live_store_and_the_daemon_stopped(self):
         self.host.exchange_fails = True
@@ -309,6 +392,59 @@ class Restore(unittest.TestCase):
         self.assertNotIn(rs.DROPIN, self.host.files)
 
 
+class Main(unittest.TestCase):
+    """restore.py run's command line: with no `now` given, the authenticated clock dates the run and the entry, and time that
+    is not authenticated is refused before anything else (CodeRabbit on #740: the clock is (seconds, authenticated))."""
+
+    def setUp(self):
+        from tests.test_baremetal_membership import ROOT, ROOT_PUB, sign as root_sign
+        self.chain = chain()
+        envelope = root_sign(self.chain[0], ROOT)
+        self.host = FakeHost(self.chain)
+        self.host.files["/var/backups/statement.json"] = json.dumps(statement(self.chain))
+        self.reading = (NOW + 0.75, True)
+        tip = self.chain[-1]
+        test = self
+
+        class FakeNode:
+            node_id, cfg, tcti, run = "a", {"root_key": ROOT_PUB}, None, None
+
+            def path(self, name):
+                return "/var/lib/regalia/" + name
+
+            def manifest(self):
+                return tip
+
+            def clock(self):
+                return lambda: test.reading
+        self.patches = [unittest.mock.patch("deploy.baremetal.node.load", lambda path: FakeNode()),
+                        unittest.mock.patch("deploy.baremetal.node.read_published", lambda path: [envelope])]
+        for p in self.patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def main(self):
+        argv = ["run", "--config", "/etc/regalia/node.json", "--statement", "/var/backups/statement.json", "--snapshot", SNAPSHOT]
+        with unittest.mock.patch.object(rs, "run") as run, contextlib.redirect_stdout(io.StringIO()) as out:
+            code = rs.main(argv, host=self.host, signer=sign)
+        return code, run, out.getvalue()
+
+    def test_the_authenticated_seconds_reach_run_and_date_the_entry(self):
+        code, run, _ = self.main()
+        self.assertEqual(code, 0)
+        args, kw = run.call_args
+        self.assertEqual(args[5], NOW)                      # whole seconds, never the (seconds, authenticated) pair
+        self.reading = (NOW + 60.2, True)
+        self.assertEqual(kw["clock"](), NOW + 60)
+
+    def test_time_that_is_not_authenticated_is_refused(self):
+        self.reading = (NOW, False)
+        code, run, out = self.main()
+        self.assertEqual(code, 1)
+        self.assertIn("the time is not authenticated (authtime)", out)
+        run.assert_not_called()
+
+
 class RealExchange(unittest.TestCase):
     """restore.Host.exchange on this machine's file system: renameat2 RENAME_EXCHANGE (Linux), or a rename into place."""
 
@@ -330,6 +466,25 @@ class RealExchange(unittest.TestCase):
         with open(os.path.join(live, "which")) as f:
             self.assertEqual(f.read(), "old")
         self.assertFalse(os.path.exists(staged))
+
+
+class CopyVerified(unittest.TestCase):
+    def test_the_digest_is_the_copy_s_and_a_later_change_to_the_source_does_not_reach_it(self):
+        import hashlib
+        root = tempfile.mkdtemp(prefix="restore-copy-")
+        self.addCleanup(shutil.rmtree, root, True)
+        source, copy = os.path.join(root, "snap.db"), os.path.join(root, "restore.snapshot")
+        with open(source, "wb") as f:
+            f.write(b"the snapshot" * 1000)
+        digest = rs.Host().copy_verified(source, copy)
+        with open(source, "wb") as f:
+            f.write(b"another snapshot")
+        with open(copy, "rb") as f:
+            self.assertEqual(hashlib.sha256(f.read()).hexdigest(), digest)
+        self.assertEqual(digest, hashlib.sha256(b"the snapshot" * 1000).hexdigest())
+        self.assertEqual(os.stat(copy).st_mode & 0o777, 0o600)
+        with self.assertRaises(FileExistsError):
+            rs.Host().copy_verified(source, copy)         # never over an earlier copy
 
 
 class Owner(unittest.TestCase):
@@ -387,6 +542,26 @@ class Owner(unittest.TestCase):
             self.make()
         self.assertIn("an etcd restore is the single-node profile's", str(caught.exception))
         self.assertEqual(self.ledger.read()["clusters"], {})
+
+    def test_two_signers_at_once_never_issue_one_epoch_twice(self):
+        """The read, the increment and the write are one step under the ledger's lock (CodeRabbit on #740): two signers that
+        read at the same moment get two epochs."""
+        import threading
+        slow, read = rs.Ledger.read, []
+
+        def read_slowly(ledger):
+            doc = slow(ledger)
+            read.append(1)
+            time.sleep(0.2)                          # both would read the same ledger here, were the step not locked
+            return doc
+        got = []
+        with unittest.mock.patch.object(rs.Ledger, "read", read_slowly):
+            threads = [threading.Thread(target=lambda: got.append(rs.Ledger(self.ledger.path).issue("ab" * 32, 4)[0])) for _ in range(2)]
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
+        self.assertEqual(sorted(got), [5, 6])
 
     def test_a_ledger_that_is_not_one_is_refused(self):
         with open(self.ledger.path, "w") as f:
