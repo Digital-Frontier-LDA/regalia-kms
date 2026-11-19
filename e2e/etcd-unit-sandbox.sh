@@ -64,7 +64,7 @@ grep -qx 'd /run/regalia-etcd 2750 regalia-etcd regalia-etcd-client -' deploy/ba
 # included (a TEST key), then put where the unit reads each: the key only as an encrypted credential
 [ -d /etc/regalia ] || { mkdir -p /etc/regalia; made_regalia_dir=1; }
 [ -d "$CERTS" ] || { mkdir -p "$CERTS"; made_cert_dir=1; }
-python3 -Es - "$W" <<'EOF'
+python3 -I - "$W" <<'EOF'
 import pathlib, sys
 sys.path.insert(0, ".")
 from cryptography.hazmat.primitives import serialization
