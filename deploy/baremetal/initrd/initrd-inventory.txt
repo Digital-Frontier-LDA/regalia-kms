@@ -18,6 +18,7 @@
 ours regalia-kms f 0644 0:0 etc/crypttab 71ce00157d1a94a11ba7ecd31064ec77926aa804e866597412723a334b8912ce
 ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service /usr/lib/systemd/system/regalia-unlock.service
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
+ours regalia-kms f 0644 0:0 usr/lib/modules-load.d/regalia-firewall.conf c4cbe59937aeafc516bda0e3bda37a715748415d92c36c61a1d92b827648f46b
 ours regalia-kms f 0644 0:0 usr/lib/regalia/root-key.json =root-key
 ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot 46bba2722bf515a57754d72efdb89c5fe7b354e80a2414c69de277525899e275
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-boot-render.service 9cfcd77e7c47768668045dd7bd02281d070e551fdc4dfe0001d2f146a1e25967
@@ -85,6 +86,7 @@ generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 0dfdcd7c9b1dfac05ba41f6ec
 generated dracut f 0644 0:0 usr/lib/dracut/need-initqueue e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 generated dracut f 0755 0:0 usr/lib/fs-lib.sh 6f3f0ac2595735883c19ec808c4f84c15514d8b910e7ff2105601a28f84cfe0b
 generated dracut f 0644 0:0 usr/lib/initrd-release e81949eb129c97adb7a47dd5b54db478289bcd15e82599bfff47d4e192ea9eb2
+generated dracut d 0755 0:0 usr/lib/modules-load.d -
 generated dracut f 0644 0:0 usr/lib/modules/6.12.113+deb13-amd64/modules.alias 8313d4ab2eab438c193fe285e5917a93ac32957d03973abcfa18c84f535e83dd
 generated dracut f 0644 0:0 usr/lib/modules/6.12.113+deb13-amd64/modules.alias.bin 2f63788b71f57a0bdda003b1a51f29270f57c3c3cb88270d6742d28c6a8d3502
 generated dracut f 0644 0:0 usr/lib/modules/6.12.113+deb13-amd64/modules.builtin.alias.bin bd057b764cc1bc4ba89c5c4a38070d486e9f89a574af8a58ca8ec3b1f614598d
