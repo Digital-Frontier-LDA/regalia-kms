@@ -25,6 +25,12 @@ const (
 	StateEpochDomain = "regalia-opstate-state-epoch/v1\x00"
 	StateEpochKey    = Prefix + "state-epoch"
 
+	// A single-node restore's statement (regalia-kms-dx7.6, docs/design/single-node.md 4.8; opstate.RESTORE_SCHEMA):
+	// the owner's, naming the raised state epoch, carried as the entry's authorization in place of a survivor's.
+	RestoreSchema  = "regalia.opstate-restore/v1"
+	RestoreDomain  = "regalia-opstate-restore/v1\x00"
+	restoreMaxLife = 24 * 3600 // opstate.RESTORE_MAX_LIFE_S
+
 	survivorAuthSchema  = "regalia.survivor-authorization/v1"
 	survivorAuthDomain  = "regalia-survivor-authorization/v1\x00"
 	survivorRequestLife = 900 // survivor.REQUEST_LIFE_S (opstate.MAX_REQUEST_LIFE_S)
@@ -40,6 +46,8 @@ const (
 
 var (
 	stateEpochFields = []string{"schema", "state_epoch", "node_id", "authorization", "cluster_id", "revision_before", "issued_at"}
+	restoreFields    = []string{"schema", "node_id", "manifest_epoch", "manifest_digest", "state_epoch", "floor", "snapshot_sha256",
+		"not_before", "expires_at"}
 	survivorAuthKeys = []string{"schema", "node_id", "quarantine_epoch", "quarantine_digest", "not_before", "expires_at", "fenced", "scope", "fence"}
 	nodeIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	// survivor.EVIDENCE_KEYS, FENCE_SERIAL, FENCE_UUID (#516): a redfish fence binds each box and reads it Off twice
@@ -107,28 +115,44 @@ func VerifyStateEpoch(key string, value any, chain []map[string]any, previous ma
 		return nil, refuse("a state epoch is judged against the membership chain")
 	}
 	n, _ := countOf(entry["state_epoch"], "state_epoch")
-	var atN map[string]any
-	for _, manifest := range chain {
-		if epoch, err := countOf(manifest["epoch"], "epoch"); err == nil && epoch == n {
-			atN = manifest
-			break
-		}
-	}
-	if atN == nil {
-		return nil, refuse("the chain holds no manifest at epoch %d", n)
-	}
 	node := entry["node_id"].(string)
-	auth, err := verifySurvivorAuthorization(entry["authorization"], atN, node)
-	if err != nil {
-		return nil, err
-	}
-	if auth["scope"] != "full" {
-		return nil, refuse("a take-over needs the owner's \"full\" authorization; this one is %s", auth["scope"])
-	}
 	issued, _ := timeOf(entry["issued_at"], "issued_at")
-	_, expires, _ := validateSurvivorAuthorization(auth)
-	if from := survivorFullFrom(auth); !(from <= issued && issued < expires) {
-		return nil, refuse("the state epoch is dated %s, outside the authorization's full scope", entry["issued_at"])
+	if _, isRestore := entry["authorization"].(map[string]any)["restore"]; isRestore {
+		// dx7.6: a single-node restore's entry, its authorization the owner's restore statement
+		statement, err := verifyRestore(entry["authorization"], chain, node)
+		if err != nil {
+			return nil, err
+		}
+		if r, _ := countOf(statement["state_epoch"], "state_epoch"); r != n {
+			return nil, refuse("the entry's state epoch %d is not the restore statement's %d", n, r)
+		}
+		start, _ := timeOf(statement["not_before"], "not_before")
+		end, _ := timeOf(statement["expires_at"], "expires_at")
+		if !(start <= issued && issued < end) {
+			return nil, refuse("the state epoch is dated %s, outside the restore statement's window", entry["issued_at"])
+		}
+	} else {
+		var atN map[string]any
+		for _, manifest := range chain {
+			if epoch, err := countOf(manifest["epoch"], "epoch"); err == nil && epoch == n {
+				atN = manifest
+				break
+			}
+		}
+		if atN == nil {
+			return nil, refuse("the chain holds no manifest at epoch %d", n)
+		}
+		auth, err := verifySurvivorAuthorization(entry["authorization"], atN, node)
+		if err != nil {
+			return nil, err
+		}
+		if auth["scope"] != "full" {
+			return nil, refuse("a take-over needs the owner's \"full\" authorization; this one is %s", auth["scope"])
+		}
+		_, expires, _ := validateSurvivorAuthorization(auth)
+		if from := survivorFullFrom(auth); !(from <= issued && issued < expires) {
+			return nil, refuse("the state epoch is dated %s, outside the authorization's full scope", entry["issued_at"])
+		}
 	}
 	var inForce map[string]any
 	for _, manifest := range chain {
@@ -172,6 +196,107 @@ func VerifyStateEpoch(key string, value any, chain []map[string]any, previous ma
 		}
 	}
 	return entry, nil
+}
+
+// restoreMessage is opstate.restore_message: the restore statement's form, then RestoreDomain and its canonical bytes,
+// what the owner signs.
+func restoreMessage(value any) ([]byte, map[string]any, error) {
+	statement, err := exactFields(value, restoreFields, "the restore statement")
+	if err != nil {
+		return nil, nil, err
+	}
+	if statement["schema"] != RestoreSchema {
+		return nil, nil, refuse("the restore statement's schema must be %s", RestoreSchema)
+	}
+	if id, ok := statement["node_id"].(string); !ok || !nodeIDPattern.MatchString(id) {
+		return nil, nil, refuse("the restore statement's node_id must be a node ID")
+	}
+	if _, err := countOf(statement["manifest_epoch"], "manifest_epoch"); err != nil {
+		return nil, nil, err
+	}
+	if err := hexOf(statement["manifest_digest"], 64, "manifest_digest"); err != nil {
+		return nil, nil, err
+	}
+	r, err := countOf(statement["state_epoch"], "state_epoch")
+	if err != nil {
+		return nil, nil, err
+	}
+	floor, err := countOf(statement["floor"], "floor")
+	if err != nil {
+		return nil, nil, err
+	}
+	if r <= floor {
+		return nil, nil, refuse("the restore's state epoch %d is not above its floor %d", r, floor)
+	}
+	if err := hexOf(statement["snapshot_sha256"], 64, "snapshot_sha256"); err != nil {
+		return nil, nil, err
+	}
+	start, err := timeOf(statement["not_before"], "not_before")
+	if err != nil {
+		return nil, nil, err
+	}
+	end, err := timeOf(statement["expires_at"], "expires_at")
+	if err != nil {
+		return nil, nil, err
+	}
+	if !(start < end && end <= start+restoreMaxLife) {
+		return nil, nil, refuse("a restore statement lives from not_before to expires_at, at most %d s", restoreMaxLife)
+	}
+	return append([]byte(RestoreDomain), membership.Canonical(statement)...), statement, nil
+}
+
+// verifyRestore is opstate.verify_restore: the restore statement in `value` ({"restore", "signature"}) for `nodeID`, if
+// it holds against the single-node manifest it names in `chain`, else a Refused naming why.
+func verifyRestore(value any, chain []map[string]any, nodeID string) (map[string]any, error) {
+	signed, err := exactFields(value, []string{"restore", "signature"}, "the signed restore statement")
+	if err != nil {
+		return nil, err
+	}
+	raw, statement, err := restoreMessage(signed["restore"])
+	if err != nil {
+		return nil, err
+	}
+	at, _ := countOf(statement["manifest_epoch"], "manifest_epoch")
+	var manifest map[string]any
+	for _, m := range chain {
+		if epoch, err := countOf(m["epoch"], "epoch"); err == nil && epoch == at {
+			manifest = m
+			break
+		}
+	}
+	if manifest == nil {
+		return nil, refuse("the chain holds no manifest at epoch %d", at)
+	}
+	if membership.Digest(manifest) != statement["manifest_digest"] {
+		return nil, refuse("the restore statement is for another manifest than epoch %d's", at)
+	}
+	profile, err := membership.Profile(manifest)
+	if err != nil {
+		return nil, asRefused(err)
+	}
+	if profile != membership.ProfileSingleNode {
+		return nil, refuse("a restore statement is the %s profile's alone; epoch %d is %s: a multi-node cluster's etcd comes back by a "+
+			"take-over and a rejoin", membership.ProfileSingleNode, at, profile)
+	}
+	parties, err := membership.CountingParties(manifest, raw, []any{signed["signature"]}, "restore statement")
+	if err != nil {
+		return nil, asRefused(err)
+	}
+	if len(parties) != 1 || !parties[membership.OwnerParty] {
+		return nil, refuse("the restore statement is not the owner's")
+	}
+	nodes, err := membership.Validate(manifest)
+	if err != nil {
+		return nil, asRefused(err)
+	}
+	who := statement["node_id"].(string)
+	if node, has := nodes[who]; !has || membership.NotCounting(fmt.Sprint(node["state"])) {
+		return nil, refuse("%s does not count under epoch %d: it restores nothing", who, at)
+	}
+	if who != nodeID {
+		return nil, refuse("the restore statement is for %s, not %s", who, nodeID)
+	}
+	return statement, nil
 }
 
 // validateSurvivorAuthorization is survivor.validate_authorization (form only): (not_before, expires_at) seconds.

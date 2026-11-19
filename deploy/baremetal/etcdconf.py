@@ -22,6 +22,14 @@ THE TIMINGS come from the measured round trip (D32 item 5): the heartbeat at the
 servers (at least etcd's 100 ms), the election timeout ten times that. A round trip above MAX_RTT_MS is a
 commissioning failure, refused here, not tuned around.
 
+ONE MEMBER, UNDER THE SINGLE-NODE PROFILE ONLY (regalia-kms-dx7.6, docs/design/single-node.md 4.8). A v5 manifest of
+topology single-node has one node, so its etcd is a cluster of one: the same opstate, Reserve, watch cache and state
+epoch as three nodes, with no replication. Its peer URL is LOOPBACK_PEER_URL (there is no service mesh, and no other
+member ever dials it), its timings are etcd's defaults (DEFAULT_TIMINGS: there is no round trip to measure, and render
+refuses one), and its initial cluster names it alone. check() takes that shape only when it is told the profile is
+single-node; under every other manifest a peer URL off the service mesh is refused, as before. The profile is the
+caller's to read from the verified manifest (membership.profile), never from the configuration it checks.
+
 The configuration is written as JSON, which etcd's YAML reader takes, so no value can be mis-quoted.
 """
 import hashlib
@@ -62,6 +70,9 @@ COMPACTION_RETENTION = "1h"                        # periodic: the history kept 
 # second `member add --learner` is admitted, with the default it is refused "too many learner members in cluster".
 MAX_LEARNERS = 2
 CORRUPTION_GATES = "InitialCorruptCheck=true,CompactHashCheck=true"   # v3.6 feature gates: check at start, and hashes
+# dx7.6: a single-node cluster's one member, on loopback (no service mesh, no other member), with etcd's default timings
+LOOPBACK_PEER_URL = "https://127.0.0.1:%d" % PEER_PORT
+DEFAULT_TIMINGS = (MIN_HEARTBEAT_MS, 10 * MIN_HEARTBEAT_MS)      # etcd's own: 100 ms heartbeat, 1000 ms election
 
 
 def cert_der(pem):
@@ -156,27 +167,45 @@ def peer_url(node):
     return "https://[%s]:%d" % (wgsvc.address(node["wg_service_pub"]), PEER_PORT)
 
 
+def _profile(profile):
+    require(profile in (membership.SINGLE_NODE, membership.MULTI_NODE), "the topology profile is %s or %s, not %r"
+            % (membership.SINGLE_NODE, membership.MULTI_NODE, profile))
+    return profile
+
+
 def render(manifest, me, genesis_digest, certs, rtt_p99_ms, state="new"):
     """(etcd.conf.yml text, the trusted-peer bundle's text) for member `me`. `certs`: choose()'s {node_id: pem};
     `genesis_digest`: the epoch-1 manifest's digest (the cluster token); `state`: "new" when the cluster is formed,
-    "existing" when this member joins one that runs."""
+    "existing" when this member joins one that runs. Under the single-node profile (module docstring) the one member is
+    on LOOPBACK_PEER_URL with DEFAULT_TIMINGS: `rtt_p99_ms` must be None (nothing was measured) and `state` "new"
+    (one member joins no cluster that runs)."""
+    single = membership.profile(manifest) == membership.SINGLE_NODE
     nodes = members(manifest)
     require(me in nodes, "%s is not an etcd member under epoch %d (%s)" % (me, manifest["epoch"],
                                                                        {n["node_id"]: n["state"] for n in manifest["nodes"]}.get(me, "not in the manifest")))
     require(set(certs) == set(nodes), "the certificates are for %s; the members are %s" % (sorted(certs), sorted(nodes)))
     membership.hex_field(genesis_digest, 64, "genesis_digest")
     require(state in ("new", "existing"), "initial-cluster-state is new or existing")
-    beat, election = timings(rtt_p99_ms)
+    if single:
+        require(list(nodes) == [me], "a single-node etcd is %s alone, not %s" % (me, sorted(nodes)))
+        require(rtt_p99_ms is None, "a single-node etcd has no round trip to measure: its timings are etcd's defaults, and "
+                "none is taken (%r given)" % (rtt_p99_ms,))
+        require(state == "new", "a single-node etcd joins no cluster that runs: initial-cluster-state is new")
+        beat, election = DEFAULT_TIMINGS
+        url = {me: LOOPBACK_PEER_URL}
+    else:
+        beat, election = timings(rtt_p99_ms)
+        url = {n: peer_url(nodes[n]) for n in nodes}
     for pem in certs.values():
         cert_der(pem)
     config = {
         "name": me,
         "data-dir": DATA_DIR,
-        "listen-peer-urls": peer_url(nodes[me]),
-        "initial-advertise-peer-urls": peer_url(nodes[me]),
+        "listen-peer-urls": url[me],
+        "initial-advertise-peer-urls": url[me],
         "listen-client-urls": CLIENT_URL,
         "advertise-client-urls": CLIENT_URL,
-        "initial-cluster": ",".join("%s=%s" % (n, peer_url(nodes[n])) for n in nodes),
+        "initial-cluster": ",".join("%s=%s" % (n, url[n]) for n in nodes),
         "initial-cluster-state": state,
         "initial-cluster-token": "regalia-" + genesis_digest[:32],
         "heartbeat-interval": beat,
@@ -207,11 +236,14 @@ CONFIG_KEYS = ("name", "data-dir", "listen-peer-urls", "initial-advertise-peer-u
 PEER_TLS_KEYS = ("cert-file", "key-file", "client-cert-auth", "trusted-ca-file", "auto-tls")
 
 
-def check(text):
+def check(text, profile=membership.MULTI_NODE):
     """The safety settings of a rendered configuration, or Refused naming the first that is not as it must be: exactly
     the keys render writes, no client on a TCP port and no client TLS (the socket's group is the client boundary), every
     peer URL on the mesh over TLS, peers authenticated by certificate against the rendered bundle only, no automatic
-    TLS, periodic compaction, an explicit quota, the corruption checks."""
+    TLS, periodic compaction, an explicit quota, the corruption checks. `profile` is the topology profile of the
+    verified manifest (membership.profile): only under single-node is the one shape that is not on the mesh taken, a
+    cluster of this member alone on LOOPBACK_PEER_URL with DEFAULT_TIMINGS (dx7.6)."""
+    single = _profile(profile) == membership.SINGLE_NODE
     config = json.loads(text)
     require("client-transport-security" not in config, "no client TLS block: etcd ignores it on a unix socket, and it would only look like "
             "protection")
@@ -225,9 +257,14 @@ def check(text):
     require(all(len(p) == 2 for p in members), "initial-cluster is name=url, comma-separated")
     names = [p[0] for p in members]
     require(len(set(names)) == len(names) and config["name"] in names, "initial-cluster names each member once, this one included")
+    if single:
+        require(names == [config["name"]], "a single-node etcd's initial-cluster is %s alone, not %s" % (config["name"], names))
     for key, urls in (("listen-peer-urls", config["listen-peer-urls"].split(",")), ("initial-advertise-peer-urls",
                       config["initial-advertise-peer-urls"].split(",")), ("initial-cluster", [p[1] for p in members])):
         for url in urls:
+            if single:
+                require(url == LOOPBACK_PEER_URL, "%s %s is not the single-node member's loopback peer URL %s" % (key, url, LOOPBACK_PEER_URL))
+                continue
             found = re.fullmatch(r"https://\[([0-9a-f:]+)\]:%d" % PEER_PORT, url)
             require(found is not None and found.group(1).startswith("fd72:6567:6c61:"), "%s %s is not on the service mesh over TLS" % (key, url))
     peer = config["peer-transport-security"]
@@ -243,4 +280,7 @@ def check(text):
     require(config["max-learners"] == MAX_LEARNERS, "max-learners is %d: both returning servers catch up as learners at once"
             % MAX_LEARNERS)
     require(config["election-timeout"] >= 10 * config["heartbeat-interval"] >= 10 * MIN_HEARTBEAT_MS, "the election timeout is ten heartbeats")
+    if single:
+        require((config["heartbeat-interval"], config["election-timeout"]) == DEFAULT_TIMINGS, "a single-node etcd runs etcd's default "
+                "timings %s, not %s" % (DEFAULT_TIMINGS, (config["heartbeat-interval"], config["election-timeout"])))
     return config

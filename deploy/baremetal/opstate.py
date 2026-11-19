@@ -255,10 +255,29 @@ def verify_session(key, value, chain):
 # revision after the one it names (62). A transition only raises N. Once seen it is never absent:
 # a reader that has seen one refuses its deletion (the cache's rule, as key state). Leases carry the state epoch the
 # issuer holds; a node whose store holds another is refused (internal/opstate/gate.go).
+#
+# A RESTORE, UNDER THE SINGLE-NODE PROFILE ONLY (regalia-kms-dx7.6, docs/design/single-node.md 4.8). One node has no peer
+# to take over from: its history rests on one disk, and an etcd restore from a snapshot brings back an older one. The
+# first write after a restore (restore.py) is this same entry, its "authorization" the owner's signed restore statement
+# in place of a survivor authorization:
+#
+#     {"restore": {"schema": RESTORE_SCHEMA, "node_id", "manifest_epoch", "manifest_digest", "state_epoch": R, "floor": F,
+#                  "snapshot_sha256", "not_before", "expires_at"}, "signature": {"party": "owner", "key", "sig"}}
+#
+# R is above F, the floor the owner's tool read (the collector's highest recorded state epoch for the cluster and its own
+# ledger of the restore epochs it issued: each once), so a restored snapshot is never taken for the live history. The
+# statement verifies against the manifest it names (a single-node one, by its digest), is the owner's, names that
+# manifest's one counting node, and the entry is dated inside its window and carries R. A restore statement under any
+# other profile is refused, as a survivor authorization is under single-node: neither profile has the other's.
 STATE_EPOCH_SCHEMA = "regalia.opstate-state-epoch/v1"
 STATE_EPOCH_DOMAIN = b"regalia-opstate-state-epoch/v1\0"
 STATE_EPOCH_KEY = PREFIX + "state-epoch"
 STATE_EPOCH_FIELDS = ("schema", "state_epoch", "node_id", "authorization", "cluster_id", "revision_before", "issued_at")
+RESTORE_SCHEMA = "regalia.opstate-restore/v1"
+RESTORE_DOMAIN = b"regalia-opstate-restore/v1\0"
+RESTORE_FIELDS = ("schema", "node_id", "manifest_epoch", "manifest_digest", "state_epoch", "floor", "snapshot_sha256", "not_before",
+                  "expires_at")
+RESTORE_MAX_LIFE_S = 24 * 3600            # a restore is done at the console within the day the owner signed it
 
 
 def state_epoch_message(entry):
@@ -274,26 +293,78 @@ def state_epoch_message(entry):
     return STATE_EPOCH_DOMAIN + membership.canonical(entry)
 
 
+def restore_message(statement):
+    """RESTORE_DOMAIN and the canonical statement, after its form: what the owner signs."""
+    membership.exact(statement, RESTORE_FIELDS, "the restore statement")
+    require(statement["schema"] == RESTORE_SCHEMA, "the restore statement's schema must be %s" % RESTORE_SCHEMA)
+    require(isinstance(statement["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", statement["node_id"]) is not None,
+            "the restore statement's node_id must be a node ID")
+    _count(statement["manifest_epoch"], "manifest_epoch")
+    membership.hex_field(statement["manifest_digest"], 64, "manifest_digest")
+    _count(statement["state_epoch"], "state_epoch")
+    _count(statement["floor"], "floor")
+    require(statement["state_epoch"] > statement["floor"], "the restore's state epoch %d is not above its floor %d"
+            % (statement["state_epoch"], statement["floor"]))
+    membership.hex_field(statement["snapshot_sha256"], 64, "snapshot_sha256")
+    start = heartbeat.parse_time(statement["not_before"], "not_before")
+    end = heartbeat.parse_time(statement["expires_at"], "expires_at")
+    require(start < end <= start + RESTORE_MAX_LIFE_S, "a restore statement lives from not_before to expires_at, at most %d s"
+            % RESTORE_MAX_LIFE_S)
+    return RESTORE_DOMAIN + membership.canonical(statement)
+
+
+def verify_restore(signed, chain, node_id):
+    """The restore statement in `signed` ({"restore", "signature"}) for `node_id`, if it holds against the manifest it
+    names in `chain` (above), else Refused."""
+    membership.exact(signed, ("restore", "signature"), "the signed restore statement")
+    statement = signed["restore"]
+    raw = restore_message(statement)
+    at = [m for m in chain if m["epoch"] == statement["manifest_epoch"]]
+    require(at, "the chain holds no manifest at epoch %d" % statement["manifest_epoch"])
+    manifest = at[0]
+    require(membership.digest(manifest) == statement["manifest_digest"], "the restore statement is for another manifest than epoch %d's"
+            % statement["manifest_epoch"])
+    require(membership.profile(manifest) == membership.SINGLE_NODE, "a restore statement is the %s profile's alone; epoch %d is %s: "
+            "a multi-node cluster's etcd comes back by a take-over and a rejoin" % (membership.SINGLE_NODE, manifest["epoch"],
+                                                                                   membership.profile(manifest)))
+    require(membership.counting_parties(manifest, raw, [signed["signature"]], "restore statement") == {membership.OWNER},
+            "the restore statement is not the owner's")
+    nodes = membership.validate(manifest)
+    who = statement["node_id"]
+    require(who in nodes and nodes[who]["state"] not in membership.NOT_COUNTING, "%s does not count under epoch %d: it restores nothing"
+            % (who, manifest["epoch"]))
+    require(who == node_id, "the restore statement is for %s, not %s" % (who, node_id))
+    return statement
+
+
 def verify_state_epoch(key, value, chain, previous=None, store=None):
     """The state-epoch entry at `key`, if it holds (above), else Refused. `chain`: the verified membership chain, oldest
     first. `previous`: the entry it replaces (verified), or None for the first. `store`: (cluster_id, mod_revision) of
     the etcd the entry was read from, or None before it is written (regalia-kms-62): the entry must name that cluster
     and sit after the revision it names, so one copied into another store, or put back below its own take-over,
-    does not verify."""
+    does not verify. An entry whose authorization is a signed restore statement (it holds "restore") is a single-node
+    restore's (dx7.6), judged by verify_restore; any other, a take-over's."""
     from deploy.baremetal import survivor                   # survivor imports nothing of opstate; local, to keep it so
     membership.exact(value, ("entry", "signature"), "the state-epoch value")
     entry = value["entry"]
     raw = state_epoch_message(entry)
     require(key == STATE_EPOCH_KEY, "the state-epoch entry belongs under %s, not %s" % (STATE_EPOCH_KEY, key))
     require(isinstance(chain, list) and chain, "a state epoch is judged against the membership chain")
-    at_n = [m for m in chain if m["epoch"] == entry["state_epoch"]]
-    require(at_n, "the chain holds no manifest at epoch %d" % entry["state_epoch"])
-    auth = survivor.verify_authorization(entry["authorization"], at_n[0], entry["node_id"])
-    require(auth["scope"] == "full", "a take-over needs the owner's \"full\" authorization; this one is %s" % auth["scope"])
     issued = heartbeat.parse_time(entry["issued_at"], "issued_at")
-    _, expires = survivor.validate_authorization(auth)
-    require(survivor.full_from(auth) <= issued < expires, "the state epoch is dated %s, outside the authorization's full scope"
-            % entry["issued_at"])
+    if "restore" in entry["authorization"]:
+        statement = verify_restore(entry["authorization"], chain, entry["node_id"])
+        require(entry["state_epoch"] == statement["state_epoch"], "the entry's state epoch %d is not the restore statement's %d"
+                % (entry["state_epoch"], statement["state_epoch"]))
+        require(heartbeat.parse_time(statement["not_before"], "not_before") <= issued < heartbeat.parse_time(statement["expires_at"], "expires_at"),
+                "the state epoch is dated %s, outside the restore statement's window" % entry["issued_at"])
+    else:
+        at_n = [m for m in chain if m["epoch"] == entry["state_epoch"]]
+        require(at_n, "the chain holds no manifest at epoch %d" % entry["state_epoch"])
+        auth = survivor.verify_authorization(entry["authorization"], at_n[0], entry["node_id"])
+        require(auth["scope"] == "full", "a take-over needs the owner's \"full\" authorization; this one is %s" % auth["scope"])
+        _, expires = survivor.validate_authorization(auth)
+        require(survivor.full_from(auth) <= issued < expires, "the state epoch is dated %s, outside the authorization's full scope"
+                % entry["issued_at"])
     at = [m for m in chain if heartbeat.parse_time(m["issued_at"], "a manifest's issued_at") <= issued]
     in_force = _signing_key(at[-1], entry["node_id"]) if at else None
     require(in_force is not None, "%s had no signing key when its state epoch is dated" % entry["node_id"])

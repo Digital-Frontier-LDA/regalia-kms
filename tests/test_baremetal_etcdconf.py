@@ -12,6 +12,7 @@ from cryptography.x509.oid import NameOID
 
 from deploy.baremetal import etcdconf, membership as m
 from tests.test_baremetal_membership_v4 import NODE_KEYS, STRANGER, manifest4, nodes4, p256, p256_sig, typed
+from tests.test_baremetal_membership_v5 import manifest5, single5
 
 GENESIS = "ab" * 32
 NOW = "2026-10-05T12:00:00Z"
@@ -152,6 +153,77 @@ class Rendered(Case):
         certs = etcdconf.choose(self.m1, self.offered)
         self.refused("the certificates are for", etcdconf.render, self.m1, "a", GENESIS, {k: v for k, v in certs.items() if k != "c"}, 20)
         self.refused("initial-cluster-state is new or existing", etcdconf.render, self.m1, "a", GENESIS, certs, 20, state="join")
+
+
+class SingleNode(Case):
+    """dx7.6 (docs/design/single-node.md 4.8): a single-node manifest's etcd is a cluster of its one member on a loopback
+    peer URL with etcd's default timings; check takes that shape only when told the profile is single-node."""
+
+    def setUp(self):
+        super().setUp()
+        self.single = single5(1, "")
+        self.certs = etcdconf.choose(self.single, {"a": [bound("a")]})
+
+    def rendered(self):
+        return etcdconf.render(self.single, "a", GENESIS, self.certs, None)
+
+    def test_one_member_on_loopback_with_etcd_s_default_timings(self):
+        config, bundle = self.rendered()
+        doc = etcdconf.check(config, m.SINGLE_NODE)
+        self.assertEqual((doc["listen-peer-urls"], doc["initial-advertise-peer-urls"], doc["initial-cluster"]),
+                         ("https://127.0.0.1:2380", "https://127.0.0.1:2380", "a=https://127.0.0.1:2380"))
+        self.assertEqual((doc["heartbeat-interval"], doc["election-timeout"]), (100, 1000))
+        self.assertEqual(doc["initial-cluster-state"], "new")
+        self.assertEqual(doc["peer-transport-security"]["client-cert-auth"], True)    # still TLS, against its own bound certificate
+        self.assertEqual(bundle, CERTS["a"].strip() + "\n")
+
+    def test_multi_node_still_requires_the_mesh_prefix(self):
+        """The one-member loopback configuration, checked as any other manifest's (the default, and multi-node by name), is
+        refused: the loopback URL is taken under single-node only."""
+        config = self.rendered()[0]
+        self.refused("listen-peer-urls https://127.0.0.1:2380 is not on the service mesh over TLS", etcdconf.check, config)
+        self.refused("is not on the service mesh over TLS", etcdconf.check, config, m.MULTI_NODE)
+        # and a three-node configuration with one member moved to loopback, alike
+        good = json.loads(etcdconf.render(self.m1, "a", GENESIS, etcdconf.choose(self.m1, self.offered), 20)[0])
+        moved = dict(good, **{"initial-cluster": good["initial-cluster"].replace(good["initial-cluster"].split(",")[1].split("=", 1)[1],
+                                                                             "https://127.0.0.1:2380")})
+        self.refused("initial-cluster https://127.0.0.1:2380 is not on the service mesh over TLS", etcdconf.check, json.dumps(moved))
+
+    def test_a_multi_node_configuration_is_not_taken_as_single_node(self):
+        good = etcdconf.render(self.m1, "a", GENESIS, etcdconf.choose(self.m1, self.offered), 20)[0]
+        self.refused("a single-node etcd's initial-cluster is a alone", etcdconf.check, good, m.SINGLE_NODE)
+
+    def test_the_profile_is_one_of_the_two(self):
+        for bad in (None, "", "three-node", "Single-node"):
+            with self.subTest(bad):
+                self.refused("the topology profile is single-node or multi-node", etcdconf.check, self.rendered()[0], bad)
+
+    def test_check_refuses_each_other_single_node_shape(self):
+        good = json.loads(self.rendered()[0])
+        cases = [("is not the single-node member's loopback peer URL", {"listen-peer-urls": "https://127.0.0.2:2380"}),
+                 ("is not the single-node member's loopback peer URL", {"initial-advertise-peer-urls": "http://127.0.0.1:2380"}),
+                 ("is not the single-node member's loopback peer URL", {"listen-peer-urls": "https://127.0.0.1:2381"}),
+                 ("is not the single-node member's loopback peer URL", {"listen-peer-urls": "https://[::1]:2380"}),
+                 ("is not the single-node member's loopback peer URL", {"initial-cluster": "a=https://[fd72:6567:6c61::1]:2380"}),
+                 ("a single-node etcd's initial-cluster is a alone", {"initial-cluster": "a=https://127.0.0.1:2380,b=https://127.0.0.1:2380"}),
+                 ("runs etcd's default timings", {"heartbeat-interval": 150, "election-timeout": 1500}),
+                 ("ten heartbeats", {"election-timeout": 900}),
+                 ("only over the unix socket", {"listen-client-urls": "http://127.0.0.1:2379"}),
+                 ("must require certificates", {"peer-transport-security": dict(good["peer-transport-security"], **{"client-cert-auth": False})})]
+        for reason, change in cases:
+            with self.subTest(change):
+                self.refused(reason, etcdconf.check, json.dumps(dict(good, **change)), m.SINGLE_NODE)
+
+    def test_render_takes_no_round_trip_and_joins_nothing(self):
+        self.refused("has no round trip to measure", etcdconf.render, self.single, "a", GENESIS, self.certs, 20)
+        self.refused("joins no cluster that runs", etcdconf.render, self.single, "a", GENESIS, self.certs, None, state="existing")
+
+    def test_a_multi_node_v5_renders_as_before(self):
+        """The v5 multi-node manifest renders exactly what its v4 twin does: the mesh, the measured timings."""
+        m5 = manifest5(1, "", nodes4())
+        certs = etcdconf.choose(self.m1, self.offered)
+        self.assertEqual(etcdconf.render(m5, "a", GENESIS, certs, 143.2), etcdconf.render(self.m1, "a", GENESIS, certs, 143.2))
+        self.refused("the measured p99 round trip", etcdconf.render, m5, "a", GENESIS, certs, None)
 
 
 class Format(unittest.TestCase):
