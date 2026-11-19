@@ -100,6 +100,20 @@ class TheStagingFiles(unittest.TestCase):
     def test_networkd_runs_only_on_a_staging_boot(self):
         self.assertIn("ConditionKernelCommandLine=regalia.staging=1\n", (STAGING / "networkd.conf").read_text())
 
+    def test_networkd_can_reach_the_staging_network_file(self):
+        # regalia-kms-dx7.34: networkd runs as systemd-network; a 0700 parent hid the .network file (Permission denied)
+        modes = {}
+        for line in (STAGING / "regalia-staging.tmpfiles.conf").read_text().splitlines():
+            f = line.split()
+            if f and f[0] == "d":
+                modes[f[1]] = int(f[2], 8)
+        top = "/var/lib/regalia-staging"
+        self.assertTrue(modes[top] & 0o001, "others cannot traverse %s" % top)
+        self.assertFalse(modes[top] & 0o004, "%s must not be listable by others" % top)
+        self.assertEqual(modes[top + "/network"] & 0o005, 0o005)
+        for private in ("/ssh", "/sshd_config.d"):
+            self.assertEqual(modes[top + private], 0o700, private)
+
     def test_the_journal_is_persistent_on_staging(self):
         self.assertIn("Storage=persistent\n", (STAGING / "journald.conf").read_text())
 
