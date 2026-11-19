@@ -455,6 +455,14 @@ UNLOCK_ENABLED = {"etc/systemd/system/cryptsetup.target.wants/regalia-unlock.ser
 # the module's drop-in (module-setup.sh writes exactly these bytes): the credential reset on every unit that
 # takes credentials by name
 RESET_DROPIN = ("99-regalia-no-credentials.conf", b"[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n")
+# The firewall's kernel modules, loaded by the initrd on every boot (regalia-kms-r1s.15). The image's /usr holds no
+# kernel modules, so the host's ruleset (nftables.service, after switch-root) loads only with what is loaded already;
+# before this, only the boot mesh (wg-boot, after the renderer) loaded them, and a boot whose mesh did not run (any
+# boot before genesis) came up with no firewall and the KMS refused. Exactly these three, what the rendered ruleset
+# needs (deploy/baremetal/firewall.py: ct state; the inet family is nf_tables'); module-setup.sh writes these bytes,
+# and the review refuses an initrd without them or with other bytes (ours()).
+FIREWALL_MODULES = ("nf_tables", "nft_ct", "nf_conntrack")
+FIREWALL_MODULES_LOAD = ("usr/lib/modules-load.d/regalia-firewall.conf", "".join(m + "\n" for m in FIREWALL_MODULES).encode())
 # Where systemd 257 and udev read what they run, in the initrd (systemd.unit(5) "System Unit Search Path",
 # systemd.generator(7), systemd.environment-generator(7), udev(7), systemd-system.conf(5)). /lib is
 # /usr/lib on a merged-/usr image, and is read through its link.
@@ -848,6 +856,7 @@ def ours():
         with open(os.path.join(INITRD_DIR, name), "rb") as f:
             pinned[path] = ("file", sha256(f.read()))
     pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
+    pinned[FIREWALL_MODULES_LOAD[0]] = ("file", sha256(FIREWALL_MODULES_LOAD[1]))
     return pinned
 
 

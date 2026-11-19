@@ -238,7 +238,8 @@ def unlock_initrd(change=None, drop=()):
              "etc/crypttab": (0o100644, mine("dracut", "90regalia-unlock", "crypttab")),
              "etc/cmdline.d/10-quiet.conf": (0o100644, b"quiet rd.shell=0\n"),
              "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd"),
-             uki.ROOT_KEY_PATH: (0o100644, ROOT_KEY)}
+             uki.ROOT_KEY_PATH: (0o100644, ROOT_KEY),
+             uki.FIREWALL_MODULES_LOAD[0]: (0o100644, uki.FIREWALL_MODULES_LOAD[1])}
     for unit in uki.UNLOCK_UNITS:
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
     for link, target in uki.UNLOCK_ENABLED.items():
@@ -1267,6 +1268,14 @@ class InitrdReview(Case):
         review = self.review(data)
         self.assertTrue(review["passed"], review["findings"])
         return review
+
+    def test_the_firewall_modules_file_is_required_and_held_to_its_bytes(self):
+        # regalia-kms-r1s.15: without it a boot whose mesh did not run comes up with no firewall
+        path = uki.FIREWALL_MODULES_LOAD[0]
+        self.refused_by(unlock_initrd(drop=(path,)), path + " is not in the image")
+        for body in (b"nf_tables\nnft_ct\n", uki.FIREWALL_MODULES_LOAD[1] + b"wireguard\n"):
+            with self.subTest(body=body):
+                self.refused_by(unlock_initrd({path: (0o100644, body)}), path + " is not this repository's")
 
     def test_the_module_s_initrd_passes_and_the_record_says_so(self):
         review = self.passes(unlock_initrd())

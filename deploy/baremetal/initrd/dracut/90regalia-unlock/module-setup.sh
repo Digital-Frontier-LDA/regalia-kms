@@ -123,6 +123,11 @@ install() {
         printf '[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n' \
             > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/99-regalia-no-credentials.conf"
     done
+    # The firewall's modules, loaded on every boot by systemd-modules-load here (regalia-kms-r1s.15): the image's
+    # /usr holds no kernel modules, so the host's ruleset loads after switch-root only with what is loaded already.
+    # Exactly these bytes: deploy/baremetal/uki.py FIREWALL_MODULES_LOAD pins them.
+    mkdir -p "${initdir:?}/usr/lib/modules-load.d"
+    printf 'nf_tables\nnft_ct\nnf_conntrack\n' > "${initdir:?}/usr/lib/modules-load.d/regalia-firewall.conf"
     # The client answers systemd-cryptsetup's request beside the console; nothing orders one after the other,
     # so a client that never starts leaves the prompt as it is (#70).
     "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.service
