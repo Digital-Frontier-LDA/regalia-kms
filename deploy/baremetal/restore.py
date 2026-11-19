@@ -40,9 +40,16 @@ THE NODE, at its console, by root (`run`). Each step is refused unless the one b
 
 THE LIVE STORE'S EPOCH. R must also raise the epoch the live store holds, read before anything stops (etcd is started
 on it for the read if it was stopped; a store etcd will not start on is refused). Only when the live store is gone (the
-lost disk) is it not read: then the statement's floor stands for it, and a statement is single-use BY PROCEDURE. The owner
-keeps it off the node until the restore and destroys it after (sign-statement writes it with O_EXCL; the ledger issues
-each R once); its window is at most a day; and the collector's spend audit detects a history replayed under one epoch.
+lost disk) is it not read: then the statement's floor stands for it, and nothing on the node can enforce single use. The
+restored store's state-epoch entry keeps the signed statement whole, so deleting the input file enforces nothing either.
+Single use is then the OWNER'S PROCEDURE:
+  * a statement handed to the node is CONSUMED, whatever happens next: after a restore whose outcome is unknown (an
+    interruption, a crash, a refusal after the services stopped) the owner treats it as consumed and signs a new one
+    (sign-statement issues the next epoch from the ledger) before any retry; the same statement is never given again;
+  * its window is at most opstate.RESTORE_MAX_LIFE_S, which bounds how long a copy of it could be replayed.
+What remains is detection, not prevention, and only in part: the collector's spend audit (spendaudit.py) flags an approval
+spent twice in the streams it receives; it does not detect every history replayed under one epoch, and the collector is
+not yet running (LIMITATIONS.md).
 
 A crash or a refusal from step 5 on leaves the daemon stopped. A reboot drops the drop-in, and etcd comes back on the
 live directory: the old store before step 7, the restored one holding R after it. A second run refuses while STAGING
@@ -72,7 +79,6 @@ RESTORE_LOCK = "/run/lock/regalia-restore.lock"
 # the snapshot as hashed: copied while its digest is computed, and only this copy is restored (never the path again)
 VERIFIED_SNAPSHOT = etcdconf.DATA_DIR + "/restore.snapshot"
 ETCD_USER = takeover.ETCD_USER
-SKEW_S = heartbeat.FUTURE_SKEW
 LEDGER_SCHEMA = "regalia.restore-ledger/v1"
 MAX_SNAPSHOT_BYTES = etcdconf.QUOTA_BYTES + 64 * 1024 ** 2
 
@@ -312,7 +318,9 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
             "a new epoch ends it" % (statement["manifest_epoch"], current["epoch"]))
     start = heartbeat.parse_time(statement["not_before"], "not_before")
     end = heartbeat.parse_time(statement["expires_at"], "expires_at")
-    require(start - SKEW_S <= now < end, "the restore statement is valid from %s to %s, not now" % (statement["not_before"], statement["expires_at"]))
+    # exactly the window opstate.verify_state_epoch judges the entry by (not_before <= issued_at < expires_at), no skew: a
+    # reading the entry check would refuse is refused here, before anything stops
+    require(start <= now < end, "the restore statement is valid from %s to %s, not now" % (statement["not_before"], statement["expires_at"]))
     epoch = statement["state_epoch"]
     say("the owner's restore statement to state epoch %d (above the floor %d) holds" % (epoch, statement["floor"]))
     # 2. nothing left over, and the configuration
@@ -374,8 +382,8 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
         require(epoch > held, "REFUSED: the restored store holds state epoch %d, and the statement's %d does not raise it: the daemon is "
                 "not started (the owner issues a new statement)" % (held, epoch))
         issued = clock()
-        require(start - SKEW_S <= issued < end, "the restore statement's window (%s to %s) ended before its entry was written: the "
-                "owner issues a new statement" % (statement["not_before"], statement["expires_at"]))
+        require(start <= issued < end, "the restore statement's window (%s to %s) does not hold the entry's time %s: the owner "
+                "issues a new statement" % (statement["not_before"], statement["expires_at"], stamp(issued)))
         entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": epoch, "node_id": node_id, "authorization": signed,
                  "cluster_id": cluster_id, "revision_before": revision, "issued_at": stamp(issued)}
         value = {"entry": entry, "signature": sign(opstate.state_epoch_message(entry))}

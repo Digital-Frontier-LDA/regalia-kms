@@ -65,14 +65,19 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     replacement disk: the staging directory was renamed into place, and nothing is kept).
   - The statement must raise the **live** store's epoch too, read before anything stops. If etcd is stopped, it is started
     on the live store for the read, and a store it will not start on is refused. Only when the live member directory is
-    gone (the lost disk) is no live epoch read; then the statement's floor stands for it, and the statement is single-use
-    **by procedure**. The owner keeps it off the node until the restore and destroys it afterwards. `sign-statement`
-    writes it with `O_EXCL`, and the ledger issues each epoch once. Its window is at most a day, and the collector's
-    spend audit detects a history replayed under one epoch.
+    gone (the lost disk) is no live epoch read. The statement's floor then stands for it, and nothing on the node
+    enforces single use. The restored entry keeps the signed statement, so deleting the input file enforces nothing.
+    Single use is the **owner's procedure**: a statement handed to the node is consumed whatever happens next. After a
+    restore whose outcome is unknown (interrupted, crashed, refused after the services stopped), the owner signs a new
+    statement (the ledger issues the next epoch) before any retry, and never gives the same one again. Its window is
+    at most a day. Beyond that there is only partial detection: the collector's spend audit flags an approval spent
+    twice in the streams it receives. It does not detect every replayed history, and the collector is not yet running
+    (LIMITATIONS.md).
   - A refusal before the swap leaves the live store untouched. With no live store, etcd is never restarted onto the
     empty directory. The verified copy of the snapshot (`/var/lib/regalia-etcd/restore.snapshot`) is removed on an early
-    refusal; the snapshot itself is never touched. A run that finds that copy, or `restore/`, refuses until the operator
-    has looked at it and moved it away. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
+    refusal, best-effort; the snapshot itself is never touched. If that removal fails, or a failed `etcdutl` leaves
+    `restore/` behind, the next run refuses until the operator has looked at the artifact and moved it aside. The
+    refusal names it. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
     as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
     directory is kept for inspection, and a new run refuses until it is moved away.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.

@@ -338,6 +338,26 @@ class Restore(unittest.TestCase):
         self.assertTrue(self.host.etcd)
         self.assertFalse(self.host.daemon)
 
+    def test_a_restart_that_times_out_reports_each_unit_as_read_back(self):
+        """etcd's restart succeeds, the daemon's systemctl start times out: the refusal keeps the first reason and says etcd
+        runs and the daemon is unknown (still activating), never "both stopped" (CodeRabbit on #740)."""
+        self.host.restore_fails = True
+        real_run = self.host.run
+
+        def run(argv, input=None):
+            if argv[:2] == ["systemctl", "start"] and argv[-1] == rs.DAEMON:
+                self.host.transitional[rs.DAEMON] = "activating"
+                raise subprocess.TimeoutExpired(argv, 120)
+            return real_run(argv, input)
+        self.host.run = run
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+        said = str(caught.exception)
+        self.assertTrue(said.startswith("etcdutl snapshot restore failed (1)"), said)
+        self.assertIn("%s: TimeoutExpired" % rs.DAEMON, said)
+        self.assertIn("as read back, %s running, %s unknown (activating)" % (rs.UNIT, rs.DAEMON), said)
+        self.assertNotIn("both are stopped", said)
+
     def test_a_unit_still_changing_state_is_reported_unknown_not_stopped(self):
         """is-active exits 3 for "activating" too: the state it prints is read (CodeRabbit on #740)."""
         self.host.restore_fails = True
@@ -376,10 +396,22 @@ class Restore(unittest.TestCase):
     def test_a_window_that_ends_before_the_entry_is_written_is_refused(self):
         with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
             rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign, clock=lambda: NOW + 6 * 3600)
-        self.assertIn("the restore statement's window (2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z) ended before its entry was "
-                      "written", str(caught.exception))
+        self.assertIn("the restore statement's window (2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z) does not hold the entry's "
+                      "time 2026-10-06T18:00:00Z", str(caught.exception))
         self.assertFalse(self.daemon_started_after_its_stop())
         self.assertNotIn(rs.DROPIN, self.host.files)
+
+    def test_a_reading_before_not_before_is_refused_by_both_checks_before_the_entry_check_could(self):
+        """The run's window is exactly the entry's (not_before <= issued_at < expires_at): a reading a second early is refused
+        before anything stops, and a fresh reading a second early at issuance is refused before the entry is built, never
+        by verify_state_epoch after the services stopped (CodeRabbit on #740)."""
+        self.refused("the restore statement is valid from 2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z, not now", now=NOW - 1)
+        self.assertEqual(self.host.calls, [])
+        self.host = FakeHost(self.chain)
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign, clock=lambda: NOW - 1)
+        self.assertIn("does not hold the entry's time 2026-10-06T11:59:59Z", str(caught.exception))
+        self.assertFalse(any(c[0] == rs.ETCDCTL and "txn" in c for c in self.host.calls))
 
     def test_the_entry_is_dated_by_a_fresh_reading(self):
         epoch, _ = self.go_clock(lambda: NOW + 600)
@@ -396,6 +428,8 @@ class Restore(unittest.TestCase):
             rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
         self.assertIn("the restored store is live (%s), but the fsync of its directory failed" % rs.MEMBER, str(caught.exception))
         self.assertIn("read the state epoch from the live etcd (it must be 3), and only then start %s" % rs.DAEMON, str(caught.exception))
+        self.assertIn("start %s on its normal configuration" % rs.UNIT, str(caught.exception))
+        self.assertIn("check that no restore or take-over drop-in is active (systemctl show -p DropInPaths %s)" % rs.UNIT, str(caught.exception))
         self.assertFalse(self.daemon_started_after_its_stop())
 
     def test_a_restore_with_no_live_store_renames_it_into_place_and_says_so(self):
@@ -447,7 +481,7 @@ class Restore(unittest.TestCase):
         later = self.chain + [single5(2, m.digest(self.chain[0]), issued_at="2026-10-06T00:00:00Z")]
         cases = [("the restore statement is for epoch 1; this node's manifest is epoch 2: a new epoch ends it", {"the_chain": later}),
                  ("the restore statement is valid from 2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z, not now", {"now": NOW + 6 * 3600}),
-                 ("the restore statement is valid from", {"now": NOW - rs.SKEW_S - 1}),
+                 ("the restore statement is valid from", {"now": NOW - 1}),     # a second before not_before: no skew
                  ("the restore statement is not the owner's", {"signed": dict(self.signed, signature={
                      "party": "a", "key": pub(NODE_KEYS["a"]), "sig": sign(opstate.restore_message(self.signed["restore"]))})})]
         for reason, kw in cases:
