@@ -67,6 +67,8 @@ DROPIN = takeover.DROPIN_DIR + "/50-restore.conf"
 RESTORE_CONFIG = "/run/regalia-etcd/restore.conf.yml"
 STAGING = etcdconf.DATA_DIR + "/restore"              # inside the unit's StateDirectory: etcd may write there, nobody else
 MEMBER = etcdconf.DATA_DIR + "/member"
+# one restore at a time on a host: held from before run() starts until it returns or its recovery is done
+RESTORE_LOCK = "/run/lock/regalia-restore.lock"
 # the snapshot as hashed: copied while its digest is computed, and only this copy is restored (never the path again)
 VERIFIED_SNAPSHOT = etcdconf.DATA_DIR + "/restore.snapshot"
 ETCD_USER = takeover.ETCD_USER
@@ -235,6 +237,10 @@ def _first_steps_back(host, error, live=True):
     """Before etcd runs on staging, a refusal (or a command that timed out, or a file error) starts etcd and the daemon
     again on the live store, untouched, as they were (etcd only when there is a live store: never a new empty cluster).
     The refusal stays the one raised; a start that fails is added to it, with each unit's state as read back."""
+    try:
+        host.remove(VERIFIED_SNAPSHOT)          # only a copy: the snapshot itself is where it was, and a retry is not blocked
+    except OSError:
+        pass
     failed = []
     for unit in ((UNIT, DAEMON) if live else (DAEMON,)):
         try:
@@ -257,7 +263,7 @@ def _off_staging(host, error, live=True):
     STAGING is kept for inspection. The refusal stays the one raised; a step that fails is added to it."""
     failed = []
     steps = [lambda: takeover._stop(host, UNIT), lambda: host.remove(DROPIN), lambda: host.remove(RESTORE_CONFIG),
-             lambda: host.run(["systemctl", "daemon-reload"])]
+             lambda: require(host.run(["systemctl", "daemon-reload"]).returncode == 0, "systemctl daemon-reload failed")]
     if live:                                    # never restart etcd onto a missing live store: it would form an empty cluster
         steps.append(lambda: _start(host, UNIT, verb="restart"))
     for step in steps:
@@ -265,6 +271,10 @@ def _off_staging(host, error, live=True):
             step()
         except (Refused, subprocess.SubprocessError, OSError) as again:
             failed.append(_reason(again))
+    if failed and not live:
+        raise Refused("%s; and the cleanup failed (%s): remove %s and %s and reload systemd by hand, and leave %s and %s STOPPED: "
+                      "there is no live store, and etcd started now would form a new, empty cluster" % (_reason(error), "; ".join(failed),
+                                                                                                        DROPIN, RESTORE_CONFIG, UNIT, DAEMON)) from error
     if failed:
         raise Refused("%s; and putting etcd back on its live store failed (%s): remove %s, reload systemd and restart %s by hand; "
                       "the daemon is stopped" % (_reason(error), "; ".join(failed), DROPIN, UNIT)) from error
@@ -385,11 +395,15 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
         how = host.exchange(STAGING + "/member", MEMBER)
     except NotDurable as error:
         raise Refused("the restored store is live (%s), but the fsync of its directory failed (%s): whether the rename survives a power "
-                      "loss is not known. The daemon is not started; sync the file system, check %s, then start %s by hand"
-                      % (MEMBER, error, MEMBER, DAEMON)) from None
+                      "loss is not known. etcd and the daemon are stopped. Once the file system is sound: start %s on its normal "
+                      "configuration, check that no restore or take-over drop-in is active (systemctl show -p DropInPaths %s), read "
+                      "the state epoch from the live etcd (it must be %d), and only then start %s" % (MEMBER, error, UNIT, UNIT, epoch,
+                                                                                                  DAEMON)) from None
     except OSError as error:
-        raise Refused("the exchange of %s/member and %s failed (%s): the live store is as it was; the daemon is not started"
-                      % (STAGING, MEMBER, error)) from None
+        # the rename did not happen: the live store is as it was. etcd goes back on it (never onto a missing one), the
+        # daemon stays stopped, and STAGING (holding the restored store at R) is kept
+        _off_staging(host, Refused("the exchange of %s/member and %s failed (%s): the live store is as it was; the daemon is not "
+                                   "started" % (STAGING, MEMBER, error)), live=live_exists)
     facts.update(exchanged=how)
     if how == "exchanged":
         say("the restored store is live; the store it replaced is kept in %s/member" % STAGING)
@@ -417,6 +431,28 @@ def restoring(host):
 
 def _start(host, *units, verb="start"):
     takeover._start(host, *units, verb=verb)
+
+
+class exclusive:
+    """An exclusive lock on `path` for one restore run, recovery included (CodeRabbit on #740): a second run while one holds
+    it is refused at once, before it stops or copies anything."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(self.fd)
+            raise Refused("another restore is running on this host (%s is held): one at a time" % self.path) from None
+        return self
+
+    def __exit__(self, *exc):
+        os.close(self.fd)                       # the lock goes with the descriptor
+        return False
 
 
 RENAME_EXCHANGE = 2                     # linux/fs.h
@@ -539,8 +575,9 @@ def main(argv=None, host=None, now=None, signer=None):
             seconds, ok = node.clock()()
             require(ok, "the time is not authenticated (authtime): a restore is dated by authenticated time only")
             return int(seconds)
-        run(host, signed, chain, node.node_id, args.snapshot, now if now is not None else authenticated(), signer,
-            clock=None if now is not None else authenticated)
+        with exclusive(RESTORE_LOCK):
+            run(host, signed, chain, node.node_id, args.snapshot, now if now is not None else authenticated(), signer,
+                clock=None if now is not None else authenticated)
     except (Refused, OSError, ValueError, KeyError) as refused:
         say("REFUSED: %s" % refused)
         return 1

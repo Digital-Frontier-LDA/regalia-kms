@@ -79,7 +79,8 @@ class FakeHost:
         self.sha = SNAPSHOT_SHA
         self.restore_fails = self.txn_lies = self.exchange_lies = self.exchange_fails = self.not_durable = self.restore_hangs = False
         self.start_fails = False
-        self.transitional = {}                  # unit: a state is-active prints with exit 3 that is not "stopped"
+        self.transitional = {}
+        self.reload_fails_after_staging = False                  # unit: a state is-active prints with exit 3 that is not "stopped"
         self.staging_exists = False
 
     # the host's files
@@ -136,7 +137,7 @@ class FakeHost:
         if argv[0] == "systemctl":
             verb, unit = argv[1], argv[-1]
             if verb == "daemon-reload":
-                return self.done()
+                return self.done(1 if self.reload_fails_after_staging and self.staging is not None else 0)
             if (self.start_fails is True or unit in (self.start_fails or ())) and verb != "stop":
                 return self.done(1)
             if unit == rs.DAEMON:
@@ -391,7 +392,10 @@ class Restore(unittest.TestCase):
 
     def test_an_exchange_whose_sync_failed_says_the_restored_store_is_live_and_starts_nothing(self):
         self.host.not_durable = True
-        self.refused("the restored store is live (%s), but the fsync of its directory failed" % rs.MEMBER)
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+        self.assertIn("the restored store is live (%s), but the fsync of its directory failed" % rs.MEMBER, str(caught.exception))
+        self.assertIn("read the state epoch from the live etcd (it must be 3), and only then start %s" % rs.DAEMON, str(caught.exception))
         self.assertFalse(self.daemon_started_after_its_stop())
 
     def test_a_restore_with_no_live_store_renames_it_into_place_and_says_so(self):
@@ -401,12 +405,35 @@ class Restore(unittest.TestCase):
         self.assertEqual(epoch, 3)
         self.assertIn("there was no live store to replace", said)
 
-    def test_a_failed_exchange_leaves_the_live_store_and_the_daemon_stopped(self):
+    def test_a_failed_exchange_puts_etcd_back_on_the_untouched_live_store_and_leaves_the_daemon_stopped(self):
         self.host.exchange_fails = True
         live = self.host.live
         self.refused("the exchange of %s/member and %s failed" % (rs.STAGING, rs.MEMBER))
         self.assertIs(self.host.live, live)
         self.assertFalse(self.daemon_started_after_its_stop())
+        self.assertTrue(self.host.etcd)
+        self.assertIs(self.host.serving, live)
+
+    def test_a_failed_exchange_with_no_live_store_leaves_both_stopped(self):
+        self.host.exchange_fails = True
+        self.host.live, self.host.etcd, self.host.serving = None, False, None
+        self.refused("etcd is left stopped (there is no live store to put it back on)")
+        self.assertFalse(self.host.etcd)
+
+    def test_a_cleanup_that_fails_with_no_live_store_never_says_restart_etcd(self):
+        self.host = FakeHost(self.chain, snapshot_kv=held(self.chain, 3))
+        self.host.live, self.host.etcd, self.host.serving = None, False, None
+        self.host.reload_fails_after_staging = True
+        with self.assertRaises(m.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+        self.assertIn("systemctl daemon-reload failed", str(caught.exception))
+        self.assertIn("leave %s and %s STOPPED" % (rs.UNIT, rs.DAEMON), str(caught.exception))
+        self.assertNotIn("restart %s by hand" % rs.UNIT, str(caught.exception))
+
+    def test_a_failed_digest_removes_the_copy_so_a_retry_is_not_blocked(self):
+        self.host.sha = "66" * 32
+        self.refused("the snapshot %s is not the one the statement names" % SNAPSHOT)
+        self.assertNotIn(rs.VERIFIED_SNAPSHOT, self.host.files)
 
 
     def test_a_multi_node_cluster_is_refused_before_anything_stops(self):
@@ -475,7 +502,10 @@ class Main(unittest.TestCase):
 
             def clock(self):
                 return lambda: test.reading
-        self.patches = [unittest.mock.patch("deploy.baremetal.node.load", lambda path: FakeNode()),
+        lockdir = tempfile.mkdtemp(prefix="restore-lock-")
+        self.addCleanup(shutil.rmtree, lockdir, True)
+        self.patches = [unittest.mock.patch.object(rs, "RESTORE_LOCK", os.path.join(lockdir, "regalia-restore.lock")),
+                        unittest.mock.patch("deploy.baremetal.node.load", lambda path: FakeNode()),
                         unittest.mock.patch("deploy.baremetal.node.read_published", lambda path: [envelope])]
         for p in self.patches:
             p.start()
@@ -494,6 +524,23 @@ class Main(unittest.TestCase):
         self.assertEqual(args[5], NOW)                      # whole seconds, never the (seconds, authenticated) pair
         self.reading = (NOW + 60.2, True)
         self.assertEqual(kw["clock"](), NOW + 60)
+
+    def test_a_second_run_while_one_holds_the_lock_is_refused_before_anything(self):
+        import fcntl
+        path = os.path.join(tempfile.mkdtemp(prefix="restore-lock-"), "regalia-restore.lock")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        held_fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, held_fd)
+        fcntl.flock(held_fd, fcntl.LOCK_EX)
+        with unittest.mock.patch.object(rs, "RESTORE_LOCK", path):
+            code, run, out = self.main()
+        self.assertEqual(code, 1)
+        self.assertIn("another restore is running on this host", out)
+        run.assert_not_called()
+        with unittest.mock.patch.object(rs, "RESTORE_LOCK", path + ".free"):
+            code, run, _ = self.main()
+        self.assertEqual(code, 0)
+        run.assert_called_once()
 
     def test_time_that_is_not_authenticated_is_refused(self):
         self.reading = (NOW, False)

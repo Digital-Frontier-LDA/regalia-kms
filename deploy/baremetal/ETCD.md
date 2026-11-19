@@ -70,7 +70,9 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     writes it with `O_EXCL`, and the ledger issues each epoch once. Its window is at most a day, and the collector's
     spend audit detects a history replayed under one epoch.
   - A refusal before the swap leaves the live store untouched. With no live store, etcd is never restarted onto the
-    empty directory. Before etcd ran on staging, both units are started again
+    empty directory. The verified copy of the snapshot (`/var/lib/regalia-etcd/restore.snapshot`) is removed on an early
+    refusal; the snapshot itself is never touched. A run that finds that copy, or `restore/`, refuses until the operator
+    has looked at it and moved it away. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
     as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
     directory is kept for inspection, and a new run refuses until it is moved away.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
