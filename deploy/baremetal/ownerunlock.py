@@ -170,7 +170,7 @@ class OwnerPeer:
         self.manifest, self.attester, self.signer, self.audit = manifest, attester, signer, audit
         self.target, self.path_epoch, self._secret = target, epoch, secret
         self.peer_id = OWNER
-        self.given = 0                    # responses signed: the caller stops once one was given
+        self.signed = 0                   # responses signed (owner.serve_unlock counts the ones it sent in full)
 
     def handle(self, raw, caller=None):
         """One request to one reply, as unlock.Peer.handle: a refusal tells the requester nothing but its kind."""
@@ -231,7 +231,7 @@ class OwnerPeer:
                     "path_epoch": epoch, "ciphertext": recipient.encrypt(self._secret, unlock._oaep(unlock.CONTRIBUTION_LABEL + transcript)).hex()}
         sig = self.signer.sign(unlock.owner_signed_message(response))
         require(isinstance(sig, bytes) and len(sig) == 64, "the owner key did not give a 64-byte Ed25519 signature")
-        self.given += 1
+        self.signed += 1
         return {"response": response, "signature": {"alg": "ed25519", "key": self.signer.public(), "sig": sig.hex()}}
 
 

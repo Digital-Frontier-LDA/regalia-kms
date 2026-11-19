@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -77,16 +78,51 @@ type bootConfig struct {
 	OwnerKeys []ownerKey `json:"owner_keys,omitempty"`
 }
 
-// exactKeys refuses an object whose member names are not exactly `keys`: a v1 configuration with owner_keys, or an
-// owner pin with an EK Name, is refused rather than read as the other kind.
-func exactKeys(raw json.RawMessage, keys []string) error {
-	var members map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &members); err != nil || len(members) != len(keys) {
-		return errors.New("fields mismatch")
+// exactKeys refuses an object whose member names are not exactly `keys`, each once and spelled exactly (Go's decoder
+// matches names without regard to case and keeps the last of two equal ones; the reference client does neither): a v1
+// configuration with owner_keys, an owner pin with an EK Name, `"ALG"` for `"alg"`, or a member given twice, is refused
+// rather than read as something else. It returns the members.
+func exactKeys(raw json.RawMessage, keys []string) (map[string]json.RawMessage, error) {
+	mismatch := errors.New("fields mismatch")
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if open, err := decoder.Token(); err != nil || open != json.Delim('{') {
+		return nil, mismatch
 	}
+	want, members := map[string]bool{}, map[string]json.RawMessage{}
 	for _, k := range keys {
-		if _, has := members[k]; !has {
-			return errors.New("fields mismatch")
+		want[k] = true
+	}
+	for decoder.More() {
+		name, err := decoder.Token()
+		key, isString := name.(string)
+		if err != nil || !isString || !want[key] {
+			return nil, mismatch
+		}
+		if _, twice := members[key]; twice {
+			return nil, mismatch
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, mismatch
+		}
+		members[key] = value
+	}
+	if len(members) != len(keys) {
+		return nil, mismatch
+	}
+	return members, nil
+}
+
+// integers refuses a PCR list whose elements are not all JSON integers: Go would decode a null as PCR 0.
+func integers(raw json.RawMessage) error {
+	var elements []json.RawMessage
+	if err := json.Unmarshal(raw, &elements); err != nil {
+		return errors.New("not a list")
+	}
+	for _, e := range elements {
+		text := string(bytes.TrimSpace(e))
+		if text == "" || strings.ContainsAny(text, ".eE") || (text[0] != '-' && (text[0] < '0' || text[0] > '9')) {
+			return errors.New("not an integer")
 		}
 	}
 	return nil
@@ -105,12 +141,28 @@ func shapeOf(raw []byte) error {
 	if head.Schema == bootSingleSchema {
 		keys, peer = bootSingleKeys, ownerPinKeys
 	}
-	if exactKeys(raw, keys) != nil {
-		return errors.New("the boot configuration is not the expected JSON object")
+	refused := errors.New("the boot configuration is not the expected JSON object")
+	members, err := exactKeys(raw, keys)
+	if err != nil {
+		return refused
+	}
+	if integers(members["pcrs"]) != nil {
+		return errors.New("pcrs must be an ascending list of PCR indices 0-23")
 	}
 	for _, p := range head.Peers {
-		if exactKeys(p, peer) != nil {
-			return errors.New("the boot configuration is not the expected JSON object")
+		if _, err := exactKeys(p, peer); err != nil {
+			return refused
+		}
+	}
+	if head.Schema == bootSingleSchema {
+		var owners []json.RawMessage
+		if json.Unmarshal(members["owner_keys"], &owners) != nil {
+			return refused
+		}
+		for _, o := range owners {
+			if _, err := exactKeys(o, []string{"alg", "key"}); err != nil {
+				return refused
+			}
 		}
 	}
 	return nil

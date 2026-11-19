@@ -173,6 +173,23 @@ func TestTheSingleNodeBootConfigurationIsRefusedUnlessExact(t *testing.T) {
 	if _, err := loadText(t, good); err != nil {
 		t.Fatal(err)
 	}
+	// member names exactly as the reference client reads them: no other case, none twice, and no null as a PCR
+	for _, text := range []string{
+		strings.Replace(good, `"device":`, `"DEVICE":`, 1),
+		strings.Replace(good, `"device":"/dev/disk/by-partlabel/root"`, `"device":"/dev/disk/by-partlabel/root","device":"/dev/disk/by-partlabel/other"`, 1),
+		strings.Replace(good, `{"alg":"ed25519"`, `{"ALG":"ed25519"`, 1),
+		strings.Replace(good, `{"alg":"ed25519"`, `{"alg":"ed25519","alg":"ed25519"`, 1),
+		strings.Replace(good, `"node_id":"owner"}`, `"NODE_ID":"owner"}`, 1),
+		strings.Replace(good, `"pcrs":[7,11]`, `"pcrs":[null,7]`, 1),
+		strings.Replace(mustJSON(t, validConfig(newFakePeer(t, "birch"))), `"pcrs":[7,11]`, `"pcrs":[null,11]`, 1),
+	} {
+		if _, err := loadText(t, text); err == nil {
+			t.Fatalf("accepted %s", text)
+		}
+	}
+	if _, err := loadText(t, strings.Replace(good, `"pcrs":[7,11]`, `"pcrs":[0,7]`, 1)); err != nil {
+		t.Fatalf("PCR 0 is a PCR: %v", err)
+	}
 }
 
 func TestAnOwnerResponseIsRefusedUnlessSignedByAnOwnerKeyOverIt(t *testing.T) {
@@ -194,6 +211,12 @@ func TestAnOwnerResponseIsRefusedUnlessSignedByAnOwnerKeyOverIt(t *testing.T) {
 		// a TPM's signature in the owner's place: the owner pin is never judged as a node's
 		"the owner's signature is malformed ":  peer.send,
 		"the owner's signature is malformed  ": ownerSend(t, peer, private, func(r map[string]any) { r["signature"].(map[string]any)["extra"] = "1" }),
+		// a member in another case: Go would match it, the reference client does not
+		"the owner's signature is malformed   ": ownerSend(t, peer, private, func(r map[string]any) {
+			s := r["signature"].(map[string]any)
+			s["ALG"] = s["alg"]
+			delete(s, "alg")
+		}),
 	} {
 		boot := testSession(t)
 		_, err := boot.ask(owner, 1, send, noQuote)

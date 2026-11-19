@@ -201,7 +201,7 @@ class Exchange(Case):
         self.assertEqual(self.epoch, 1)                                   # the manifest's epoch at enrolment
         self.assertEqual(self.ask(), self.secret)
         self.assertTrue(self.session.consumed)
-        self.assertEqual(self.owner.given, 1)
+        self.assertEqual(self.owner.signed, 1)
         self.assertEqual([(e["event"], e["subject"], e["peer"], e["outcome"]) for e in self.events],
                          [("unlock-challenge", "a", "owner", "ALLOW"), ("unlock", "a", "owner", "ALLOW")])
         reply = json.loads(self.wire[-1][1])
@@ -269,7 +269,7 @@ class Exchange(Case):
         self.denied("signature")
         self.refused("the peer refused (DENIED)", self.ask, session=self.boot("b"))
         self.denied("the contribution this tool holds is for a, not b")
-        self.assertEqual(self.owner.given, 0)
+        self.assertEqual(self.owner.signed, 0)
         self.assertEqual(self.ask(session=self.boot()), self.secret)
 
     def test_the_owner_key_must_be_one_of_the_manifest_s(self):
@@ -389,6 +389,20 @@ class Disk(Case):
         self.assertTrue(unlock.opens(self.disk, 1, unlock.credential(self.local, secret, "a", "owner", epoch), run))
         self.assertFalse(self.session.consumed)
 
+    def test_a_token_whose_keyslot_is_gone_is_removed_and_the_path_made_again(self):
+        self.enrol()
+        self.cs(["luksKillSlot", "--batch-mode", self.disk, "1"])                       # the keyslot goes; its token stays
+        self.assertEqual(unlock.judge_tokens(unlock.luks_meta(self.disk, run), "a", ["owner"])[0], False)
+        self.assertEqual(self.enrol(), {"path_epoch": 1, "keyslot": 1})                 # asked again, not "existing"
+        self.assertEqual(len(self.given), 2)
+        meta = unlock.luks_meta(self.disk, run)
+        self.assertEqual((sorted(meta["keyslots"]), len(unlock.path_tokens(meta))), (["0", "1"], 1))
+        self.assertTrue(unlock.judge_tokens(meta, "a", ["owner"])[0])
+        # a live owner path over ANOTHER local half (a reseal) is refused by name, and nothing is written
+        self.refused("over another local half (a reseal): remove it first", enrolpeer.request_owner_path, self.m1, "a", self.exchange,
+                     self.keys["a"].ak_public, os.urandom(32), fake_seal(os.urandom(32)), self.disk, RECOVERY, run=run)
+        self.assertEqual(len(self.given), 2)
+
     def test_the_node_takes_an_owner_path_only_single_node_and_never_below_its_epoch(self):
         multi = dict(manifest5(1, "", nodes4(), MULTI))
         self.refused("only under the single-node profile", enrolpeer.request_owner_path, multi, "a", self.exchange, self.keys["a"].ak_public,
@@ -486,6 +500,75 @@ class OwnerCommands(Case):
         self.assertFalse(os.path.exists(out + "/wrapped4.json"))
         self.refused("exactly the two owner cards", owner.contribute_path, self.m1, self.doc, request, enrolment.fingerprint, out,
                      cards[:1], out + "/env3.asc", out + "/wrapped3.json", run=gpg)
+
+    def test_the_listen_address_names_its_family(self):
+        self.assertEqual(owner.listen_address("192.0.2.9:7443"), (socket.AF_INET, "192.0.2.9", 7443))
+        self.assertEqual(owner.listen_address("[fd00::9]:7443"), (socket.AF_INET6, "fd00::9", 7443))
+        for bad in ("fd00::9:7443", "owner.boot:7443", "192.0.2.9", "[fd00::9]:70000", ""):
+            with self.subTest(bad):
+                self.refused("--listen is", owner.listen_address, bad)
+
+    def test_a_response_whose_sending_fails_does_not_count(self):
+        """The first signed response cannot be sent: it is recorded and the owner keeps serving; the node's next request
+        is answered, and only then is the contribution GIVEN."""
+        import queue
+        requests = queue.Queue()
+
+        class Conn:
+            def __init__(self, raw, answer, listener):
+                self.raw, self.answer, self.listener = raw, answer, listener
+
+            def settimeout(self, t):
+                pass
+
+            def recv(self, n):
+                raw, self.raw = self.raw, b""
+                return raw
+
+            def sendall(self, data):
+                if self.listener.failures and b'"response"' in data:
+                    self.listener.failures -= 1
+                    self.answer.put(None)
+                    raise BrokenPipeError("the node went away")
+                self.answer.put(data)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        class Listener:
+            failures = 1                                              # the first signed response's sending fails
+
+            def getsockname(self):
+                return ("192.0.2.9", 7443)
+
+            def accept(self):
+                raw, answer = requests.get(timeout=30)
+                return Conn(raw, answer, self), ("192.0.2.1", 1)
+
+        def transport(raw):
+            answer = queue.Queue()
+            requests.put((raw, answer))
+            data = answer.get(timeout=30)
+            if data is None:
+                raise ConnectionResetError("reset")
+            return data
+        said, done = [], []
+        worker = threading.Thread(target=lambda: done.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, self.signer, Listener(),
+                                                                                say=said.append)), daemon=True)
+        worker.start()
+        self.refused("unlock: the transport failed (ConnectionResetError)", self.ask, transport=transport)
+        self.assertFalse(self.session.consumed)
+        self.assertEqual(done, [])                                    # still serving
+        self.assertEqual(self.ask(transport=transport), self.secret)  # the same boot session, asked again
+        worker.join(30)
+        self.assertEqual(done, ["a"])
+        events = [json.loads(line) for line in said if line.startswith("{")]
+        self.assertIn(("unlock-send", "ERROR"), [(e["event"], e["outcome"]) for e in events])
+        self.assertTrue(said[-1].startswith("GIVEN: the contribution of a"))
+        self.assertEqual(sum(1 for line in said if line.startswith("GIVEN")), 1)
 
     def test_unlock_serves_until_one_response_is_given(self):
         listener = socket.create_server(("127.0.0.1", 0))
@@ -661,10 +744,14 @@ class OnSwtpm(unittest.TestCase):
         self.assertIn("a is MAINTENANCE under epoch 2, not ACTIVE", str(caught.exception))
         # nothing of the contribution on the node's side: not in the header, not in the sealed credential
         secret = ownerunlock.read_plaintext(self.cards[self.d + "/owner-env.asc"])[2]
-        with open(self.device, "rb") as f:
-            image = f.read()
-        for form in (secret, secret.hex().encode(), base64.b64encode(secret)):
-            self.assertNotIn(form, image)
+        forms = (secret, secret.hex().encode(), base64.b64encode(secret))
+        keep, tail = max(len(form) for form in forms) - 1, b""
+        with open(self.device, "rb") as f:                            # in bounded chunks: the device may be large
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                window = tail + chunk
+                for form in forms:
+                    self.assertNotIn(form, window)
+                tail = window[-keep:]
 
 
 if __name__ == "__main__":

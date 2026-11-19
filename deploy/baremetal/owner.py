@@ -210,21 +210,53 @@ def contribute_path(tip, document, request, fingerprint, state_dir, fingerprints
     return wrapped["path_epoch"]
 
 
+def listen_address(text):
+    """(family, host, port) of `--listen`: `ADDRESS:PORT`, an IPv6 address in brackets."""
+    import re
+    import socket
+    found = re.fullmatch(r"\[([0-9A-Fa-f:.]{2,45})\]:([0-9]{1,5})|([0-9.]{7,15}):([0-9]{1,5})", text or "")
+    require(found is not None, "--listen is ADDRESS:PORT, an IPv6 address in brackets")
+    six = found.group(1) is not None
+    port = int(found.group(2) if six else found.group(4))
+    require(0 <= port <= 65535, "--listen is ADDRESS:PORT, the port 0-65535")
+    return (socket.AF_INET6 if six else socket.AF_INET), (found.group(1) if six else found.group(3)), port
+
+
 def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=print):
     """`owner.py unlock`: answer the single-node host's unlock requests on `listener` (a bound, listening socket on the
-    boot mesh) until one response was given, as its peer (ownerunlock.OwnerPeer). `decrypted` is the envelope as gpg
-    printed it; `signer` an owner key. Returns the node unlocked."""
+    boot mesh), one connection at a time, as its peer (ownerunlock.OwnerPeer), until a signed response has been SENT in
+    full. A response whose sending fails is recorded (unlock-send, ERROR) and does not count: the node asks again and is
+    answered again. `decrypted` is the envelope as gpg printed it; `signer` an owner key. Returns the node unlocked."""
+    import time
     from deploy.baremetal import ownerunlock, unlock
     contribution = ownerunlock.read_plaintext(decrypted)
     attester = ownerunlock.verifier(tip, document, os.path.join(state_dir, "attest.json"))
-    peer = ownerunlock.OwnerPeer(tip, attester, contribution, signer, lambda event: say(ownerunlock.printed_event(event)))
-    say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d; touch the key when it blinks"
-        % (contribution[0], contribution[1], tip["epoch"], *listener.getsockname()[:2]))
-    while peer.given == 0:
-        unlock.serve(peer, listener, count=1)
-        if listener.fileno() == -1:
-            break
-    require(peer.given > 0, "the listener closed before any response was given")
+    audit = lambda event: say(ownerunlock.printed_event(event))      # noqa: E731
+    peer = ownerunlock.OwnerPeer(tip, attester, contribution, signer, audit)
+    host, port = listener.getsockname()[:2]
+    say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d; touch the key when it blinks" % (contribution[0], contribution[1], tip["epoch"], host, port))
+    sent = 0
+    while not sent:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            break                                        # the listener was closed
+        with conn:
+            reply = None
+            try:
+                deadline = time.monotonic() + unlock.IO_TIMEOUT
+                reply = peer.handle(unlock._read_all(conn, deadline))
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                conn.sendall(membership.canonical(reply))
+            except OSError as error:
+                if reply is not None and "response" in reply:
+                    audit({"event": "unlock-send", "epoch": tip["epoch"], "manifest_digest": membership.digest(tip), "subject": contribution[0],
+                           "peer": unlock.OWNER, "outcome": "ERROR", "reason": "the signed response was not sent (%s): it does not count, "
+                           "and the node's next request is answered" % type(error).__name__})
+                continue
+            if "response" in reply:
+                sent += 1
+    require(sent > 0, "the listener closed before any response was sent")
     say("GIVEN: the contribution of %s, under manifest epoch %d. The node opens its disk with the first valid response" % (contribution[0], tip["epoch"]))
     return contribution[0]
 
@@ -464,13 +496,12 @@ def main(argv=None):
             tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
             with open(args.measurements, "rb") as f:
                 document = measurements.load(f.read(measurements.MAX_BYTES + 1))
-            host, _, port = args.listen.rpartition(":")
-            require(host and port.isdigit(), "--listen is ADDRESS:PORT")
+            family, host, port = listen_address(args.listen)
             # the PIN once, before anything is served: a node's request waits seconds, not for a PIN to be typed
             once = pin()
             signer = p11sign.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
                                           only_token=True, pin=lambda: once, alg="ed25519")
-            with socket.create_server((host.strip("[]"), int(port))) as listener:
+            with socket.create_server((host, port), family=family) as listener:
                 serve_unlock(tip, document, args.state, decrypted, signer, listener)
             return 0
 

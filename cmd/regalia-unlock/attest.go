@@ -154,6 +154,9 @@ func verifyPeerSignature(signature *peerSignature, peer pin, digest []byte) erro
 // canonical bytes.
 func verifyOwnerSignature(raw json.RawMessage, keys []ed25519.PublicKey, canonical []byte) error {
 	var signature ownerSignature
+	if _, err := exactKeys(raw, []string{"alg", "key", "sig"}); err != nil {
+		return errors.New("the owner's signature is malformed")
+	}
 	if err := decodeReply(raw, &signature); err != nil {
 		return errors.New("the owner's signature is malformed")
 	}

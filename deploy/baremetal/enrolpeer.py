@@ -237,16 +237,32 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
     nowhere. Returns as request_path does."""
     from deploy.baremetal import ownerunlock
     ownerunlock.single_node(manifest, node_id, states=tuple(s for s, can in membership.CAPABILITIES.items() if "request" in can))
-    meta = unlock.luks_meta(device, run) if run else unlock.luks_meta(device)
-    if any(t.get("peer") == unlock.OWNER and t.get("target") == node_id for _, t in unlock.path_tokens(meta)):
+    run = run or subprocess.run
+    meta = unlock.luks_meta(device, run)
+    keyslots = set(meta.get("keyslots") or {})
+    mine = [(i, t) for i, t in unlock.path_tokens(meta) if t.get("peer") == unlock.OWNER and t.get("target") == node_id]
+
+    def slot_of(token):
+        slots = token.get("keyslots")
+        return slots[0] if isinstance(slots, list) and len(slots) == 1 and isinstance(slots[0], str) else None
+    # a LIVE owner path, by enrol._without_path's criteria: its keyslot exists and its local half is this enrolment's
+    if any(slot_of(t) in keyslots and t.get("local") == sealed_local for _, t in mine):
         return {"path_epoch": None, "keyslot": None, "existing": True}
+    # a token whose keyslot is gone opens nothing: it is removed, so the path is made again (a killed keyslot)
+    for token_id, token in mine:
+        if slot_of(token) not in keyslots:
+            done = run(["cryptsetup", "token", "remove", "--token-id", token_id, device], stdin=subprocess.DEVNULL, capture_output=True)
+            require(done.returncode == 0, "the stale owner token %s (its keyslot is gone) could not be removed (exit %d): nothing was "
+                    "written" % (token_id, done.returncode))
+    live = [t for _, t in mine if slot_of(t) in keyslots]
+    require(not live, "the disk has an owner path in keyslot %s over another local half (a reseal): remove it first "
+            "(unlock.remove_path), then enrol again. Nothing was written" % ", ".join(sorted(slot_of(t) for t in live)))
     enrolment = unlock.Enrolment(node_id)
     wrapped = exchange(ownerunlock.path_request(node_id, enrolment, ak_public), enrolment.fingerprint)
     path_epoch, contribution = enrolment.open(wrapped, unlock.OWNER)
     require(path_epoch >= manifest["epoch"], "the owner answered path epoch %d, below this node's manifest epoch %d: refused, nothing "
             "was written to the disk" % (path_epoch, manifest["epoch"]))
-    slot = unlock.enrol_path(device, node_id, unlock.OWNER, path_epoch, local, sealed_local, contribution, recovery,
-                             **({"run": run} if run else {}))
+    slot = unlock.enrol_path(device, node_id, unlock.OWNER, path_epoch, local, sealed_local, contribution, recovery, run=run)
     return {"path_epoch": path_epoch, "keyslot": slot}
 
 
