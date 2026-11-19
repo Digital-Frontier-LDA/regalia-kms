@@ -1,0 +1,24 @@
+# STAGING IMAGE VARIANT ONLY (regalia-kms-dx7.14): regalia-staging-sshd.service's whole configuration (Debian's
+# /etc/ssh/sshd_config is not read). sshd keeps the FIRST value it reads for a keyword, so the settings below win over
+# the same keywords in the per-host Include at the end. That alone does NOT hold for a Match block, whose settings do
+# apply to the connections it matches. So the Include may hold ONLY ListenAddress and AllowUsers (this host's address,
+# and an AllowUsers naming the staging management net, from /var): regalia-staging-sshd.service's first ExecStartPre,
+# sshd-dropins-check.sh, refuses to start on any other keyword, Match included.
+HostKey /var/lib/regalia-staging/ssh/ssh_host_ed25519_key
+AuthorizedKeysFile /var/lib/regalia-staging/authorized_keys
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin prohibit-password
+StrictModes yes
+UsePAM no
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+AllowStreamLocalForwarding no
+PermitTunnel no
+PermitUserEnvironment no
+Banner /usr/lib/regalia-staging/banner
+Include /var/lib/regalia-staging/sshd_config.d/*.conf

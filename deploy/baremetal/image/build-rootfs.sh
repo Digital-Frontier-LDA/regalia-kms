@@ -2,6 +2,13 @@
 # build-rootfs.sh — build the KMS host's ROOT FILESYSTEM reproducibly, from pinned inputs (#61, first slice).
 #
 #   sudo deploy/baremetal/image/build-rootfs.sh --snapshot 20261003T121500Z --out DIR [--go GO] [--epoch N] [--keyring FILE]
+#                                               [--variant production|staging]
+#
+# --variant staging (regalia-kms-dx7.14, for the staging DL360 ONLY): adds deploy/baremetal/image/staging/ (a key-only
+# operator sshd refused without regalia.staging=1 on the kernel command line, systemd-networkd enabled for the staging
+# management net, a persistent journal) and its packages. The default is production, which holds none of it:
+# deploy/baremetal/imagevariant.py judges every build on its listing before anything is written, and the record names
+# the variant.
 #
 # As build-initrd.sh does for the initrd: every builder runs this itself, from its own clean clone at the agreed
 # commit, and two builders' archives must be identical. The design is on #61.
@@ -86,9 +93,10 @@ BUILD_PACKAGES="gcc,libc6-dev,libpcsclite-dev,pkg-config,erofs-utils,cryptsetup-
 PIN="deploy/baremetal/image/etcd.pin"
 ENABLED="deploy/baremetal/image/units-enabled.txt"
 PRESET="deploy/baremetal/image/regalia-kms.preset"
-REPO_FILES=("$SCRIPT" "$LIST" "$PIN" "$ENABLED" "$PRESET" deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
+STAGING_DIR="deploy/baremetal/image/staging"
+REPO_FILES=("$SCRIPT" "$LIST" "$PIN" "$ENABLED" "$PRESET" deploy/baremetal/imagevariant.py deploy/baremetal/image/usr-verity.sh deploy/baremetal/initrd/repo-git.sh deploy/baremetal/initrd/tree-retry.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh go.mod go.sum)
 die(){ echo "build-rootfs: $*" >&2; exit 2; }
-SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
+SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING="" VARIANT=production
 while [ $# -gt 0 ]; do
   case "$1" in
     --snapshot) SNAPSHOT="${2:-}"; shift 2 ;;
@@ -96,7 +104,8 @@ while [ $# -gt 0 ]; do
     --out) OUT="${2:-}"; shift 2 ;;
     --go) GO="${2:-}"; shift 2 ;;
     --keyring) KEYRING="${2:-}"; shift 2 ;;
-    *) die "unknown argument $1 (--snapshot TIME --out DIR [--go GO] [--epoch N] [--keyring FILE])" ;;
+    --variant) VARIANT="${2:-}"; shift 2 ;;
+    *) die "unknown argument $1 (--snapshot TIME --out DIR [--go GO] [--epoch N] [--keyring FILE] [--variant production|staging])" ;;
   esac
 done
 [ "$(id -u)" = 0 ] || die "run as root (the trees are built and chrooted into)"
@@ -109,6 +118,10 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
 for t in mmdebstrap git python3 gpgv curl tar; do command -v "$t" >/dev/null || die "$t is required"; done
 [ -z "$KEYRING" ] || [ -r "$KEYRING" ] || die "--keyring $KEYRING cannot be read"
+case "$VARIANT" in production|staging) ;; *) die "--variant must be production or staging, not '$VARIANT'" ;; esac
+[ "$VARIANT" = production ] || REPO_FILES+=("$STAGING_DIR"/packages.txt "$STAGING_DIR"/regalia-staging-sshd.service \
+  "$STAGING_DIR"/sshd_config "$STAGING_DIR"/banner "$STAGING_DIR"/journald.conf "$STAGING_DIR"/networkd.conf \
+  "$STAGING_DIR"/regalia-staging.tmpfiles.conf "$STAGING_DIR"/issue "$STAGING_DIR"/sshd-dropins-check.sh)
 
 # the commit, clean, read as its owner (build-initrd.sh's rules, the same file)
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
@@ -163,6 +176,12 @@ PACKAGES="$(sed -n 's/^PACKAGES //p' <<< "$SPEC")"
 mapfile -t PROVIDES < <(sed -n 's/^PROVIDES //p' <<< "$SPEC")
 mapfile -t BUILT < <(sed -n 's/^BUILT //p' <<< "$SPEC")
 [ -n "$PACKAGES" ] && [ "${#BUILT[@]}" -gt 0 ] || die "$LIST names no packages or no built programs"
+if [ "$VARIANT" = staging ]; then
+  STAGING_PACKAGES="$(python3 -BEs -m deploy.baremetal.imagevariant packages)" \
+    && [ -n "$STAGING_PACKAGES" ] || die "$STAGING_DIR/packages.txt cannot be read"
+  PACKAGES="$PACKAGES,$STAGING_PACKAGES"
+  echo "build-rootfs: STAGING VARIANT (regalia-kms-dx7.14): adds $STAGING_PACKAGES and $STAGING_DIR"
+fi
 mkdir -p "$OUT"
 [ -z "$(ls -A "$OUT")" ] || die "--out $OUT must be empty"
 
@@ -353,6 +372,36 @@ done
 [ "${#missing[@]}" = 0 ] || die "packages.txt says these are provided, and the host tree lacks them: ${missing[*]}"
 chroot "$ROOT" dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 
+# ---- the STAGING variant only (regalia-kms-dx7.14): its packages enabled nothing (their links under /etc are removed
+# here, before the check below, which then sees only the production packages'), and its own files and enablement
+# under /usr. A production build skips this whole step; imagevariant.py proves it from the listing
+if [ "$VARIANT" = staging ]; then
+  echo "### the staging variant: $STAGING_DIR"
+  mapfile -t STAGING_UNITS < <(chroot "$ROOT" dpkg -L ${STAGING_PACKAGES//,/ } | sed -n 's|^/usr/lib/systemd/system/\([^/]*\)$|\1|p' | sort -u)
+  [ "${#STAGING_UNITS[@]}" -gt 0 ] || die "the staging packages ship no units (dpkg -L)"
+  while IFS= read -r l; do
+    t="$(basename "$(readlink "$ROOT/etc/systemd/system/$l")")"
+    for u in "${STAGING_UNITS[@]}"; do
+      if [ "$(basename "$l")" = "$u" ] || [ "$t" = "$u" ]; then rm -f -- "$ROOT/etc/systemd/system/$l"; break; fi
+    done
+  done < <(cd "$ROOT/etc/systemd/system" && find . -type l -printf '%P\n' | sort)
+  install -D -m 0644 "$SRC/$STAGING_DIR/regalia-staging-sshd.service" "$ROOT/usr/lib/systemd/system/regalia-staging-sshd.service"
+  install -D -m 0644 "$SRC/$STAGING_DIR/networkd.conf" "$ROOT/usr/lib/systemd/system/systemd-networkd.service.d/regalia-staging.conf"
+  install -D -m 0644 "$SRC/$STAGING_DIR/sshd_config" "$ROOT/usr/lib/regalia-staging/sshd_config"
+  install -D -m 0644 "$SRC/$STAGING_DIR/banner" "$ROOT/usr/lib/regalia-staging/banner"
+  install -D -m 0755 "$SRC/$STAGING_DIR/sshd-dropins-check.sh" "$ROOT/usr/lib/regalia-staging/sshd-dropins-check.sh"
+  install -D -m 0644 "$SRC/$STAGING_DIR/journald.conf" "$ROOT/usr/lib/systemd/journald.conf.d/90-regalia-staging.conf"
+  install -D -m 0644 "$SRC/$STAGING_DIR/regalia-staging.tmpfiles.conf" "$ROOT/usr/lib/tmpfiles.d/regalia-staging.conf"
+  install -D -m 0644 "$SRC/$STAGING_DIR/issue" "$ROOT/etc/issue"
+  printf 'staging\n' > "$ROOT/usr/lib/regalia-staging/VARIANT"
+  for w in multi-user.target.wants/regalia-staging-sshd.service multi-user.target.wants/systemd-networkd.service \
+           sockets.target.wants/systemd-networkd.socket network-online.target.wants/systemd-networkd-wait-online.service; do
+    [ -f "$ROOT/usr/lib/systemd/system/$(basename "$w")" ] || die "the staging variant enables $(basename "$w"), and the image has no such unit"
+    mkdir -p "$ROOT/usr/lib/systemd/system/$(dirname "$w")"; ln -sfn "../$(basename "$w")" "$ROOT/usr/lib/systemd/system/$w"
+  done
+  rm -f -- "$ROOT"/etc/ssh/ssh_host_*_key "$ROOT"/etc/ssh/ssh_host_*_key.pub
+fi
+
 # ---- what the image STARTS (#61 K61V-4): enablement under /usr, from units-enabled.txt. / is a tmpfs, so /etc is empty
 # when PID 1 loads units: a link under /etc/systemd/system is never seen. Every link a package made there must be named
 # in units-enabled.txt ([enabled], [alias] or [dropped]: a new one is a decision, not an accident); the [enabled] and
@@ -513,7 +562,7 @@ grep -qx "seed=$COMMIT" "$W/stage/usr-verity.txt" && grep -qx "source_date_epoch
 # the build record
 {
   echo "schema=$SCHEMA"; echo "commit=$COMMIT"; echo "go=$GO_VERSION"; echo "snapshot=$SNAPSHOT"; echo "source_date_epoch=$EPOCH"
-  echo "suite=$SUITE"; echo "packages_requested=$PACKAGES"; echo "build_packages=$BUILD_PACKAGES"
+  echo "variant=$VARIANT"; echo "suite=$SUITE"; echo "packages_requested=$PACKAGES"; echo "build_packages=$BUILD_PACKAGES"
   # the tree builder is the BUILDER's, not pinned: its version is named, so a later rebuild elsewhere can be compared
   echo "mmdebstrap=$(mmdebstrap --version 2>/dev/null | head -1)"
   for entry in "${BUILT[@]}"; do read -r source path <<< "$entry"; echo "built=$path $(sha256sum < "$ROOT$path" | cut -d' ' -f1) $source"; done
@@ -557,6 +606,10 @@ with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
 PY
+# the variant, judged on what the image holds (regalia-kms-dx7.14): a production image with anything of the staging
+# variant's, or a staging image missing a piece of it, is refused here and nothing is written
+python3 -BEs -m deploy.baremetal.imagevariant check --listing "$W/stage/rootfs-listing.txt" --record "$W/stage/rootfs-build.json" \
+  || die "the image is not the $VARIANT variant it was built as (above)"
 for f in rootfs.tar rootfs-listing.txt usr.erofs usr.verity rootfs-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
 echo "build-rootfs: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["rootfs_sha256"], r["rootfs_size"], "bytes,", r["rootfs_entries"], "entries, commit", r["commit"][:12], r["go"])' "$OUT/rootfs-build.json")"
 echo "build-rootfs: /usr $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_size"], "bytes, PARTUUIDs", u["usr_partuuid"], u["usr_verity_partuuid"])' "$OUT/rootfs-build.json")"

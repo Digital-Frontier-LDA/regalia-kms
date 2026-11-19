@@ -50,5 +50,8 @@ done
 [ "$same" = 1 ] || exit 1
 echo "rootfs-reproducible: IDENTICAL over $BUILDS builds: rootfs.tar $first ($(wc -l < "$OUT/build-1/rootfs-listing.txt") entries)"
 echo "rootfs-reproducible: IDENTICAL /usr: $(python3 -I -c 'import json,sys; u=json.load(open(sys.argv[1]))["usr"]; print("usrhash=" + u["roothash"], "usr.erofs", u["erofs_sha256"], "usr.verity", u["verity_sha256"])' "$OUT/build-1/rootfs-build.json")"
+# CI's build is the production image: it must hold nothing of the staging variant's (regalia-kms-dx7.14)
+python3 -BEs -m deploy.baremetal.imagevariant check --listing "$OUT/build-1/rootfs-listing.txt" --record "$OUT/build-1/rootfs-build.json"
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["variant"]; sys.exit(0 if v == "production" else "rootfs-reproducible: CI built the %s variant" % v)' "$OUT/build-1/rootfs-build.json"
 # the image's /etc as a booted host makes it (#61: / on tmpfs, /etc from /usr/share/factory/etc before systemd-sysusers)
 e2e/etc-factory.sh "$OUT/build-1/rootfs.tar"
