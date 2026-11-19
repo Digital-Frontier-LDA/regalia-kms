@@ -485,6 +485,9 @@ SEARCH_DIRS = (
     "etc/sysctl.d", "run/sysctl.d", "usr/local/lib/sysctl.d", "usr/lib/sysctl.d",
     "etc/tmpfiles.d", "run/tmpfiles.d", "usr/local/lib/tmpfiles.d", "usr/lib/tmpfiles.d",
     "etc/modules-load.d", "run/modules-load.d", "usr/local/lib/modules-load.d", "usr/lib/modules-load.d")
+# modules-load.d: the one file allowed there is the firewall's (r1s.15); any other is refused by rule, not only by the
+# inventory, since it would make the initrd load a module on every boot
+MODULES_LOAD_DIRS = tuple(d for d in SEARCH_DIRS if d.endswith("/modules-load.d"))
 SEARCH_FILES = ("etc/systemd/system.conf", "etc/profile", "etc/modprobe.conf", "etc/sysctl.conf", "etc/udev/udev.conf")
 UNIT_SEARCH_DIRS = SEARCH_DIRS[:12]
 # the units whose drop-ins must be pinned by content
@@ -1038,6 +1041,8 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 findings.append("%s: a drop-in of the unlock path that is not the module's" % path)
         if name == RESET_DROPIN[0] and kind == "file" and value != sha256(RESET_DROPIN[1]):
             findings.append("%s is not the module's credential reset" % path)
+        if any(path.startswith(d + "/") for d in MODULES_LOAD_DIRS) and path != FIREWALL_MODULES_LOAD[0]:
+            findings.append("%s: a modules-load.d file that is not the module's (only %s is allowed)" % (path, FIREWALL_MODULES_LOAD[0]))
     _instructions(files, findings)
     clients = {}
     for path in UNLOCK_BINARIES:

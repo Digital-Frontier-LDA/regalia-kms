@@ -1277,6 +1277,15 @@ class InitrdReview(Case):
             with self.subTest(body=body):
                 self.refused_by(unlock_initrd({path: (0o100644, body)}), path + " is not this repository's")
 
+    def test_only_the_firewall_modules_file_is_allowed_in_modules_load_d(self):
+        # r1s.15: refused by rule (reviewed against its own inventory, so only layer 1 can refuse), wherever systemd reads
+        self.assertEqual(sorted(uki.MODULES_LOAD_DIRS), sorted(("etc/modules-load.d", "run/modules-load.d",
+                                                               "usr/local/lib/modules-load.d", "usr/lib/modules-load.d")))
+        for path in ("usr/lib/modules-load.d/other.conf", "etc/modules-load.d/regalia-firewall.conf",
+                     "run/modules-load.d/x.conf", "usr/local/lib/modules-load.d/y.conf"):
+            with self.subTest(path=path):
+                self.refused_by(unlock_initrd({path: (0o100644, b"wireguard\n")}), path + ": a modules-load.d file that is not the module's")
+
     def test_the_module_s_initrd_passes_and_the_record_says_so(self):
         review = self.passes(unlock_initrd())
         self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0")
