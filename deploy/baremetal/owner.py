@@ -40,7 +40,8 @@ THE OWNER AS A SINGLE-NODE HOST'S UNLOCK PEER (regalia-kms-dx7.5; ownerunlock.py
 contribute answers the node's enrol paths (the enrolment key's fingerprint typed here, as the node's console shows it): the
 contribution is minted here, encrypted to both owner cards' decryption subkeys (gpg, the envelope written first) and
 wrapped to the node's one-time key. unlock answers every boot: the envelope decrypted with a card on the pipe, the PIN of
-the signing key typed once before anything is served, and one touch for each response.
+the signing key typed once before anything is served, and one touch for each response. It answers until the operator
+stops it (Ctrl-C) or for --serve-for seconds: the exchange has no acknowledgement, so a response sent ends nothing.
 
 --pin-env exists for tests only and is refused unless REGALIA_OWNER_TEST=1 is also set, as manifest.py's.
 """
@@ -222,26 +223,42 @@ def listen_address(text):
     return (socket.AF_INET6 if six else socket.AF_INET), (found.group(1) if six else found.group(3)), port
 
 
-def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=print):
+SERVE_FOR = 1800                       # owner.py unlock answers for at most this long (s), unless --serve-for says otherwise
+
+
+def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=print, serve_for=SERVE_FOR, stop=None, clock=None):
     """`owner.py unlock`: answer the single-node host's unlock requests on `listener` (a bound, listening socket on the
-    boot mesh), one connection at a time, as its peer (ownerunlock.OwnerPeer), until a signed response has been SENT in
-    full. A response whose sending fails is recorded (unlock-send, ERROR) and does not count: the node asks again and is
-    answered again. `decrypted` is the envelope as gpg printed it; `signer` an owner key. Returns the node unlocked."""
+    boot mesh), one connection at a time, as its peer (ownerunlock.OwnerPeer).
+
+    The exchange has no acknowledgement: a reply written in full may still never reach the node (its client may have
+    given up, its connection may break), and the node then asks again. So a response SENT does not end the serving: the
+    owner answers until stopped (Ctrl-C, or `stop()` true) or for `serve_for` seconds, whichever comes first, and
+    stops it once the node's console shows the volume open. Each signed response is a card touch. A response whose
+    sending fails is recorded (unlock-send, ERROR). `decrypted` is the envelope as gpg printed it; `signer` an owner
+    key. Returns the number of signed responses written in full; refused if none was."""
+    import socket
     import time
     from deploy.baremetal import ownerunlock, unlock
+    clock = clock or time.monotonic
+    stop = stop or (lambda: False)
     contribution = ownerunlock.read_plaintext(decrypted)
     attester = ownerunlock.verifier(tip, document, os.path.join(state_dir, "attest.json"))
     audit = lambda event: say(ownerunlock.printed_event(event))      # noqa: E731
     peer = ownerunlock.OwnerPeer(tip, attester, contribution, signer, audit)
     host, port = listener.getsockname()[:2]
-    say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d; touch the key when it blinks" % (contribution[0], contribution[1], tip["epoch"], host, port))
-    sent = 0
-    while not sent:
+    say("LISTENING for %s (path epoch %d, manifest epoch %d) on %s:%d for at most %d s; touch the key when it blinks, and stop "
+        "this (Ctrl-C) once the node's console shows its volume open" % (contribution[0], contribution[1], tip["epoch"], host, port, serve_for))
+    until, sent = clock() + serve_for, 0
+    listener.settimeout(1.0)                               # to look at the clock and at stop() between connections
+    while not stop() and clock() < until:
         try:
             conn, _ = listener.accept()
+        except socket.timeout:
+            continue
         except OSError:
             break                                        # the listener was closed
         with conn:
+            conn.settimeout(unlock.IO_TIMEOUT)
             reply = None
             try:
                 deadline = time.monotonic() + unlock.IO_TIMEOUT
@@ -256,9 +273,11 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
                 continue
             if "response" in reply:
                 sent += 1
-    require(sent > 0, "the listener closed before any response was sent")
-    say("GIVEN: the contribution of %s, under manifest epoch %d. The node opens its disk with the first valid response" % (contribution[0], tip["epoch"]))
-    return contribution[0]
+                say("SENT: signed response %d to %s, under manifest epoch %d. The node opens its disk with the first valid one it "
+                    "receives; if its console does not show the volume open, it asks again and is answered" % (sent, contribution[0], tip["epoch"]))
+    require(sent > 0, "no signed response was sent to %s while this ran" % contribution[0])
+    say("STOPPED: %d signed response(s) sent to %s" % (sent, contribution[0]))
+    return sent
 
 
 # The marks of a KMS node: its configuration and its installed services. The owner's revocation signature is made off
@@ -413,7 +432,9 @@ def main(argv=None):
     u.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     u.add_argument("--measurements", required=True, help="the measurement document the chain's tip commits to (policy_version)")
     u.add_argument("--state", required=True, help="the directory contribute used for this node's verifier state")
-    u.add_argument("--listen", required=True, help="ADDRESS:PORT on the boot mesh (the boot configuration's owner endpoint)")
+    u.add_argument("--listen", required=True, help="ADDRESS:PORT or [IPv6]:PORT on the boot mesh (the boot configuration's owner endpoint)")
+    u.add_argument("--serve-for", type=int, default=SERVE_FOR, help="answer for at most this many seconds (default %d); Ctrl-C ends it "
+                   "sooner, once the node's console shows its volume open" % SERVE_FOR)
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         u.add_argument(flag, **kw)
@@ -501,8 +522,12 @@ def main(argv=None):
             once = pin()
             signer = p11sign.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
                                           only_token=True, pin=lambda: once, alg="ed25519")
+            require(args.serve_for > 0, "--serve-for is a number of seconds above 0")
             with socket.create_server((host, port), family=family) as listener:
-                serve_unlock(tip, document, args.state, decrypted, signer, listener)
+                try:
+                    serve_unlock(tip, document, args.state, decrypted, signer, listener, serve_for=args.serve_for)
+                except KeyboardInterrupt:
+                    print("STOPPED by the operator")
             return 0
 
         def confirm(text):

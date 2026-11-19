@@ -398,6 +398,17 @@ class Disk(Case):
         meta = unlock.luks_meta(self.disk, run)
         self.assertEqual((sorted(meta["keyslots"]), len(unlock.path_tokens(meta))), (["0", "1"], 1))
         self.assertTrue(unlock.judge_tokens(meta, "a", ["owner"])[0])
+        # a token naming several keyslots, one of them live, is never taken for stale: refused, kept, and nothing else removed
+        meta = unlock.luks_meta(self.disk, run)
+        (token_id, token), = unlock.path_tokens(meta)
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(dict(token, keyslots=[], path_epoch=5)))      # stale beside it
+        self.cs(["token", "remove", "--token-id", token_id, self.disk])
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(dict(token, keyslots=["1", "0"])))
+        self.refused("the owner token naming keyslot 1, 0 is malformed", self.enrol)
+        self.assertEqual(len(unlock.path_tokens(unlock.luks_meta(self.disk, run))), 2, "neither token was removed")
+        for tid, _ in unlock.path_tokens(unlock.luks_meta(self.disk, run)):
+            self.cs(["token", "remove", "--token-id", tid, self.disk])
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(token))
         # a malformed owner token that names a live keyslot is neither taken for a live path nor removed: refused by name
         meta = unlock.luks_meta(self.disk, run)
         (token_id, token), = unlock.path_tokens(meta)
@@ -411,6 +422,25 @@ class Disk(Case):
         self.refused("over another local half (a reseal): remove it first", enrolpeer.request_owner_path, self.m1, "a", self.exchange,
                      self.keys["a"].ak_public, os.urandom(32), fake_seal(os.urandom(32)), self.disk, RECOVERY, run=run)
         self.assertEqual(len(self.given), 2)
+
+    def test_a_cleanup_that_fails_part_way_says_what_it_removed(self):
+        self.enrol()
+        (token_id, token), = unlock.path_tokens(unlock.luks_meta(self.disk, run))
+        self.cs(["luksKillSlot", "--batch-mode", self.disk, "1"])
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(dict(token, keyslots=[], path_epoch=5)))
+        removals = []
+
+        def failing_second(argv, **kw):
+            if argv[:3] == ["cryptsetup", "token", "remove"]:
+                removals.append(argv)
+                if len(removals) == 2:
+                    return subprocess.CompletedProcess(argv, 1, b"", b"")
+            return run(argv, **kw)
+        self.refused("could not be removed (exit 1); tokens %s were removed already. Run enrol paths again" % token_id,
+                     enrolpeer.request_owner_path, self.m1, "a", self.exchange, self.keys["a"].ak_public, self.local, fake_seal(self.local),
+                     self.disk, RECOVERY, run=failing_second)
+        self.assertEqual(len(self.given), 1, "the owner was not asked")
+        self.assertEqual(self.enrol(), {"path_epoch": 1, "keyslot": 1})          # the rerun starts from the header as it is
 
     def test_the_node_takes_an_owner_path_only_single_node_and_never_below_its_epoch(self):
         multi = dict(manifest5(1, "", nodes4(), MULTI))
@@ -553,8 +583,14 @@ class OwnerCommands(Case):
             def getsockname(self):
                 return ("192.0.2.9", 7443)
 
+            def settimeout(self, t):
+                pass
+
             def accept(self):
-                raw, answer = requests.get(timeout=30)
+                try:
+                    raw, answer = requests.get(timeout=0.2)
+                except queue.Empty:
+                    raise socket.timeout() from None
                 return Conn(raw, answer, self), ("192.0.2.1", 1)
 
         def transport(raw):
@@ -564,34 +600,44 @@ class OwnerCommands(Case):
             if data is None:
                 raise ConnectionResetError("reset")
             return data
-        said, done = [], []
+        said, done, stopping = [], [], threading.Event()
         worker = threading.Thread(target=lambda: done.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, self.signer, Listener(),
-                                                                                say=said.append)), daemon=True)
+                                                                                say=said.append, stop=stopping.is_set)), daemon=True)
         worker.start()
         self.refused("unlock: the transport failed (ConnectionResetError)", self.ask, transport=transport)
         self.assertFalse(self.session.consumed)
-        self.assertEqual(done, [])                                    # still serving
         self.assertEqual(self.ask(transport=transport), self.secret)  # the same boot session, asked again
+        stopping.set()
         worker.join(30)
-        self.assertEqual(done, ["a"])
+        self.assertEqual(done, [1])                                   # the failed send did not count
         events = [json.loads(line) for line in said if line.startswith("{")]
         self.assertIn(("unlock-send", "ERROR"), [(e["event"], e["outcome"]) for e in events])
-        self.assertTrue(said[-1].startswith("GIVEN: the contribution of a"))
-        self.assertEqual(sum(1 for line in said if line.startswith("GIVEN")), 1)
+        self.assertEqual([line[:30] for line in said if line.startswith(("SENT", "STOPPED"))],
+                         ["SENT: signed response 1 to a, ", "STOPPED: 1 signed response(s) "])
 
-    def test_unlock_serves_until_one_response_is_given(self):
+    def test_unlock_keeps_serving_after_a_response_is_sent_until_it_is_stopped(self):
+        """A response written in full is not known to have arrived (the exchange has no acknowledgement): the owner goes on
+        answering, here a second request, until it is stopped."""
         listener = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(listener.close)
-        said, done = [], []
+        said, done, stopping = [], [], threading.Event()
         worker = threading.Thread(target=lambda: done.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, self.signer, listener,
-                                                                                say=said.append)), daemon=True)
+                                                                                say=said.append, stop=stopping.is_set)), daemon=True)
         worker.start()
         endpoint = "127.0.0.1:%d" % listener.getsockname()[1]
         self.assertEqual(self.ask(transport=unlock.tcp_transport(endpoint)), self.secret)
+        self.assertEqual(self.ask(session=self.boot(), transport=unlock.tcp_transport(endpoint)), self.secret)   # still answering
+        stopping.set()
         worker.join(20)
-        self.assertEqual(done, ["a"])
+        self.assertEqual(done, [2])
         self.assertTrue(said[0].startswith("LISTENING for a (path epoch 1, manifest epoch 1)"))
-        self.assertTrue(said[-1].startswith("GIVEN: the contribution of a"))
+        self.assertEqual(said[-1], "STOPPED: 2 signed response(s) sent to a")
+
+    def test_unlock_ends_at_its_time_and_says_when_nothing_was_sent(self):
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        self.refused("no signed response was sent to a while this ran", owner.serve_unlock, self.m1, self.doc, self.d, self.plain, self.signer,
+                     listener, say=lambda line: None, serve_for=0.2)
 
 
 class OnSwtpm(unittest.TestCase):
@@ -679,15 +725,17 @@ class OnSwtpm(unittest.TestCase):
             return json.load(f)
 
     def serve(self, manifest=None):
-        """The owner's machine answers on 127.0.0.1 (owner.py unlock); returns its endpoint."""
+        """The owner's machine answers on 127.0.0.1 (owner.py unlock) until the test ends; returns its endpoint."""
         listener = socket.create_server(("127.0.0.1", 0))
+        stopping = threading.Event()
         self.addCleanup(listener.close)
+        self.addCleanup(stopping.set)
         self.said = []
 
         def answer():
             with contextlib.suppress(m.Refused, attest.Refused, OSError):
                 owner.serve_unlock(manifest or self.m1, self.doc, self.state, self.cards[self.d + "/owner-env.asc"], self.signer, listener,
-                                   say=self.said.append)
+                                   say=self.said.append, stop=stopping.is_set)
         threading.Thread(target=answer, daemon=True).start()
         return "127.0.0.1:%d" % listener.getsockname()[1]
 
@@ -716,7 +764,7 @@ class OnSwtpm(unittest.TestCase):
         self.reboot("a", "the approved image")
         rc, out, err, slot = self.native(None, "-attempts", "3", config_text=self.config(self.serve()))
         self.assertEqual((rc, slot), (0, 1), err)
-        self.assertIn("GIVEN: the contribution of a", self.said[-1])
+        self.assertTrue(any(line.startswith("SENT: signed response 1 to a") for line in self.said), self.said)
         # 3. the reference client, on the next boot
         self.reboot("a", "the approved image")
         self.assertEqual(self.reference(self.serve()), ("owner", 1))

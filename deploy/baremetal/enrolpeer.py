@@ -242,9 +242,11 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
     keyslots = set(meta.get("keyslots") or {})
     mine = [(i, t) for i, t in unlock.path_tokens(meta) if t.get("peer") == unlock.OWNER and t.get("target") == node_id]
 
-    def slot_of(token):
+    def refs(token):
+        """Every keyslot the token names (LUKS2 lets one token name several), as text."""
         slots = token.get("keyslots")
-        return slots[0] if isinstance(slots, list) and len(slots) == 1 and isinstance(slots[0], str) else None
+        return [str(s) for s in slots] if isinstance(slots, list) else []
+
     def malformed(token):
         try:
             unlock.validate_token(token)
@@ -253,21 +255,26 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
         return None
     # a LIVE owner path, by enrol._without_path's criteria: a well-formed token whose keyslot exists, over this enrolment's
     # local half
-    if any(malformed(t) is None and slot_of(t) in keyslots and t.get("local") == sealed_local for _, t in mine):
+    if any(malformed(t) is None and refs(t)[0] in keyslots and t.get("local") == sealed_local for _, t in mine):
         return {"path_epoch": None, "keyslot": None, "existing": True}
-    # a token whose keyslot is gone opens nothing: it is removed, so the path is made again (a killed keyslot)
-    for token_id, token in mine:
-        if slot_of(token) not in keyslots:
-            done = run(["cryptsetup", "token", "remove", "--token-id", token_id, device], stdin=subprocess.DEVNULL, capture_output=True)
-            require(done.returncode == 0, "the stale owner token %s (its keyslot is gone) could not be removed (exit %d): nothing was "
-                    "written" % (token_id, done.returncode))
-    live = [t for _, t in mine if slot_of(t) in keyslots]
+    # Every conflict is refused BEFORE anything is removed. A token that names any existing keyslot is never removed:
+    # malformed, it is refused by name; well-formed (over another local half: a reseal), it is refused too.
+    live = [t for _, t in mine if any(r in keyslots for r in refs(t))]
     for token in live:
         why = malformed(token)
         require(why is None, "the owner token naming keyslot %s is malformed (%s): inspect the header, then remove that token (cryptsetup "
-                "token remove) and, only if no other path uses it, its keyslot. Nothing was written" % (slot_of(token), why))
+                "token remove) and, only if no other path uses it, its keyslot. Nothing was written"
+                % (", ".join(r for r in refs(token) if r in keyslots), why))
     require(not live, "the disk has an owner path in keyslot %s over another local half (a reseal): remove it first "
-            "(unlock.remove_path), then enrol again. Nothing was written" % ", ".join(sorted(slot_of(t) for t in live)))
+            "(unlock.remove_path), then enrol again. Nothing was written" % ", ".join(sorted(refs(t)[0] for t in live)))
+    # a token that names no existing keyslot opens nothing: it is removed, so the path is made again (a killed keyslot)
+    removed = []
+    for token_id, token in mine:
+        done = run(["cryptsetup", "token", "remove", "--token-id", token_id, device], stdin=subprocess.DEVNULL, capture_output=True)
+        require(done.returncode == 0, "the stale owner token %s (no keyslot of it exists) could not be removed (exit %d); %s. Run "
+                "enrol paths again: it starts from the header as it is now" % (token_id, done.returncode,
+                ("tokens %s were removed already" % ", ".join(removed)) if removed else "nothing was written"))
+        removed.append(token_id)
     enrolment = unlock.Enrolment(node_id)
     wrapped = exchange(ownerunlock.path_request(node_id, enrolment, ak_public), enrolment.fingerprint)
     path_epoch, contribution = enrolment.open(wrapped, unlock.OWNER)
