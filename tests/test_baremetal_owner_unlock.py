@@ -656,8 +656,8 @@ class OnSwtpm(unittest.TestCase):
         # 6. a node not ACTIVE: the owner's tool refuses to answer for it at all
         held = single5(2, m.digest(self.m1), [dict(self.m1["nodes"][0], state="MAINTENANCE")], policy_version=self.m1["policy_version"],
                        owner_keys=self.m1["owner_keys"])
-        with self.assertRaises(m.Refused) as caught:
-            owner.serve_unlock(held, self.doc, self.state, self.cards[self.d + "/owner-env.asc"], self.signer, socket.socket())
+        with self.assertRaises(m.Refused) as caught, socket.socket() as never_bound:
+            owner.serve_unlock(held, self.doc, self.state, self.cards[self.d + "/owner-env.asc"], self.signer, never_bound)
         self.assertIn("a is MAINTENANCE under epoch 2, not ACTIVE", str(caught.exception))
         # nothing of the contribution on the node's side: not in the header, not in the sealed credential
         secret = ownerunlock.read_plaintext(self.cards[self.d + "/owner-env.asc"])[2]
