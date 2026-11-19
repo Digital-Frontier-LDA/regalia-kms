@@ -245,8 +245,15 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
     def slot_of(token):
         slots = token.get("keyslots")
         return slots[0] if isinstance(slots, list) and len(slots) == 1 and isinstance(slots[0], str) else None
-    # a LIVE owner path, by enrol._without_path's criteria: its keyslot exists and its local half is this enrolment's
-    if any(slot_of(t) in keyslots and t.get("local") == sealed_local for _, t in mine):
+    def malformed(token):
+        try:
+            unlock.validate_token(token)
+        except Refused as refusal:
+            return str(refusal)
+        return None
+    # a LIVE owner path, by enrol._without_path's criteria: a well-formed token whose keyslot exists, over this enrolment's
+    # local half
+    if any(malformed(t) is None and slot_of(t) in keyslots and t.get("local") == sealed_local for _, t in mine):
         return {"path_epoch": None, "keyslot": None, "existing": True}
     # a token whose keyslot is gone opens nothing: it is removed, so the path is made again (a killed keyslot)
     for token_id, token in mine:
@@ -255,6 +262,10 @@ def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_loc
             require(done.returncode == 0, "the stale owner token %s (its keyslot is gone) could not be removed (exit %d): nothing was "
                     "written" % (token_id, done.returncode))
     live = [t for _, t in mine if slot_of(t) in keyslots]
+    for token in live:
+        why = malformed(token)
+        require(why is None, "the owner token naming keyslot %s is malformed (%s): inspect the header, then remove that token (cryptsetup "
+                "token remove) and, only if no other path uses it, its keyslot. Nothing was written" % (slot_of(token), why))
     require(not live, "the disk has an owner path in keyslot %s over another local half (a reseal): remove it first "
             "(unlock.remove_path), then enrol again. Nothing was written" % ", ".join(sorted(slot_of(t) for t in live)))
     enrolment = unlock.Enrolment(node_id)

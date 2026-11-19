@@ -398,6 +398,15 @@ class Disk(Case):
         meta = unlock.luks_meta(self.disk, run)
         self.assertEqual((sorted(meta["keyslots"]), len(unlock.path_tokens(meta))), (["0", "1"], 1))
         self.assertTrue(unlock.judge_tokens(meta, "a", ["owner"])[0])
+        # a malformed owner token that names a live keyslot is neither taken for a live path nor removed: refused by name
+        meta = unlock.luks_meta(self.disk, run)
+        (token_id, token), = unlock.path_tokens(meta)
+        self.cs(["token", "remove", "--token-id", token_id, self.disk])
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(dict(token, version=2)))
+        self.refused("the owner token naming keyslot 1 is malformed", self.enrol)
+        self.assertEqual(len(self.given), 2)
+        self.cs(["token", "remove", "--token-id", unlock.path_tokens(unlock.luks_meta(self.disk, run))[0][0], self.disk])
+        self.cs(["token", "import", "--json-file", "-", self.disk], m.canonical(token))
         # a live owner path over ANOTHER local half (a reseal) is refused by name, and nothing is written
         self.refused("over another local half (a reseal): remove it first", enrolpeer.request_owner_path, self.m1, "a", self.exchange,
                      self.keys["a"].ak_public, os.urandom(32), fake_seal(os.urandom(32)), self.disk, RECOVERY, run=run)
