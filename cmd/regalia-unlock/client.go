@@ -102,14 +102,14 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 	if err != nil {
 		return nil, fmt.Errorf("unlock: the transport failed (%w)", err)
 	}
-	var reply unlockReply
+	var reply receivedReply
 	if err := decodeReply(raw, &reply); err != nil {
 		return nil, fmt.Errorf("unlock: %w", err)
 	}
 	if reply.Error != "" {
 		return nil, fmt.Errorf("unlock: %w", refusal(reply.Error))
 	}
-	if reply.Response == nil || reply.Signature == nil {
+	if reply.Response == nil || len(reply.Signature) == 0 || string(reply.Signature) == "null" {
 		return nil, errors.New("unlock: the reply holds no signed response")
 	}
 	return s.open(peer, reply.Response, reply.Signature, pathEpoch, hello.Epoch, expected[:])
@@ -117,7 +117,7 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 
 // open is unlock.BootSession.open: the contribution, if the response is the peer's valid answer to
 // exactly what this boot session asked.
-func (s *session) open(peer pin, r *response, signature *peerSignature, pathEpoch, stated uint64, expected []byte) ([]byte, error) {
+func (s *session) open(peer pin, r *response, signature json.RawMessage, pathEpoch, stated uint64, expected []byte) ([]byte, error) {
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
@@ -134,8 +134,19 @@ func (s *session) open(peer pin, r *response, signature *peerSignature, pathEpoc
 	case r.Epoch != stated:
 		return nil, fmt.Errorf("the response was decided under epoch %d, not the epoch %d the peer's hello stated", r.Epoch, stated)
 	}
-	if err := verifyPeerSignature(signature, peer, r.signedDigest()); err != nil {
-		return nil, err
+	if peer.owner != nil {
+		// the owner pin of a single-node configuration (validateSingle gives it its keys, and no other pin any)
+		if err := verifyOwnerSignature(signature, peer.owner, r.canonical()); err != nil {
+			return nil, err
+		}
+	} else {
+		var tpmSignature peerSignature
+		if err := decodeReply(signature, &tpmSignature); err != nil {
+			return nil, errors.New("the response's signature is malformed")
+		}
+		if err := verifyPeerSignature(&tpmSignature, peer, r.signedDigest()); err != nil {
+			return nil, err
+		}
 	}
 	ciphertext, _ := hex.DecodeString(r.Ciphertext)
 	secret, err := rsa.DecryptOAEP(sha256.New(), nil, s.key, ciphertext, append([]byte(contributionLabel), expected...))

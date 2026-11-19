@@ -78,6 +78,14 @@ its fingerprint; P's operator checks it and runs contribute(), which mints the c
 to that key; T adds the keyslot and the token and proves the keyslot opens. The attested exchange cannot
 carry it: T's boot-session key is gone after unlock, and the verifier refuses a second session in a boot.
 
+SINGLE-NODE (regalia-kms-dx7.5, docs/design/single-node.md 4.5): a host with no other node has ONE peer, the owner's
+machine (ownerunlock.py, owner.py unlock), in this same exchange, unchanged on the wire. Its boot configuration is
+BOOT_SINGLE_SCHEMA: topology "single-node", one peer {"node_id": "owner", "endpoint"}, and the manifest's Ed25519
+owner_keys. The owner's response is then signed by one of those keys (Ed25519 over OWNER_RESPONSE_DOMAIN and the
+response's canonical bytes, {"alg": "ed25519", "key", "sig"}) in place of a TPM AK; everything else in it is checked as
+a peer's. A multi-node configuration (BOOT_SCHEMA) never lists the owner, and the owner pin is never judged as a node's.
+The owner path's token names "owner" as its peer.
+
 LIMITS, stated:
   * Root on a running T can read local_T and whatever contribution it received this boot, and so keep a
     whole credential (the private secrets inventory). After a suspected compromise: rotate both paths, reencrypt.
@@ -146,6 +154,17 @@ KEY_BITS = 3072
 BOOT_SCHEMA = "regalia.unlock-boot/v1"
 BOOT_KEYS = ("schema", "node_id", "device", "pcrs", "peers")
 PIN_KEYS = ("node_id", "endpoint", "ek_name", "ak_name")
+# The single-node boot configuration (regalia-kms-dx7.5, docs/design/single-node.md 4.5): its one peer is the owner,
+# reached at an endpoint and known by the manifest's owner_keys, which sign the owner's response in place of a TPM AK.
+BOOT_SINGLE_SCHEMA = "regalia.unlock-boot/v2"
+BOOT_SINGLE_KEYS = ("schema", "topology", "node_id", "device", "pcrs", "peers", "owner_keys")
+OWNER = membership.OWNER                 # the owner's name as a peer: never a node ID
+OWNER_PIN_KEYS = ("node_id", "endpoint")
+OWNER_SIGNATURE_KEYS = ("alg", "key", "sig")
+# what an owner key signs (Ed25519 over the message itself): its own domain, so no other owner signature (a heartbeat,
+# a manifest, a recovery statement) is ever one of these
+OWNER_RESPONSE_DOMAIN = b"regalia-unlock/v1/owner-response\0"
+MAX_OWNER_KEYS = 8
 MAX_BYTES = 64 * 1024          # one message, either way
 IO_TIMEOUT = 10                # seconds for one connection, from accept to the last byte
 # hellos per requesting node: a burst of 10, one more every 6 s. A booting node's client asks each peer once
@@ -250,6 +269,28 @@ def validate_response(response):
         membership.hex_field(response[k], 64, "response.%s" % k)
     path_epoch(response["path_epoch"], "response.path_epoch")
     membership.hex_field(response["ciphertext"], KEY_BITS // 4, "response.ciphertext")
+
+
+def owner_signed_message(response):
+    """What an owner key signs for `response`: OWNER_RESPONSE_DOMAIN and the response's canonical bytes."""
+    return OWNER_RESPONSE_DOMAIN + membership.canonical(response)
+
+
+def verify_owner_signature(envelope, owner_keys):
+    """The response is signed by one of `owner_keys` (the boot configuration's, from the manifest): an Ed25519 signature
+    over owner_signed_message(response). Only ever asked for the owner pin of a single-node boot configuration."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    sig = envelope["signature"]
+    membership.exact(sig, OWNER_SIGNATURE_KEYS, "signature")
+    require(sig["alg"] == "ed25519", "the owner's response is signed with ed25519, not %r" % (sig["alg"],))
+    membership.hex_field(sig["key"], 64, "signature.key")
+    membership.hex_field(sig["sig"], 128, "signature.sig")
+    require(sig["key"] in {k["key"] for k in owner_keys}, "the response is not signed by one of the owner_keys the boot configuration holds")
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(bytes.fromhex(sig["sig"]), owner_signed_message(envelope["response"]))
+    except (InvalidSignature, ValueError):
+        raise Refused("the owner's signature does not verify over this response") from None
 
 
 def verify_signature(envelope, issuer, run=subprocess.run):
@@ -519,7 +560,11 @@ class BootSession:
         require(hmac.compare_digest(response["transcript_sha256"], transcript),
                 "the response does not answer the request this boot session sent %s" % peer_id)
         require(response["epoch"] == stated, "the response was decided under epoch %d, not the epoch %d the peer's hello stated" % (response["epoch"], stated))
-        verify_signature(envelope, pin, run)
+        if "owner_keys" in pin:
+            # the owner pin of a single-node boot configuration (validate_boot_config makes it, and nothing else)
+            verify_owner_signature(envelope, pin["owner_keys"])
+        else:
+            verify_signature(envelope, pin, run)
         secret = _decrypt(self._private, bytes.fromhex(response["ciphertext"]), CONTRIBUTION_LABEL + bytes.fromhex(response["transcript_sha256"]))
         self.consumed = True
         return secret
@@ -563,7 +608,7 @@ def ask(session, pin, epoch, transport, quote, run=subprocess.run):
     """The target asks the peer `pin` names for its contribution at path epoch `epoch`. `transport(request
     bytes)` returns the peer's reply (bytes or a dict); `quote` is tpm_quote(). Returns the contribution, or
     raises Refused: the session is spent only by a valid response."""
-    peer_id = validate_pin(pin)["node_id"]
+    peer_id = (validate_owner_pin(pin) if "owner_keys" in pin else validate_pin(pin))["node_id"]
     reply = _reply(transport, {"v": VERSION, "op": "hello", "node_id": session.node_id}, "hello")
     membership.exact(reply, ("v", "peer_id", "epoch", "nonce"), "hello reply")
     require(type(reply["v"]) is int and reply["v"] == VERSION, "the hello reply is not version %d" % VERSION)
@@ -582,26 +627,66 @@ def ask(session, pin, epoch, transport, quote, run=subprocess.run):
 
 # ---- what the target holds before root, and the transport ----
 
+def _endpoint(value):
+    endpoint = re.fullmatch(ENDPOINT, value) if isinstance(value, str) else None
+    require(endpoint is not None and 1 <= int(endpoint.group(2)) <= 65535,
+            "peer.endpoint must be host:port, an IPv6 address in brackets, the port 1-65535")
+    return value
+
+
+def validate_owner_keys(keys):
+    """The owner_keys a single-node boot configuration holds: one to MAX_OWNER_KEYS Ed25519 keys, each once."""
+    require(isinstance(keys, list) and 1 <= len(keys) <= MAX_OWNER_KEYS, "owner_keys must list 1 to %d keys" % MAX_OWNER_KEYS)
+    seen = set()
+    for i, entry in enumerate(keys):
+        membership.exact(entry, ("alg", "key"), "owner_keys[%d]" % i)
+        require(entry["alg"] == "ed25519", "owner_keys[%d] must be an ed25519 key" % i)
+        membership.hex_field(entry["key"], 64, "owner_keys[%d].key" % i)
+        require(entry["key"] not in seen, "owner_keys[%d] is listed twice" % i)
+        seen.add(entry["key"])
+    return keys
+
+
+def validate_owner_pin(pin):
+    """The owner pin validate_boot_config makes of a single-node configuration: {node_id: OWNER, endpoint, owner_keys}."""
+    membership.exact(pin, OWNER_PIN_KEYS + ("owner_keys",), "owner peer")
+    require(pin["node_id"] == OWNER, "the owner peer is named %s" % OWNER)
+    _endpoint(pin["endpoint"])
+    validate_owner_keys(pin["owner_keys"])
+    return pin
+
+
 def validate_pin(pin):
     membership.exact(pin, PIN_KEYS, "peer")
     node_id(pin["node_id"], "peer.node_id")
-    endpoint = re.fullmatch(ENDPOINT, pin["endpoint"]) if isinstance(pin["endpoint"], str) else None
-    require(endpoint is not None and 1 <= int(endpoint.group(2)) <= 65535,
-            "peer.endpoint must be host:port, an IPv6 address in brackets, the port 1-65535")
+    require(pin["node_id"] != OWNER, "the owner is a peer only in a single-node boot configuration (%s)" % BOOT_SINGLE_SCHEMA)
+    _endpoint(pin["endpoint"])
     for k in ("ek_name", "ak_name"):
         require(isinstance(pin[k], str) and re.fullmatch(r"000b[0-9a-f]{64}", pin[k]) is not None, "peer.%s must be a SHA-256 TPM Name" % k)
     return pin
 
 
 def validate_boot_config(config):
-    """The boot configuration. Returns its peers by node ID, in the order they are tried."""
-    membership.exact(config, BOOT_KEYS, "boot configuration")
-    require(config["schema"] == BOOT_SCHEMA, "schema must be %s" % BOOT_SCHEMA)
+    """The boot configuration. Returns its peers by node ID, in the order they are tried. A multi-node one
+    (BOOT_SCHEMA) lists 1 to 8 node peers, never the owner; a single-node one (BOOT_SINGLE_SCHEMA) lists exactly one
+    peer, the owner, whose pin then carries the configuration's owner_keys."""
+    require(isinstance(config, dict), "the boot configuration must be an object")
+    single = config.get("schema") == BOOT_SINGLE_SCHEMA
+    membership.exact(config, BOOT_SINGLE_KEYS if single else BOOT_KEYS, "boot configuration")
+    require(single or config["schema"] == BOOT_SCHEMA, "schema must be %s or %s" % (BOOT_SCHEMA, BOOT_SINGLE_SCHEMA))
     target = node_id(config["node_id"], "node_id")
+    require(target != OWNER, "node_id %s is the owner's name, not a node's" % OWNER)
     require(isinstance(config["device"], str) and re.fullmatch(r"[A-Za-z0-9/_.:=-]{1,255}", config["device"]) is not None, "device must be a plain path")
     pcrs = config["pcrs"]
     require(isinstance(pcrs, list) and pcrs and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i <= 23 for i in pcrs)
             and pcrs == sorted(set(pcrs)), "pcrs must be an ascending list of PCR indices 0-23")
+    if single:
+        require(config["topology"] == membership.SINGLE_NODE, "a %s boot configuration is for the %s topology" % (BOOT_SINGLE_SCHEMA, membership.SINGLE_NODE))
+        require(isinstance(config["peers"], list) and len(config["peers"]) == 1, "a single-node boot configuration lists exactly one peer, the owner")
+        pin = config["peers"][0]
+        membership.exact(pin, OWNER_PIN_KEYS, "the owner peer")
+        require(pin["node_id"] == OWNER, "the one peer of a single-node boot configuration is %s" % OWNER)
+        return {OWNER: validate_owner_pin(dict(pin, owner_keys=validate_owner_keys(config["owner_keys"])))}
     require(isinstance(config["peers"], list) and 1 <= len(config["peers"]) <= 8, "peers must list 1 to 8 peers")
     pins = {}
     for pin in config["peers"]:
@@ -613,9 +698,18 @@ def validate_boot_config(config):
 
 def boot_config(manifest, target, device, pcrs, endpoints):
     """The boot configuration of `target` under `manifest`: written beside the kernel after every manifest
-    the node accepts. Its peers are the nodes that may authorize, each with the address in `endpoints`."""
+    the node accepts. Its peers are the nodes that may authorize, each with the address in `endpoints`. Under the
+    single-node profile its one peer is the owner, at endpoints[OWNER], known by the manifest's Ed25519 owner_keys."""
     nodes = membership.validate(manifest)
     require(target in nodes, "%s is not in the manifest" % target)
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        require(OWNER in endpoints, "a single-node host's one peer is the owner: no endpoint is given for it")
+        keys = [{"alg": e["alg"], "key": e["key"]} for e in manifest["owner_keys"] if e["alg"] == "ed25519"]
+        require(keys, "the manifest names no ed25519 owner key: the owner's response could not be checked")
+        config = {"schema": BOOT_SINGLE_SCHEMA, "topology": membership.SINGLE_NODE, "node_id": target, "device": device,
+                  "pcrs": sorted(set(pcrs)), "peers": [{"node_id": OWNER, "endpoint": endpoints[OWNER]}], "owner_keys": keys}
+        validate_boot_config(config)
+        return config
     peers = [{"node_id": n, "endpoint": endpoints[n], "ek_name": node["ek_name"], "ak_name": node["ak_name"]}
              for n, node in nodes.items() if n != target and membership.may(manifest, n, "authorize") and n in endpoints]
     config = {"schema": BOOT_SCHEMA, "node_id": target, "device": device, "pcrs": sorted(set(pcrs)), "peers": peers}

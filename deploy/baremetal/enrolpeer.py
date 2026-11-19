@@ -229,6 +229,27 @@ def request_path(manifest, node_id, peer, ask, session, quote, local, sealed_loc
     return {"path_epoch": path_epoch, "keyslot": slot}
 
 
+def request_owner_path(manifest, node_id, exchange, ak_public, local, sealed_local, device, recovery, run=None):
+    """A single-node host's one LUKS path, from the owner (regalia-kms-dx7.5; ownerunlock.py), as root at the console.
+    `exchange(request, fingerprint)` carries ownerunlock.path_request's request to the owner's machine (owner.py contribute)
+    while this process holds the one-time enrolment key, shows the key's `fingerprint` for the owner to check, and
+    returns the owner's wrap. The contribution is opened in this process's memory, used for the keyslot, and written
+    nowhere. Returns as request_path does."""
+    from deploy.baremetal import ownerunlock
+    ownerunlock.single_node(manifest, node_id, states=tuple(s for s, can in membership.CAPABILITIES.items() if "request" in can))
+    meta = unlock.luks_meta(device, run) if run else unlock.luks_meta(device)
+    if any(t.get("peer") == unlock.OWNER and t.get("target") == node_id for _, t in unlock.path_tokens(meta)):
+        return {"path_epoch": None, "keyslot": None, "existing": True}
+    enrolment = unlock.Enrolment(node_id)
+    wrapped = exchange(ownerunlock.path_request(node_id, enrolment, ak_public), enrolment.fingerprint)
+    path_epoch, contribution = enrolment.open(wrapped, unlock.OWNER)
+    require(path_epoch >= manifest["epoch"], "the owner answered path epoch %d, below this node's manifest epoch %d: refused, nothing "
+            "was written to the disk" % (path_epoch, manifest["epoch"]))
+    slot = unlock.enrol_path(device, node_id, unlock.OWNER, path_epoch, local, sealed_local, contribution, recovery,
+                             **({"run": run} if run else {}))
+    return {"path_epoch": path_epoch, "keyslot": slot}
+
+
 def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, session, quote, local, sealed_local, device, recovery,
               run=None):
     """Both halves in one process (tests; a tool that is both users): enrol_aks, then request_path."""
