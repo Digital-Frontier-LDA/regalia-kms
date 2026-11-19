@@ -50,6 +50,10 @@ RENDERED = ("regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft",
 SITE_SCHEMA = "regalia.boot-site/v1"
 SITE_KEYS = ("schema", "host_ipv4", "device", "boot_mesh")
 SITE_MAX_BYTES = 16 * 1024
+# dx7.6: a single-node host's credentials, refused alike here and in cmd/regalia-unlock/bootcfg until the initrd's renderer
+# makes the single-node unlock configuration (regalia.unlock-boot/v2, dx7.5) too
+SINGLE_NODE_PENDING = ("a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the "
+                       "single-node unlock configuration (regalia.unlock-boot/v2) yet")
 
 
 def site_document(site, device):
@@ -96,7 +100,10 @@ def boot_env(site):
 
 def render(manifest, site, device):
     """The credentials a host's initrd reads under `manifest`, for the host `site` (a sitecfg-validated site
-    configuration with a boot_mesh) whose root volume is `device`: {name: bytes}."""
+    configuration with a boot_mesh) whose root volume is `device`: {name: bytes}. Refused under the single-node profile
+    for now (SINGLE_NODE_PENDING): cmd/regalia-unlock/bootcfg, held to this byte for byte, does not yet make its
+    unlock configuration (regalia.unlock-boot/v2, dx7.5); bootnet renders its boot mesh (the owner, dx7.6)."""
+    require(membership.profile(manifest) != membership.SINGLE_NODE, SINGLE_NODE_PENDING)
     endpoints = bootnet.unlock_endpoints(site, manifest)
     config = unlock.boot_config(manifest, site["boot_mesh"]["node_id"], device, UNLOCK_PCRS, endpoints)
     return {"regalia.unlock-config": membership.canonical(config),

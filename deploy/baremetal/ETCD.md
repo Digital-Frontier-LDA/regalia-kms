@@ -39,6 +39,49 @@ ADR-0002 D32 (regalia#571): every server serves, and the three servers keep thei
 - **Keys:** one, the peer TLS key, `LoadCredentialEncrypted` (sealed to the host's TPM), read from `/run/credentials/regalia-etcd.service/`. Clients have no TLS: etcd ignores client TLS and `client-cert-auth` on a `unix://` URL (measured with v3.6.15, #491), so the socket's group is the client's admission. The renderer's `check()` refuses a client TLS block.
 - **Configuration:** `/etc/regalia/etcd.conf.yml`, rendered at enrolment. It holds the member name, the initial cluster from the root-signed manifest, the certificate paths, and the heartbeat and election timeout from the measured round trip (D32 item 5). Until it exists the unit is **skipped**, not failed.
 
+## One member, under the single-node profile (regalia-kms-dx7.6)
+
+A v5 manifest of topology single-node has one node, and its etcd is a cluster of one (docs/design/single-node.md 4.8):
+the same opstate, Reserve, watch cache and state epoch as three nodes, with no replication.
+
+- `etcdconf.render` gives that member `https://127.0.0.1:2380` (`LOOPBACK_PEER_URL`) as its only peer URL, etcd's default
+  timings (100 ms, 1000 ms: there is no round trip to measure, and none is taken), and the initial cluster of itself alone.
+  Peer TLS stays on, against its own bound certificate.
+- `etcdconf.check(text, profile)` takes that shape only when the caller passes the single-node profile it read from the
+  verified manifest. Every other caller, and every multi-node configuration, still requires each peer URL on the service
+  mesh's prefix.
+- `e2e/etcd-unit-sandbox.sh` starts this rendered configuration under the image's own `regalia-etcd.service` (test keys
+  only). The unit is unchanged: one member dials no peer, and `IPAddressDeny=` drops traffic, it does not stop a bind.
+- **Restore** (`deploy/baremetal/restore.py`). With one disk, a restored snapshot is an older history: a spend or a
+  sequence used since the snapshot could be used again. The owner's tool issues a restore statement (`sign-statement`) whose
+  state epoch is above the collector's highest recorded one and above every epoch its ledger has issued, each issued once.
+  On the node, `restore.py run` restores the snapshot into a staging directory, runs etcd on it under a `/run` drop-in, writes
+  the state-epoch entry carrying the statement (`opstate.verify_restore`, in Python and Go), and exchanges the staging and
+  live member directories in one `renameat2(RENAME_EXCHANGE)`. The daemon starts only once the live store holds the raised
+  epoch. A statement that does not raise the store's epoch is refused, and the daemon stays stopped.
+  - **Two outcomes of the swap**, which the run says on stdout: "the store it replaced is kept in
+    /var/lib/regalia-etcd/restore/member" when a live member directory existed (the two were exchanged: the old store
+    is kept for the operator to inspect, then remove), or "there was no live store to replace" when it did not (a
+    replacement disk: the staging directory was renamed into place, and nothing is kept).
+  - The statement must raise the **live** store's epoch too, read before anything stops. If etcd is stopped, it is started
+    on the live store for the read, and a store it will not start on is refused. Only when the live member directory is
+    gone (the lost disk) is no live epoch read. The statement's floor then stands for it, and nothing on the node
+    enforces single use. The restored entry keeps the signed statement, so deleting the input file enforces nothing.
+    Single use is the **owner's procedure**: a statement handed to the node is consumed whatever happens next. After a
+    restore whose outcome is unknown (interrupted, crashed, refused after the services stopped), the owner signs a new
+    statement (the ledger issues the next epoch) before any retry, and never gives the same one again. Its window is
+    at most a day. Beyond that there is only partial detection: the collector's spend audit flags an approval spent
+    twice in the streams it receives. It does not detect every replayed history, and the collector is not yet running
+    (LIMITATIONS.md).
+  - A refusal before the swap leaves the live store untouched. With no live store, etcd is never restarted onto the
+    empty directory. The verified copy of the snapshot (`/var/lib/regalia-etcd/restore.snapshot`) is removed on an early
+    refusal, best-effort; the snapshot itself is never touched. If that removal fails, or a failed `etcdutl` leaves
+    `restore/` behind, the next run refuses until the operator has looked at the artifact and moved it aside. The
+    refusal names it. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
+    as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
+    directory is kept for inspection, and a new run refuses until it is moved away.
+- A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
+
 ## The disks: an fdatasync measurement plan for the DL360s (before production)
 etcd commits each Raft entry with an `fdatasync` of its WAL. etcd's hardware guidance asks for a **99th percentile WAL fdatasync under 10 ms**. A slow disk shows as leader elections and slow stateful operations (D32: about 10–40 ms each at 5–20 ms RTT, plus this).
 

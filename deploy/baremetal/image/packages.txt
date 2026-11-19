@@ -95,3 +95,4 @@ spendaudit | the external collector's D25 check (#432, D32): every approval-gate
 ssh_trust | an administrator's known_hosts, generated from the membership, on the operator's side
 rejoin | a fenced server's return to the survivor's etcd as a learner (#432, G5): a console command, on the host once regalia-etcd.service is (#484)
 takeover | the lone survivor's etcd take-over (#432, scope full): a console command, on the host once regalia-etcd.service is (#484)
+restore | a single-node host's etcd restore that raises the state epoch (regalia-kms-dx7.6): a console command, on the host once regalia-etcd.service is (#484); its sign-statement is the owner's, off the nodes

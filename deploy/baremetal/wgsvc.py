@@ -97,6 +97,9 @@ def conf(manifest, node_id, underlays, listen_port=LISTEN_PORT):
     `underlays` maps a node ID to its IPv4 underlay address (a peer with none is still a peer: it can call,
     and is answered where it called from). Every peer is a node of the manifest (#199 retired the one that
     was not, the revocation authority)."""
+    # dx7.6: a single-node host has no wg-svc: no peer to sync with (docs/design/single-node.md 4.9)
+    require(membership.profile(manifest) != membership.SINGLE_NODE, "no wg-svc under the %s profile (epoch %s): one node has no "
+            "peer to sync with" % (membership.SINGLE_NODE, manifest.get("epoch")))
     entries = {node["node_id"]: node for node in manifest["nodes"]}
     require(node_id in entries, "%s is not in the manifest" % (node_id,))
     require(isinstance(underlays, dict), "underlays maps node IDs to addresses")

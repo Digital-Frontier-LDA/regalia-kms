@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 from deploy.baremetal import membership as m, opstate, survivor  # noqa: E402
 from tests.test_baremetal_fence import redfish_evidence  # noqa: E402
 from tests.test_baremetal_membership_v4 import NODE_KEYS, OWNER_KEYS, manifest4, nodes4, p256, p256_sig, typed  # noqa: E402
+from tests.test_baremetal_membership_v5 import one, single5  # noqa: E402
 
 
 def key(seed):
@@ -534,6 +535,76 @@ def decide_session(c):
         return True, until or ""
     except m.Refused as refused:
         return False, str(refused)
+
+
+# a single-node restore (dx7.6, opstate.verify_restore): the owner's statement raises the state epoch of a's one-member etcd
+# above the floor its tool read; at 2 the owner has revoked a, which then restores nothing
+SN_CHAIN = [single5(1, "", issued_at="2026-10-04T09:00:00Z")]
+SN_CHAIN.append(single5(2, m.digest(SN_CHAIN[0]), nodes=[one("a", state="REVOKED_STOLEN")], issued_at="2026-10-09T00:00:00Z"))
+SNAPSHOT = "5a" * 32
+
+
+def restore_statement(epoch=1, who="a", state_epoch=3, floor=2, signer=None, raw=None, **over):
+    statement = {"schema": opstate.RESTORE_SCHEMA, "node_id": who, "manifest_epoch": epoch,
+                 "manifest_digest": m.digest(([mm for mm in SN_CHAIN if mm["epoch"] == epoch] or [SN_CHAIN[0]])[0]),
+                 "state_epoch": state_epoch, "floor": floor, "snapshot_sha256": SNAPSHOT,
+                 "not_before": "2026-10-06T12:00:00Z", "expires_at": "2026-10-06T18:00:00Z"}
+    statement.update(over)
+    message = raw if raw is not None else opstate.RESTORE_DOMAIN + m.canonical(statement)
+    if signer is None:
+        signature = {"party": m.OWNER, "key": typed(OWNER_KEYS[0])["key"], "sig": OWNER_KEYS[0].sign(message).hex()}
+    else:
+        signature = {"party": "a", "key": typed(NODE_KEYS["a"])["key"], "sig": p256_sig(NODE_KEYS["a"], message)}
+    return {"restore": statement, "signature": signature}
+
+
+def restored(state_epoch=3, who="a", statement=None, **over):
+    entry = {"schema": opstate.STATE_EPOCH_SCHEMA, "state_epoch": state_epoch, "node_id": who,
+             "authorization": statement or restore_statement(state_epoch=state_epoch), "cluster_id": "62ff5b5c1a2e3d4f",
+             "revision_before": 4711, "issued_at": "2026-10-06T12:20:00Z"}
+    entry.update(over)
+    return {"entry": entry, "signature": p256_sig(NODE_KEYS["a"], opstate.STATE_EPOCH_DOMAIN + m.canonical(entry))}
+
+
+def restore_case(name, value, accept, previous=None, **kw):
+    state_epoch_case(name, value, accept, previous=previous, chain=kw.pop("chain", SN_CHAIN), **kw)
+
+
+_HELD = {"state_epoch": 2}                       # the entry the restored snapshot holds (only its epoch is read)
+restore_case("a single-node restore raising the state epoch above the snapshot's", restored(), True, previous=_HELD)
+restore_case("a single-node restore over a snapshot that holds no state epoch", restored(), True)
+restore_case("a restore read before it is stored", restored(), True, store=None)
+restore_case("a restore that does not raise the state epoch the snapshot holds", restored(), False, previous={"state_epoch": 3})
+restore_case("a restore below the state epoch the snapshot holds", restored(), False, previous={"state_epoch": 7})
+restore_case("a restore statement under a multi-node manifest",
+             restored(statement=restore_statement(manifest_digest=m.digest(SE_CHAIN[0]))), False, chain=SE_CHAIN)
+restore_case("a restore statement signed by the node, not the owner", restored(statement=restore_statement(signer="a")), False)
+restore_case("a restore statement over another manifest's digest", restored(statement=restore_statement(manifest_digest="ab" * 32)), False)
+restore_case("a restore statement for an epoch the chain does not hold", restored(statement=restore_statement(epoch=9)), False)
+restore_case("a restore statement once the owner has revoked the node", restored(statement=restore_statement(epoch=2)), False)
+restore_case("a's restore statement in b's entry", restored(who="b"), False)
+restore_case("an entry whose epoch is not the statement's", restored(state_epoch=4, statement=restore_statement()), False)
+restore_case("an entry dated before the statement's window", restored(issued_at="2026-10-06T11:59:59Z"), False)
+restore_case("an entry dated at the statement's end", restored(issued_at="2026-10-06T18:00:00Z"), False)
+restore_case("a restore epoch not above its floor", restored(statement=restore_statement(state_epoch=3, floor=3)), False)
+restore_case("a restore statement living over a day",
+             restored(statement=restore_statement(expires_at="2026-10-07T12:00:01Z")), False)
+restore_case("a restore statement that ends before it begins",
+             restored(statement=restore_statement(expires_at="2026-10-06T12:00:00Z")), False)
+restore_case("a restore statement of another schema", restored(statement=restore_statement(schema="regalia.opstate-restore/v0")), False)
+restore_case("a restore statement whose node ID is not one", restored(statement=restore_statement(who="Node_A")), False)
+restore_case("a restore statement whose floor is not a count", restored(statement=restore_statement(floor=-1)), False)
+restore_case("a restore statement whose manifest epoch is not a count", restored(statement=restore_statement(epoch="1")), False)
+restore_case("a restore statement whose snapshot digest is not one", restored(statement=restore_statement(snapshot_sha256="5A" * 32)), False)
+restore_case("a signed restore statement with a field the format does not have", restored(statement=dict(restore_statement(), note="x")), False)
+restore_case("a restore statement with a field it lacks",
+             restored(statement={"restore": {k: v for k, v in restore_statement()["restore"].items() if k != "floor"},
+                                 "signature": restore_statement()["signature"]}), False)
+restore_case("a restore statement signed without its domain",
+             restored(statement=restore_statement(raw=m.canonical(restore_statement()["restore"]))), False)
+restore_case("a restore entry copied into another cluster", restored(), False, store=["0123456789abcdef", 4712])
+restore_case("a restore entry signed by a key that is not the node's",
+             {"entry": restored()["entry"], "signature": p256_sig(p256(99), opstate.STATE_EPOCH_DOMAIN + m.canonical(restored()["entry"]))}, False)
 
 
 def decide_state_epoch(c):

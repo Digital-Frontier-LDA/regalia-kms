@@ -21,14 +21,19 @@ VECTORS = pathlib.Path(__file__).resolve().parent / "vectors" / "membership-v5.j
 LIMITS = "5e" * 32                     # the digest of the single-node limits text (dx7.11): a placeholder here
 MULTI = {"profile": "multi-node", "nodes": 3}
 SINGLE = {"profile": "single-node", "nodes": 1, "single_node_limits_sha256": LIMITS}
+OWNER_WG = "0e" * 32                   # the owner's WireGuard public key (dx7.6): a test value, the boot mesh's only peer
 A, B, C = ("a", NODE_KEYS["a"]), ("b", NODE_KEYS["b"]), ("c", NODE_KEYS["c"])
 D = ("d", NODE_KEYS["d"])
 O1 = ("owner", OWNER_KEYS[0])
 
 
 def manifest5(epoch, prev, nodes, topology=MULTI, **fields):
+    """A v5 manifest; a single-node one pins the owner's WireGuard key (OWNER_WG, or `owner_wg_pub` in `fields`)."""
+    wg = fields.pop("owner_wg_pub", OWNER_WG)
     man = manifest4(epoch, prev, nodes, **fields)
     man.update(schema=m.SCHEMA_V5, topology=copy.deepcopy(topology))
+    if isinstance(topology, dict) and topology.get("profile") == m.SINGLE_NODE:
+        man["owner_wg_pub"] = wg
     return man
 
 
@@ -285,6 +290,39 @@ class Transitions(Case):
         man = manifest5(1, "", nodes4())
         man["owner_keys"].append({"alg": "ed25519", "key": ROOT_PUB})
         self.invalid("owner_keys[3] is a pinned root key: the payload root is never a quorum party", man)
+
+
+class OwnerWireGuard(Case):
+    """dx7.6 (docs/design/single-node.md 4.5, 4.9): a single-node manifest pins the owner's WireGuard key, the boot mesh's only
+    peer, as each node's wg_boot_pub is pinned; a multi-node manifest has none; only the root changes it."""
+
+    def test_a_single_node_manifest_pins_it_and_a_multi_node_one_has_none(self):
+        self.assertEqual(self.genesis(single5(1, ""))["owner_wg_pub"], OWNER_WG)
+        self.assertNotIn("owner_wg_pub", self.genesis(manifest5(1, "", nodes4())))
+
+    def test_single_node_requires_it(self):
+        man = single5(1, "")
+        del man["owner_wg_pub"]
+        self.invalid("manifest fields mismatch: missing=['owner_wg_pub'] unknown=[]", man)
+
+    def test_multi_node_refuses_it(self):
+        self.invalid("manifest fields mismatch: missing=[] unknown=['owner_wg_pub']", dict(manifest5(1, "", nodes4()), owner_wg_pub=OWNER_WG))
+
+    def test_it_is_a_key(self):
+        for bad in ("0E" * 32, "0e" * 31, 7, None):
+            with self.subTest(bad):
+                self.invalid("owner_wg_pub must be 64 lowercase hex", single5(1, "", owner_wg_pub=bad))
+
+    def test_it_is_no_other_identity(self):
+        self.invalid("owner_wg_pub is already used (wg_boot_pub of a)", single5(1, "", owner_wg_pub=one("a")["wg_boot_pub"]))
+        self.invalid("owner_wg_pub is already used (wg_service_pub of a)", single5(1, "", owner_wg_pub=one("a")["wg_service_pub"]))
+        self.invalid("owner_keys[0] is already used (owner_wg_pub)", single5(1, "", owner_wg_pub=typed(OWNER_KEYS[0])["key"]))
+
+    def test_only_the_root_rotates_it(self):
+        first = self.genesis(single5(1, ""))
+        rotated = single5(2, m.digest(first), owner_wg_pub="0d" * 32)
+        self.refused("a revocation quorum cannot change owner_wg_pub", m.accept, first, quorum(rotated, O1), ROOT_PUB)
+        self.assertEqual(m.accept(first, sign(rotated, ROOT), ROOT_PUB)["owner_wg_pub"], "0d" * 32)
 
 
 class Consumers(Case):
