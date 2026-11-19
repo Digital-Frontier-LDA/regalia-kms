@@ -1,0 +1,6 @@
+# The STAGING image variant's extra Debian packages (build-rootfs.sh --variant staging; regalia-kms-dx7.14).
+# The production image never has these: deploy/baremetal/imagevariant.py refuses a production build that does, and
+# tests/test_baremetal_image_variant.py holds them out of packages.txt. Same shape as packages.txt: name | what | why.
+# (systemd-networkd is not here: Debian 13 ships it in systemd, which the production image has; the production image
+# never ENABLES it, and the staging variant's enablement and its drop-in are what imagevariant.py judges.)
+openssh-server | /usr/sbin/sshd | the staging operator's evidence access: key-only, root, refused without regalia.staging=1 on the kernel command line (regalia-staging-sshd.service); not the production sshd question (r1s.12, q-20)
