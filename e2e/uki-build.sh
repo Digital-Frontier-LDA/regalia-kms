@@ -75,6 +75,8 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
   install -m 0644 "$W/root-key.json" "$I/usr/lib/regalia/root-key.json"
   ln -s /usr/lib/systemd/system/regalia-unlock.service "$E/cryptsetup.target.wants/regalia-unlock.service"
+  # the firewall's modules (regalia-kms-r1s.15): the bytes uki.py pins, written from uki.py so the two cannot differ
+  python3 -IB -c 'import os,sys; sys.path.append(sys.argv.pop(1)); from deploy.baremetal.uki import FIREWALL_MODULES_LOAD as f; p=os.path.join(sys.argv[1], f[0]); os.makedirs(os.path.dirname(p), exist_ok=True); open(p, "wb").write(f[1])' "$PWD" "$I"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 # the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
