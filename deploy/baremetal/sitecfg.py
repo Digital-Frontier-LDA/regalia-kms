@@ -43,6 +43,12 @@ network_probe.py checks the result from each zone, so the two can never describe
       ]
     }
 
+    "boot_mesh": {..., "peers": [],                  # a SINGLE-NODE host (regalia-kms-dx7.6, docs/design/single-node.md 4.9):
+      "owner": {"underlay": "203.0.113.50",          #   no other node; the boot mesh's only peer is the owner's unlock
+                "address": "10.89.0.9"}              #   endpoint, where it is outside and inside the tunnel. Its
+    }                                                #   WireGuard key is the manifest's owner_wg_pub, never here; and
+                                                     #   such a host has no service_mesh (no wg-svc)
+
     "service_mesh": {                                # needs a boot_mesh: the node ID and the peers' underlays are its
       "interface": "wg-svc",                         # the WireGuard interface of the running services (regalia-sync)
       "listen_port": 51821,                          # its UDP port, ONE for the whole mesh: every node listens on this
@@ -73,6 +79,8 @@ OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
 MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers")
 MAC = r"[0-9a-f]{2}(:[0-9a-f]{2}){5}"
 MESH_PEER_KEYS = ("node_id", "underlay", "address")
+OWNER_KEYS = ("underlay", "address")         # a single-node boot mesh's one peer, the owner (dx7.6)
+SINGLE_NODE, MULTI_NODE = "single-node", "multi-node"     # membership's profiles, as the site's shape gives them
 SERVICE_KEYS = ("interface", "listen_port", "sync_port")
 NODE_EXPORTER_PORT = 9100                  # node_exporter, from monitoring_cidrs only, behind mutual TLS (#305)
 SERVICE_PREFIX = "fd72:6567:6c61::/48"     # every address inside the service tunnel (wgsvc.PREFIX: a test holds them equal)
@@ -194,7 +202,10 @@ def _boot_mesh(mesh, cfg):
     no two nodes share one, inside or outside the tunnel; the tunnel's addresses are not the host's own."""
     if mesh is None:
         return None
-    require(isinstance(mesh, dict) and set(mesh) == set(MESH_KEYS), "boot_mesh must be null or hold exactly %s" % list(MESH_KEYS))
+    # dx7.6: a single-node host's boot mesh names the owner, and no other node; any other boot mesh names no owner
+    single = isinstance(mesh, dict) and "owner" in mesh
+    require(isinstance(mesh, dict) and set(mesh) == set(MESH_KEYS + (("owner",) if single else ())),
+            "boot_mesh must be null or hold exactly %s" % list(MESH_KEYS + (("owner",) if single else ())))
     require(isinstance(mesh["node_id"], str) and re.fullmatch(NODE_ID, mesh["node_id"]), "boot_mesh.node_id is not a node ID")
     # Its own WireGuard interface, by name: the firewall trusts what arrives on it to come from a peer's
     # key. Named after a physical interface, the unlock rule would open the port on the wire.
@@ -221,9 +232,21 @@ def _boot_mesh(mesh, cfg):
         require(link.prefixlen >= 31 or gateway not in (str(link.network_address), str(link.broadcast_address)),
                 "boot_mesh.gateway must be a host of %s, not its network or broadcast address" % link)
         out["gateway"] = gateway
-    require(isinstance(mesh["peers"], list) and 1 <= len(mesh["peers"]) <= 8, "boot_mesh.peers must list 1 to 8 nodes")
+    if single:
+        require(mesh["peers"] == [], "a single-node boot_mesh lists no peers: its one peer is the owner (boot_mesh.owner)")
+    else:
+        require(isinstance(mesh["peers"], list) and 1 <= len(mesh["peers"]) <= 8, "boot_mesh.peers must list 1 to 8 nodes")
     nodes, inside, outside = {out["node_id"]}, {out["address"]}, {cfg["host_ipv4"]}
     require(out["address"] != cfg["host_ipv4"], "boot_mesh.address is the tunnel's address, not host_ipv4")
+    if single:
+        owner = mesh["owner"]
+        require(isinstance(owner, dict) and set(owner) == set(OWNER_KEYS), "boot_mesh.owner needs exactly %s" % list(OWNER_KEYS))
+        entry = {"underlay": _address(owner["underlay"], "boot_mesh.owner.underlay"), "address": _address(owner["address"], "boot_mesh.owner.address")}
+        require(entry["address"] not in inside and entry["underlay"] not in outside and entry["address"] not in outside
+                and entry["underlay"] not in inside and entry["address"] != entry["underlay"],
+                "boot_mesh.owner: no two ends share an address, inside or outside the tunnel, and no address is both")
+        inside.add(entry["address"]), outside.add(entry["underlay"])
+        out["owner"] = entry
     for i, peer in enumerate(mesh["peers"]):
         require(isinstance(peer, dict) and set(peer) == set(MESH_PEER_KEYS), "boot_mesh.peers[%d] needs exactly %s" % (i, list(MESH_PEER_KEYS)))
         require(isinstance(peer["node_id"], str) and re.fullmatch(NODE_ID, peer["node_id"]) and peer["node_id"] not in nodes,
@@ -253,6 +276,7 @@ def _service_mesh(mesh, cfg):
         return None
     boot = cfg["boot_mesh"]
     require(boot is not None, "service_mesh needs a boot_mesh: the node ID and the peers' addresses are its")
+    require("owner" not in boot, "a single-node host has no service_mesh: no wg-svc, it has no peer to sync with (dx7.6)")
     require(isinstance(mesh, dict) and set(mesh) == set(SERVICE_KEYS), "service_mesh must be null or hold exactly %s" % list(SERVICE_KEYS))
     # An interface of its own, as the boot mesh's: the firewall trusts what arrives on it to have come through
     # WireGuard. The same name as the boot mesh's would put the two planes' rules on one interface.
@@ -266,6 +290,21 @@ def _service_mesh(mesh, cfg):
             "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d: one number, "
             "one service" % NODE_EXPORTER_PORT)
     return {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync}
+
+
+def profile(cfg):
+    """The topology profile the site's shape is for: SINGLE_NODE for a boot mesh whose one peer is the owner, MULTI_NODE for
+    one of node peers, None for a host with no boot mesh. Never the profile itself: that is the manifest's."""
+    mesh = cfg["boot_mesh"]
+    return None if mesh is None else SINGLE_NODE if "owner" in mesh else MULTI_NODE
+
+
+def require_profile(cfg, manifest_profile):
+    """Refused unless the site's shape is for `manifest_profile` (membership.profile of the verified manifest): a single-node
+    boot mesh only under a single-node manifest, a boot mesh of node peers only under a multi-node one (dx7.6)."""
+    shape = profile(cfg)
+    require(shape == manifest_profile, "the site configuration is for a %s host and the manifest is %s: the site's boot mesh is "
+            "accepted only under the profile it is for" % (shape or "single-site", manifest_profile))
 
 
 def _unique(pairs):

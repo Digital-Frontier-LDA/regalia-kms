@@ -37,7 +37,15 @@ var (
 	siteKeys         = []string{"schema", "host_ipv4", "device", "boot_mesh"}
 	meshKeys         = []string{"node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers"}
 	peerKeys         = []string{"node_id", "underlay", "address"}
+	// dx7.6: a single-node host's boot mesh names the owner, and no other node (sitecfg.OWNER_KEYS)
+	singleMeshKeys = append(append([]string(nil), meshKeys...), "owner")
+	ownerKeys      = []string{"underlay", "address"}
 )
+
+// singleNodePending is bootcreds.SINGLE_NODE_PENDING: a single-node host's credentials are refused alike on both sides
+// until this renderer makes the single-node unlock configuration (regalia.unlock-boot/v2, dx7.5) too.
+const singleNodePending = "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the " +
+	"single-node unlock configuration (regalia.unlock-boot/v2) yet"
 
 // Peer is one boot_mesh peer: where it is, outside the tunnel and inside.
 type Peer struct{ NodeID, Underlay, Address string }
@@ -49,6 +57,7 @@ type Site struct {
 	ListenPort, UnlockPort, Prefix     int
 	Gateway                            string // "" for none (the peers are on the link)
 	Peers                              []Peer
+	Owner                              *Peer // a single-node host's one peer (dx7.6), its NodeID "owner"; nil otherwise
 }
 
 // Refused is a refusal: the class of its reason (the same classes as bootcreds-v1.json's, so a refusal for
@@ -166,10 +175,17 @@ func ReadSite(raw []byte) (Site, error) {
 
 // readMesh is sitecfg._boot_mesh, in the context read_site gives it (no KMS or SSH port, no zones).
 func readMesh(value any, host netip.Addr, site *Site) error {
-	mesh, err := exact(value, meshKeys, "boot_mesh")
-	if err != nil {
-		return refuse("fields", "regalia.site: boot_mesh must be null or hold exactly %v", meshKeys)
+	keys := meshKeys
+	if object, ok := value.(map[string]any); ok {
+		if _, single := object["owner"]; single {
+			keys = singleMeshKeys
+		}
 	}
+	mesh, err := exact(value, keys, "boot_mesh")
+	if err != nil {
+		return refuse("fields", "regalia.site: boot_mesh must be null or hold exactly %v", keys)
+	}
+	single := len(keys) == len(singleMeshKeys)
 	id, _ := mesh["node_id"].(string)
 	if !nodeIDPattern.MatchString(id) {
 		return refuse("node-id", "regalia.site: boot_mesh.node_id is not a node ID")
@@ -210,13 +226,34 @@ func readMesh(value any, host netip.Addr, site *Site) error {
 		site.Gateway = gateway.String()
 	}
 	peers, ok := mesh["peers"].([]any)
-	if !ok || len(peers) < 1 || len(peers) > 8 {
+	if single && (!ok || len(peers) != 0) {
+		return refuse("peer-count", "regalia.site: a single-node boot_mesh lists no peers: its one peer is the owner (boot_mesh.owner)")
+	}
+	if !single && (!ok || len(peers) < 1 || len(peers) > 8) {
 		return refuse("peer-count", "regalia.site: boot_mesh.peers must list 1 to 8 nodes")
 	}
 	if tunnel == host {
 		return refuse("tunnel-is-host", "regalia.site: boot_mesh.address is the tunnel's address, not host_ipv4")
 	}
 	nodes, inside, outside := map[string]bool{id: true}, map[netip.Addr]bool{tunnel: true}, map[netip.Addr]bool{host: true}
+	if single {
+		owner, err := exact(mesh["owner"], ownerKeys, "boot_mesh.owner")
+		if err != nil {
+			return refuse("fields", "regalia.site: boot_mesh.owner needs exactly %v", ownerKeys)
+		}
+		underlay, err := address(owner["underlay"], "boot_mesh.owner.underlay")
+		if err != nil {
+			return rewrap(err, "regalia.site: ")
+		}
+		inner, err := address(owner["address"], "boot_mesh.owner.address")
+		if err != nil {
+			return rewrap(err, "regalia.site: ")
+		}
+		if inside[inner] || outside[underlay] || outside[inner] || inside[underlay] || inner == underlay {
+			return refuse("shared-address", "regalia.site: boot_mesh.owner: no two ends share an address, inside or outside the tunnel, and no address is both")
+		}
+		site.Owner = &Peer{membership.OwnerParty, underlay.String(), inner.String()}
+	}
 	for i, value := range peers {
 		label := fmt.Sprintf("boot_mesh.peers[%d]", i)
 		peer, err := exact(value, peerKeys, label)
@@ -272,6 +309,11 @@ func others(site Site, manifest map[string]any) ([]authorizer, error) {
 	if _, named := nodes[site.NodeID]; !named {
 		return nil, refuse("node-absent", "%s is not in the manifest", site.NodeID)
 	}
+	// bootnet._single: each boot-mesh shape only under its own profile (Render refused single-node manifests before this)
+	if site.Owner != nil {
+		return nil, refuse("profile", "the site configuration is for a single-node host and the manifest is multi-node: the site's boot "+
+			"mesh is accepted only under the profile it is for")
+	}
 	where := map[string]Peer{}
 	for _, p := range site.Peers {
 		where[p.NodeID] = p
@@ -302,6 +344,9 @@ func set(values []string) string { return "{ " + strings.Join(values, ", ") + " 
 
 // Render is bootcreds.render: {credential name: bytes}.
 func Render(manifest map[string]any, site Site) (map[string][]byte, error) {
+	if profile, err := membership.Profile(manifest); err == nil && profile == membership.ProfileSingleNode {
+		return nil, refuse("pending", "%s", singleNodePending)
+	}
 	peers, err := others(site, manifest)
 	if err != nil {
 		return nil, err

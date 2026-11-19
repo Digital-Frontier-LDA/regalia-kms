@@ -11013,6 +11013,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -11087,8 +11088,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -11121,7 +11123,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -11132,7 +11134,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -11142,7 +11144,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "69290cbf7ea95564349b9ae1f622c7d6274c399497c76d2574b01d7fd2b8ae8c5efe9bb84d6084addead8517a7e0e0bfa555bac4fc42a3ef7a5d842aa8f60cc1"
+    "signature": "4f26dd0c98b78d87245151daea731a734b723f11ce76bc3f53975c6cdad92681121f2cced4e65fa3ac65c503542c421ca1498fec348ab7b39b2e862351be94ca"
    }
   },
   {
@@ -11206,6 +11208,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -11280,8 +11283,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -11312,7 +11316,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -11323,7 +11327,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -11333,7 +11337,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "a6f22df23996bdc3f569ef0db870d40d3bb38da8c8384158d17f8502cc5df2481b0443b17a37bd37cb60a4df84d3d06524fda1b00a968ff11cadc55933f49612"
+    "signature": "1d0256318ad5db7f9c228eebe6cb7c6858f0d21fb21fa997a4acea9f20089148420b996ccfefff244264230901a4a919ed442b40060787ea7c5c8af3f66a9a73"
    }
   },
   {
@@ -11397,6 +11401,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -11471,8 +11476,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -11500,7 +11506,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -11511,7 +11517,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -11521,7 +11527,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "1d1133133f26f9a6ea7d6c7ab5a020f4d4730ecb99ec2d32778c8ada66951d381f32b54b6c2a83971ec5e9247c152207d23aa1dadef27900c8f508514d489ae2"
+    "signature": "667bd837d2681030418fab49a4009e66a0b94f9c628c7023cb988c88c051c90a4ac3196eb63ce700d8d4d606d099041817e312c4556e02d6d1279c4c0d675b2f"
    }
   },
   {
@@ -11585,6 +11591,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -11659,8 +11666,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -11693,7 +11701,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -11704,7 +11712,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -11714,7 +11722,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "f8e1e39d1cf4e772e8c13eb8964c65d75f2288a3dadb4c6cf23c5fcaa1cb87222059e5cef959d8976a0896f5b6a59bff24644bed14dd4f451b6e8ffd66c7ee79"
+    "signature": "fa548341892414939aad27fa8676447da9b277829e6f2a21591a728bb32a19a2557dabfcce6231a2129e9be1005e5db5da1f466229cbbca3a26fe8b2f7922333"
    }
   },
   {
@@ -11778,6 +11786,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -11852,8 +11861,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -11886,7 +11896,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -11897,7 +11907,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -11907,7 +11917,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "95fcfbd0ab3acf8db6ba48179e388a40f2787ef72f8df8db9bc350eccd367f1266e8334696dc3dbc9a8520a94976d44bb7160ff4e3aa41f3a24be7c878d3b0f7"
+    "signature": "5571472baa61b7f6653bbdab639730d030631ac774e13894c7ff86f7d69138eb0afbd195404c93076a6e853cbfac6fc6d43d51716227947ebc11c2b1a9d86da7"
    }
   },
   {
@@ -12520,7 +12530,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "90295e0b116338603d48eb4bfa490126a875f6cd70abafb32e86dfa08abf30364154843829369e31057bc02cac2df7acc8890b3992477ad1e129ba818c98117e"
+    "signature": "51467fa07fa07ef77e798b484352e681d31c12b9293e6fed02cc9874fe712b97630f03bc2da421e3463384ff6d89630809e96e4000a9d904125ac54ecc90b80d"
    }
   },
   {
@@ -12584,6 +12594,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -12658,8 +12669,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -12690,7 +12702,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -12701,7 +12713,7 @@
       "signature": {
        "party": "a",
        "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492",
-       "sig": "86f02a7ef3a5292c11828843530096c68b8095d72ddd0b3b1c7aa841d6baaff53d85727ba4881eab1ab24567781d37d22361ed1a9d1c47a69f37a00cd0ccd8ac"
+       "sig": "c105d0de1076ebb8501c974a7995663d44d5cf6f7ba2e1ee0bd6c431442081200223274f6e272892eaa0822cd8b2dfba64efb892d66a954cdb016214da6c91ae"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -12711,7 +12723,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "c8f1f54900c86fed96c8b32b3c8f518d2c1d4bd694418998eb5bbe02acbfa9a42e5b4db2ac00778ab638e95f5e8ca7ffc70d1d3704e906cf0a46a59dd14e4615"
+    "signature": "58fb82a926a86e44ad31c8e9ee43de11607a091c3f18e9bf928b9eb40e7736423929a09ebc2446451f2cd9aeedf12f47c357be841951f3d0ca91d550ffcfdef6"
    }
   },
   {
@@ -12775,6 +12787,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -12849,8 +12862,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -12902,7 +12916,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "322a6344c6917f5c11aed7101ddb3483427ba0c755c55210923d3d0b39b8d3f53116f8e1ee7aa1eb06c179c638dd99af6cc01f780a29318993347f522b11b42d"
+    "signature": "9883010dbf674df2166c8c0736db1e7a73d8d1fd3d741fb769d32a64ed0f8fb00f3bebbc139f28b925844f7f38b7d2644305ca4af657d6123bff4a1c5e4ebb04"
    }
   },
   {
@@ -12966,6 +12980,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13040,8 +13055,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -13072,7 +13088,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 9,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -13083,7 +13099,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "191eca277e81eb449f891bdf8d88b0ba97cc0266692143fb47305d049f38dde50fae14507ad0cc37a6c599aa9b63a12afb76e8bf161fefa05c31aa8b8769c509"
+       "sig": "9a827f07f8e9cfba3966dbab515999f5b0f5352273f9c9dcc5b30c3fc779951da25883c5336d5e7a9a2f7d8042ffe7bb7deb54b45634ccaba4976a4e376a2d01"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -13093,7 +13109,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "9855802f058a074b490e23cd9caef050bf993df6a63eb0719c9c4f6b65fcdc49348f56cee3fbc4884cc34a8508793c23c11d97612abd43cf132a9bdd3dfc3bbf"
+    "signature": "b85f8b635470419b5a0ff2318d368e4b59928931074173ffb587a76e692bc8a12bb5a7d24e651a011c7ffbead5137b8a7a645f08edb5117f717824a8d30873eb"
    }
   },
   {
@@ -13157,6 +13173,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13231,8 +13248,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -13263,7 +13281,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4e0ae793e8f207b775985520106e71574b361e7358fbb4fd29cbcc58d2cdbd16",
+       "manifest_digest": "bbe51531ca763f0b9ffdaccbb4c5a3050619b29cdb1687ddd070086bc576cfff",
        "manifest_epoch": 2,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -13274,7 +13292,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "9bcde408f4c59e7d134e3a3dc63899d0dc61d66e5449fe32fd04858fafc5b1261eb0b165dd694939a316e609ea6ae53a908b1ff47839fffb2342f35b93e22105"
+       "sig": "5a9b8dfc787aaa36bab930a5aa791a4fa8fc8ec0b26d20efe0bf0716a332eb39221fbc4d6a8788a1c0b60f709ff68ce4ec1cc1aa019e652f65a9689ae3fdf00e"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -13284,7 +13302,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "899131ff972b50c92029b487d977c7aebeb3f5982415eaa513784734346454c5774bdeafdfdcbe42a53305cbecaef8b33399e5c9c73dee8c9faf104461076f80"
+    "signature": "a047511971a2ca61c3bcf613aca4a991f44c0e4272d7f15b3834db33d1f45ad6092fc184b185efab10ec3a3cb7b6baec97bc29fff638c0d6185e5074722f5e53"
    }
   },
   {
@@ -13348,6 +13366,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13422,8 +13441,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -13454,7 +13474,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -13465,7 +13485,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -13475,7 +13495,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "2717f7211b1c1ec3b951ac2c7770ffe13d362de03e75c415daad4718b106edc51faf928d21a8994c344f36155409d78dcd4e20b70b85db06918c71a19cd5684c"
+    "signature": "8e305ddee1c71f601a1e09b2b5446bc4cd299707ffbdb7887a735f3120e293104a0701956a88875a9ec1e0c1e7c2ddf08438153d0a7b3f3c8c4db32c2e784ce8"
    }
   },
   {
@@ -13539,6 +13559,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13613,8 +13634,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -13645,7 +13667,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -13656,7 +13678,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -13666,7 +13688,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 4
     },
-    "signature": "b3594f791bf567fb4922ce922a2128732adf501298b15d5c424b71c11a20fca466652b35b6be0ee48eb2146ca6d4382f99ad36f65c143379c97614716c4bbd67"
+    "signature": "f0063c346c88a2510514ee875ab7156672d8824f8639a411fff6f12421f584e523aa336656a2440ac41ad3ef921fab1403213ca7f352bbb472373b8dcf538b47"
    }
   },
   {
@@ -13730,6 +13752,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13804,8 +13827,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -13836,7 +13860,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -13847,7 +13871,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -13857,7 +13881,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "6d3ffd60f497c93f0d3cbf510ca1ccaf7d818a7f4e21f294da140a2ade7a6beb16e4fcf17e7b99a17a264aec0bd21812cfe1c609bc0a5fc2c3c0d65535ec2722"
+    "signature": "63515c4f9ec4ed586c51b68637c84310b0afd612089ef59673a050eb8bab386150468bd3b047f3890e5ad45ce41d138135d64e5cda4bd32f3fe5de00bfda7689"
    }
   },
   {
@@ -13921,6 +13945,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -13995,8 +14020,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14027,7 +14053,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14038,7 +14064,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -14048,7 +14074,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "03393f1eea6f68fb2350a538cfdb0413c9d712dd1744e885d86781e9169b067b113d2b8f98481689f1f5879152a2a87053d55ea16be4ddc82ef4feb82103c836"
+    "signature": "7176296cefe8b219cf4286601f9381519e9ae0a638b20bd8aa1b6deca9107df20c757c8cd5ef465981c6c79eb63cf6cc218e14e5b482e162c0409819288714c7"
    }
   },
   {
@@ -14112,6 +14138,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -14186,8 +14213,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14218,7 +14246,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 3,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14229,7 +14257,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "f266876e47961b42114975592b7950d80b5ae6ededf85087c39b7ebce3b0d2a7fd09d1e222ba292aa8f28dfd684f6df020eba9581b809f611c77c6a68f0d2704"
+       "sig": "329bb295e141e73efa1c97cb89c944d737cff4ef8aee9d9cba8b704ab2f17588cf84fa0d21f413ae8cae3c834a01bbff299e6cbe5b2dd35038a8a1b3181be606"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -14239,7 +14267,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "04b7a76a66979e735b59cb68e69aff03350e545b7e2eebf3d384d137527a8e286b4a8e3c17ae480115579cb2ce894954621a98d117e10d37b93a39f524b093d7"
+    "signature": "7b6283091ffa0cfff31031f9afed1d8884894ce2ef080abc702501a891ac79b76780e868f632e7e3059fd898b01d45bf986f1aa26a5932df06519d06f39dbc8a"
    }
   },
   {
@@ -14303,6 +14331,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -14377,8 +14406,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14409,7 +14439,7 @@
       "restore": {
        "expires_at": "2026-10-07T12:00:01Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14420,7 +14450,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "c00d5861cb6921c276cd3418b027178684bad102b83f5be7f8c1492ac7c3345daa70ad88e85d4ffe41eee9a88ff92817d26b574504b38db80e776d683a3ddb06"
+       "sig": "d34212e5770a8bbeb6e8792d166caebe29a1cc466d90365eef07dd37277849337443bab7dbd62b499d6fcf1cd23b271cabba5de0e1126127e9d503412c9ca40c"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -14430,7 +14460,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "e46a890a4bbdf71d443769f19ab1c0638294924d3cc027a281a4d2f9cf326843686e6cf53e9a89f232f8111274bc4bf373221cd7d2c1cb8fb1d222f10577e050"
+    "signature": "7b14429eacb49c166ad22fba03225087dceabb31e458cdee5f0ae4e989cbede22f04328bd4a98410f3458cb6b3e6132ab5ad834bc883b01fcda5cebf3e02cadc"
    }
   },
   {
@@ -14494,6 +14524,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -14568,8 +14599,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14600,7 +14632,7 @@
       "restore": {
        "expires_at": "2026-10-06T12:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14611,7 +14643,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "641356cfff1b030c13c3cd0b28c97cde331d8ee254545f30e1d088729ba67e8b24e55214cbb3b40ddf392d0fdb95c78462e64da6130952778e4eb848c2693300"
+       "sig": "b43976c116d54422b4badaca72e88f5f40371bddc9d1d2b29ed81ed856df8246337f8b39e1564b3a91b31384228bf0825e4eb265eb2e72c3fa1e6bf461093a04"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -14621,7 +14653,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "ad8d33565fd85621796d1c7c7e2e60226e3972540f4470319866fcd5d0b20ce575271d8e3758cd7ab307021fc4def0917fd91f75d38854dae9d5aa6dc2e4c357"
+    "signature": "d42fc91ee8c77437da6566126507e6b9bbf49ecae132d18316c3925fc5934eb502f445fa24ff5a4404844c25533dae6cb9e8ee958cf98f70de45c502febca964"
    }
   },
   {
@@ -14685,6 +14717,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -14759,8 +14792,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14791,7 +14825,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14802,7 +14836,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "d2a7661a693a6429c8fe56ed95c6f4aa5329be84427ed54cbd65b8bf95211e7226c53231a45553062fcf3fca3ca68e6e3d55e3d9f20581ab053f646b774d3b03"
+       "sig": "6ed2d5f395f0a605b3ec44d04e184bc2c683ba3f26826437ec041963743f90c92b3232eb817d18ed97663fd322d66dd65a9e4789f429ed8058696a41d9de5709"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -14812,7 +14846,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "e942808a63f23f9a09ca4908a506d39181917bdf29f231dbe8e6199ac983113500efb673d79dbbe8da6a086b0acb439f9c8bf041eb940d8add8180cf397be7f5"
+    "signature": "94d4754df875db7301f890b8fdd25a7183d0f25d9389487d4c224df80f8cc71972f968e8b40ccbfa99d621a89fa70bef8aa9eeb7d5cb41c0c4180c0ea971028e"
    }
   },
   {
@@ -14876,6 +14910,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -14950,8 +14985,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -14982,7 +15018,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "Node_A",
        "not_before": "2026-10-06T12:00:00Z",
@@ -14993,7 +15029,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "8b5bf9a0ae4f68c28c12ea4ff1e344eb4133083948096169e96a78c40d83cbc7e4b3af7ab6f5db3d2b9ccc74ba20ce0a6891c2499a950dfa84d84e9d65e99802"
+       "sig": "d8ceeee712d9a3c001584b064e36686c9347950ef13239f5b2d9718e47b769b0ecc7ae55b43cad7f786ab638f0d43c7217e42752fd4712604bf5af1a8af94908"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15003,7 +15039,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "5d7ef5db8888f502b066942db3757e8d8bcf0683e3176d6f070061ecc9a3c53e039e5d352c00b8a12333963eedc4c1f26ebdc35be7cd08b51bbbc641d4fab771"
+    "signature": "184c4ce807c721ebb7c07504cd08350839daed5d7be50961ec29b2726812f2f262a4424a8c2659c6b809cd8573cf928bc8a4390604544f7b08dd7b51f81f1756"
    }
   },
   {
@@ -15067,6 +15103,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -15141,8 +15178,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -15173,7 +15211,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": -1,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -15184,7 +15222,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "46d9428005ca211b0dddaed2f05a4f4f2412ea2dfec9d56af4223970cac1d4fe8b4a650a511efa6b89357849c34523f4d0e79d919b5f41fbe44b5f84c8633006"
+       "sig": "72ad9c0b63ba020bab7381a587f7b0955483e3672505dd148a2a96a023c8445dbc0140a99349f6a5092ac98e35b0966c2a43b6a210034c078d1a56d89f9b2204"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15194,7 +15232,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "b70c921da410811dc7fae29fb57d97208580268c792e780dc828f37be384506a1eb39e7e5d33d3eb16f0fa47eac91b3798eb6d7e0e92bd67d75a4e2474fc688f"
+    "signature": "acdc8ca89f6e5fcf2ec5a0b53ddf74ded8456ee170d595314cc6ec65df44e8d2670b3285e3ad050cf761929b6a75f8b7af390419607c052855e8be6966ca6946"
    }
   },
   {
@@ -15258,6 +15296,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -15332,8 +15371,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -15364,7 +15404,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": "1",
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -15375,7 +15415,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "caeac4ebdb8c81de41c964f0fd94a90abaa806fd0b48c6b9b78d0f812efea8628aca6627122f27c35b41c4e8d3be4d01594e5fa42258541d9d3bde85c66af00b"
+       "sig": "e04667854ce940f9e383ea143e322fe865e4b6bbdbce0ee7367c84f95db3ad430999e788640a3f88001fb21faeda4a23f43dd190e7980425414b2fb9466c080d"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15385,7 +15425,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "08246911df9ca10053fca4c04bef4278371331c794fe0381bd69d9ec0d3ee53b3f1ac81d501d5bf81f104cf02634865abbd7d7ff712d5dd308071ceed4ec41f0"
+    "signature": "413cd194b2705c6d4b41ef96e6a5fccc884037a41f5d7d0b92307e7cff54ec0374ec0849995f05647b30560aa9f3347c4b8e1dd47cbee0abd260b58e0e4846d1"
    }
   },
   {
@@ -15449,6 +15489,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -15523,8 +15564,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -15555,7 +15597,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -15566,7 +15608,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "123b2f3f1e394e32995a5e632445f2d61cd6c2aa16cc142abe421057bc63fb835cd3488fe2051595aa1e5ddf47955b0048d57635306a782b63e158198c823e0d"
+       "sig": "c56e060a0eaa82d1ef8705cf3bafc6fdc1068b2254c06ff42cc3a4fc0aff47a1fdfc3f345a8eefe8b64816480f182a0d4400606e93b5566cf67cbcd9f2bfc30a"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15576,7 +15618,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "e7fcbe01007e4a920979bc2b3e5b47b72500a480659786d3079bab289e1d5bd4784f983323b1f3a4686198dbe782b3b7e04ba46be3bd98a256bdc3c5da508f25"
+    "signature": "6bee3e4aa3af71991c152195690c93e0555ea3d8ed29d9ec634c29aa50b3a75b1e03a786dccd1a558fab87865ddfe1d59050bcfff45609426f8eb8011516b5e9"
    }
   },
   {
@@ -15640,6 +15682,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -15714,8 +15757,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -15747,7 +15791,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -15758,7 +15802,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15768,7 +15812,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "f66707b8010323b7a422fcf0bd67b0a44ca88107646023028837a9e74420b84539ff3ee00c4b3bcac3c07fceaf2ca33ae4275f2190442efaff94ed9479fac4c7"
+    "signature": "37e28f8e2fcccac20bc898f5d01593c888d12347794b7ca83bcc3ceecfc16f7b51f269df4af15e35cf0c0dedddd764fdfe98449a974449cf95b68e6aae24af89"
    }
   },
   {
@@ -15832,6 +15876,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -15906,8 +15951,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -15937,7 +15983,7 @@
      "authorization": {
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -15948,7 +15994,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -15958,7 +16004,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "28208dbdc061ae878e11ad70fd1d313ec6edbee2d6d6c9381604c7c5690987d3245410b536a4ae3b197fa85b4f01683bf1bb8fb9bc127cb8678dd4309c2c677e"
+    "signature": "d142f1f5c275fea915d340c82d660af5f9ef1023ab9a0bb5af8917a681594d7a78434c0ef14ac041db2e4686bbdf05d75f0a201bc0dd9eb3ad3d230dfb2f927c"
    }
   },
   {
@@ -16022,6 +16068,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -16096,8 +16143,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -16128,7 +16176,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -16139,7 +16187,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "ae66f7f5533333410394869eb47dd955a0558430ce9833f8b4308a21ba8191448c05076154b3412333a2853c7dc61f5daddf9698a6c44446d891dd7f4930ee0f"
+       "sig": "8cfed18355e1f58a3f114165216d6af70fe44869ad7a7c4ad3d3834eef9bfec00ded8305a03144be68a8718e759fb7f71a0792202743fe31345727d35d35830a"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -16149,7 +16197,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "a00b5cf43531431a0c0b06d76c40480bb4175623aacfbb6dde06590c24772e76463d7be81721b1f71a54dd672f6af0b8b7d5f0f14caeca8e853d126e6049a691"
+    "signature": "18b799a39c3676d05e02a85df4f810bd08d571c96b88bcc2b57433a8d8923c8701b0df1a06d3a362ad298d89926646e0200e5e198f6120b943fef5527d2a048c"
    }
   },
   {
@@ -16213,6 +16261,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -16287,8 +16336,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -16319,7 +16369,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -16330,7 +16380,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -16340,7 +16390,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "d15a6663624947eced284cd3a51d96a07a0cc946e4d61e50a755a4c46b10a2042e4ed6dc4f9979c8152fc83f4935070a954d8a73b1a8501dcbeeedb56e1cf03d"
+    "signature": "192beba8ef3f80d7c514ad579913e995038b42eaced8545450a2c7bf37b445b12528185f3e49c32a478c1728338ec9b41010b553f43ad4e9f70de96f1e9e3851"
    }
   },
   {
@@ -16404,6 +16454,7 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
      "prev_digest": "",
      "revocation_signers": [
@@ -16478,8 +16529,9 @@
        "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
       }
      ],
+     "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
      "policy_version": "p1",
-     "prev_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+     "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
      "revocation_signers": [
       {
        "parties": [
@@ -16510,7 +16562,7 @@
       "restore": {
        "expires_at": "2026-10-06T18:00:00Z",
        "floor": 2,
-       "manifest_digest": "4d4c776d6fafb1fa1c5a6abf1746f9169ad2bd2467897f6e419912157f778ee2",
+       "manifest_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
        "manifest_epoch": 1,
        "node_id": "a",
        "not_before": "2026-10-06T12:00:00Z",
@@ -16521,7 +16573,7 @@
       "signature": {
        "party": "owner",
        "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c",
-       "sig": "29e447beff61a6122e991bf6383a899a09672327624da46b4db71b002fc1a191fc4c91d7aa6a6fd3f578ccf2653a1d1371922a8376c074b7663811b23c2d680a"
+       "sig": "d5305a0936662d17b4bb54256b5d4a8cd4eedbb0be8a4ee4a088df902afa0f38a21eca1e3a83ec5217c9c6a2c03411a6ff1f6a815e24243114f8074246a2a008"
       }
      },
      "cluster_id": "62ff5b5c1a2e3d4f",
@@ -16531,7 +16583,7 @@
      "schema": "regalia.opstate-state-epoch/v1",
      "state_epoch": 3
     },
-    "signature": "1166eb674c08ba30cc429855095f783c9c1e6b01cd5efb1a235b3cd53a2d4f77500e54e1b01b651e77250310646a95295b4c11de47c212ebc2e73fdb036e33bc"
+    "signature": "2824a810b6edc4b43fa5e7c1491558167037e99b7a3a7d49302ef655a799c115503275b5f91f90d23089c5db3ad36ca28c2da547f4587daa4ded23fd28ced8e5"
    }
   }
  ]

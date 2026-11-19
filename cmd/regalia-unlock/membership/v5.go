@@ -19,9 +19,11 @@ const (
 )
 
 var (
-	json1, json3        = json.Number("1"), json.Number("3")
-	v5ManifestKeys      = append(append([]string(nil), v4ManifestKeys...), "topology")
-	supportedMultiNodes = []int64{3} // 5 and 7 are their own epic (regalia-kms-dx7.12)
+	json1, json3   = json.Number("1"), json.Number("3")
+	v5ManifestKeys = append(append([]string(nil), v4ManifestKeys...), "topology")
+	// dx7.6: a single-node manifest also pins the owner's WireGuard public key, the boot mesh's only peer (membership.V5_SINGLE_MANIFEST_KEYS)
+	v5SingleManifestKeys = append(append([]string(nil), v5ManifestKeys...), "owner_wg_pub")
+	supportedMultiNodes  = []int64{3} // 5 and 7 are their own epic (regalia-kms-dx7.12)
 )
 
 // The topology profiles, as membership.SINGLE_NODE and MULTI_NODE spell them.

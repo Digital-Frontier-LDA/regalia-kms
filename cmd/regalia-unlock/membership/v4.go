@@ -39,7 +39,7 @@ var (
 	v4ManifestKeys = append(append(without(v2ManifestKeys, "revocation_keys"), signerFields...), v4OnlyFields...)
 	v4NodeKeys     = append(append([]string(nil), v2NodeKeys...), "signing_key")
 	// what only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was
-	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record", "topology")
+	rootFields = append(append([]string{"policy_version", "revocation_keys", "heartbeat_max_lifetime_s"}, signerFields...), "card_record", "topology", "owner_wg_pub")
 	// named in a signer rule, but not counting
 	notCounting = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true, "QUARANTINED": true}
 )

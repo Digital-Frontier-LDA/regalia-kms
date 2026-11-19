@@ -87,6 +87,10 @@ three-node cluster in an outage, not a one-node cluster):
     stopped until the root enrols a replacement), and exactly these rules: heartbeat_signers and activation_signers
     {1, [that node]} (after a revocation, the revoked node), revocation_signers [{1, ["owner"]}]. A root-signed
     replacement (the node RETIRED, its successor named in its place) keeps it so.
+  * `owner_wg_pub` (regalia-kms-dx7.6, docs/design/single-node.md 4.5, 4.9): a single-node manifest, and only one, pins the
+    owner's WireGuard public key (64 hex), the boot mesh's only peer, as every node's wg_boot_pub is pinned. It is an
+    identity like theirs (no node's or role's key), and a ROOT_FIELD: the root rotates it in a new epoch, a quorum never.
+    A multi-node manifest has no such field.
 Each manifest is
 validated under the schema it names, so a chain that starts at v1 and moves to v2 verifies from epoch 1.
 The schema only moves forward, and only in a ROOT-signed manifest: v1 may be followed by v1 or v2, v2
@@ -195,9 +199,12 @@ SINGLE_RULES = ("heartbeat_signers", "activation_signers")       # one rule each
 V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS + V4_ONLY_FIELDS
 V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
 V5_MANIFEST_KEYS = V4_MANIFEST_KEYS + ("topology",)
+# dx7.6 (docs/design/single-node.md 4.5, 4.9): a single-node manifest also pins the owner's WireGuard public key, the boot
+# mesh's only peer, as every node's wg_boot_pub is pinned. Under multi-node there is no such field.
+V5_SINGLE_MANIFEST_KEYS = V5_MANIFEST_KEYS + ("owner_wg_pub",)
 # What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was. (topology: not even
 # the root, transition() below.)
-ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record", "topology")
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS + ("card_record", "topology", "owner_wg_pub")
 # A node that is retired, revoked or quarantined is named in a signer rule but does not count.
 NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
@@ -674,7 +681,9 @@ def validate(manifest):
     fourth = manifest["schema"] in QUORUM_SCHEMAS                           # v5 is v4 and its topology
     fifth = manifest["schema"] == SCHEMA_V5
     second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3) + QUORUM_SCHEMAS  # v3, v4 and v5 have v2's fields
-    exact(manifest, V5_MANIFEST_KEYS if fifth else V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
+    single = fifth and isinstance(manifest.get("topology"), dict) and manifest["topology"].get("profile") == SINGLE_NODE
+    exact(manifest, V5_SINGLE_MANIFEST_KEYS if single else V5_MANIFEST_KEYS if fifth else V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS
+          if second else MANIFEST_KEYS, "manifest")
     node_keys = V4_NODE_KEYS if fourth else V2_NODE_KEYS if second else NODE_KEYS
     # A tombstone keeps exactly the fields it had: one retired under an earlier schema may lack what later
     # schemas added (ssh_host_pub from v2, signing_key from v4), and nothing is invented for it.
@@ -739,6 +748,11 @@ def validate(manifest):
             require(("hsm", s) not in seen, "HSM %s is listed twice" % s)
             seen[("hsm", s)] = node["node_id"]
         by_id[node["node_id"]] = node
+    if single:
+        # dx7.6: the owner's boot-mesh key, an identity like a node's: never another node's or role's key
+        hex_field(manifest["owner_wg_pub"], 64, "owner_wg_pub")
+        require(manifest["owner_wg_pub"] not in seen, "owner_wg_pub is already used (%s)" % seen.get(manifest["owner_wg_pub"]))
+        seen[manifest["owner_wg_pub"]] = "owner_wg_pub"
     if fourth:
         live = _topology(manifest, by_id) if fifth else None
         _signer_rules(manifest, by_id, seen)

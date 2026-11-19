@@ -32,13 +32,20 @@ interface's key, and the host then answers no handshake at all (measured, e2e/wg
 whoever applies a rendered configuration adds the key in memory, with_key(), and pipes the result:
 `wg syncconf IF /dev/stdin`. The key is never written beside the configuration.
 
+SINGLE-NODE (regalia-kms-dx7.6, docs/design/single-node.md 4.5, 4.9). Under a manifest of the single-node profile the
+booting node's one WireGuard peer is the OWNER's unlock endpoint: by the manifest's owner_wg_pub (pinned there as each
+node's wg_boot_pub is), at the site's boot_mesh.owner addresses. The site's boot mesh must be of that shape, and a
+multi-node manifest refuses it (sitecfg.require_profile): each shape only under its own profile. The running host is
+nobody's unlock peer (peer_wg_conf and caller_of refuse), and owner_wg_conf() renders the owner's side: it listens, and
+knows the node by its wg_boot_pub.
+
 NOT HERE: the systemd units that run this in an initrd and on a host, sealing the WG-BOOT key, and
 writing these files after each accepted manifest. Proven by behaviour in network namespaces
 (e2e/wg-boot-netns.sh), not on a host.
 """
 import base64
 
-from deploy.baremetal import membership
+from deploy.baremetal import membership, sitecfg
 
 Refused, require = membership.Refused, membership.require
 
@@ -55,12 +62,27 @@ def _key(hex_key):
     return base64.b64encode(bytes.fromhex(hex_key)).decode()
 
 
+def _single(cfg, manifest):
+    """Whether `manifest` is of the single-node profile, refused unless the site's boot mesh is of the shape for it."""
+    profile = membership.profile(manifest)
+    try:
+        sitecfg.require_profile(cfg, profile)
+    except sitecfg.InvalidSite as invalid:
+        raise Refused(str(invalid)) from None
+    return profile == membership.SINGLE_NODE
+
+
 def _others(cfg, manifest, action):
     """The other nodes the manifest lets do `action`, with their manifest entry and their addresses.
     A node the manifest lets act and the site config has no address for is a refusal, not an omission:
-    the path would be missing with nothing saying why."""
+    the path would be missing with nothing saying why. Under the single-node profile the one that authorizes is the
+    owner ({"node_id": "owner", "wg_service_pub": the manifest's owner_wg_pub}), and nobody requests from this host."""
     mesh, nodes = _mesh(cfg), membership.validate(manifest)
     require(mesh["node_id"] in nodes, "%s is not in the manifest" % mesh["node_id"])
+    if _single(cfg, manifest):
+        require(action == "authorize", "a single-node host is nobody's unlock peer: its boot mesh is its initrd's alone, to the owner")
+        owner = {"node_id": membership.OWNER, "wg_service_pub": manifest["owner_wg_pub"]}
+        return mesh, [(owner, dict(mesh["owner"], node_id=membership.OWNER))]
     where = {p["node_id"]: p for p in mesh["peers"]}
     out = []
     for node_id, node in nodes.items():
@@ -75,6 +97,7 @@ def peer_wg_conf(cfg, manifest):
     """The running host's `wg setconf` text: it listens, and knows the nodes that may be unlocked by their
     WG-BOOT keys, each at its tunnel address. A host that may not authorize knows nobody."""
     mesh = _mesh(cfg)
+    require(not _single(cfg, manifest), "a single-node host is nobody's unlock peer: no wg-unlock on it (the owner answers its boot)")
     text = "[Interface]\nListenPort = %d\n" % mesh["listen_port"]
     if not membership.may(manifest, mesh["node_id"], "authorize"):
         require(mesh["node_id"] in membership.validate(manifest), "%s is not in the manifest" % mesh["node_id"])
@@ -103,6 +126,20 @@ def caller_of(cfg, manifest):
     so the address names the node as surely as the key does."""
     owners = {where["address"]: node["node_id"] for node, where in _others(cfg, manifest, "request")[1]}
     return owners.get
+
+
+def owner_wg_conf(cfg, manifest):
+    """The owner's machine's `wg setconf` text for a single-node host's boot (dx7.6): it listens on the boot mesh's port, and
+    knows the node by its WG-BOOT key at the node's tunnel address, while the manifest lets it request. The owner adds
+    its own key with with_key(); `owner.py unlock --listen` answers at the owner's tunnel address."""
+    mesh, nodes = _mesh(cfg), membership.validate(manifest)
+    require(_single(cfg, manifest), "owner_wg_conf is the single-node profile's: under multi-node the nodes are each other's peers")
+    node = nodes.get(mesh["node_id"])
+    require(node is not None, "%s is not in the manifest" % mesh["node_id"])
+    text = "[Interface]\nListenPort = %d\n" % mesh["listen_port"]
+    if membership.may(manifest, node["node_id"], "request"):
+        text += "\n[Peer]\n# %s\nPublicKey = %s\nAllowedIPs = %s/32\n" % (node["node_id"], _key(node["wg_boot_pub"]), mesh["address"])
+    return text
 
 
 def unlock_endpoints(cfg, manifest):

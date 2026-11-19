@@ -171,7 +171,11 @@ func Validate(value any) (map[string]map[string]any, error) {
 	fifth := schema == SchemaV5
 	second := schema == SchemaV2 || schema == SchemaV3 || fourth // v3, v4 and v5 have v2's fields
 	keys, nodeKeySet := manifestKeys, nodeKeys
-	if fifth {
+	topologyObject, _ := manifest["topology"].(map[string]any)
+	single := fifth && topologyObject != nil && topologyObject["profile"] == singleNode
+	if single {
+		keys, nodeKeySet = v5SingleManifestKeys, v4NodeKeys // dx7.6: and owner_wg_pub
+	} else if fifth {
 		keys, nodeKeySet = v5ManifestKeys, v4NodeKeys
 	} else if fourth {
 		keys, nodeKeySet = v4ManifestKeys, v4NodeKeys
@@ -319,6 +323,17 @@ func Validate(value any) (map[string]map[string]any, error) {
 			seen[key] = id
 		}
 		byID[id] = node
+	}
+	if single {
+		// dx7.6: the owner's boot-mesh key, an identity like a node's: never another node's or role's key
+		if err := hexField(manifest["owner_wg_pub"], 64, "owner_wg_pub"); err != nil {
+			return nil, err
+		}
+		value := manifest["owner_wg_pub"].(string)
+		if owner, used := seen[value]; used {
+			return nil, refuse("owner_wg_pub is already used (%s)", owner)
+		}
+		seen[value] = "owner_wg_pub"
 	}
 	if fourth {
 		var live []string

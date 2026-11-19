@@ -733,8 +733,11 @@ class Node:
     def __init__(self, cfg, run=subprocess.run):
         self.cfg, self.run, self.node_id = validate(cfg), run, cfg["node_id"]
         self.site = sitecfg.load(cfg["site"])
-        require(self.site["boot_mesh"] is not None and self.site["service_mesh"] is not None,
-                "the site configuration has no boot_mesh or no service_mesh: this is not a node of a three-site cluster")
+        # dx7.6: a single-node host has a boot mesh (to the owner) and no service mesh (no wg-svc, no peer to sync with)
+        require(self.site["boot_mesh"] is not None and (self.site["service_mesh"] is not None
+                                                        or sitecfg.profile(self.site) == sitecfg.SINGLE_NODE),
+                "the site configuration has no boot_mesh or no service_mesh: this is not a node of a three-site cluster, nor a "
+                "single-node host")
         require(self.site["boot_mesh"]["node_id"] == self.node_id, "the site configuration is %s's, not %s's" % (self.site["boot_mesh"]["node_id"], self.node_id))
         self.state, self.runtime, self.tcti = cfg["state_dir"], cfg["run_dir"], cfg["tcti"]
 
@@ -839,7 +842,10 @@ class Node:
                 if n["node_id"] != self.node_id and n["state"] not in membership.TERMINAL}
 
     def sources(self, manifest, timeout=sync.DEADLINE):
-        """sync.Client transports: the peers (the nodes of the manifest; #199 retired the revocation authority)."""
+        """sync.Client transports: the peers (the nodes of the manifest; #199 retired the revocation authority). None on a
+        single-node host (dx7.6): it has no peer, and no service tunnel to reach one."""
+        if self.site["service_mesh"] is None:
+            return {}
         mine, port = self.own_address(manifest), self.site["service_mesh"]["sync_port"]
         return {node: sync.tcp_transport(where, port, mine, timeout) for node, where in self.peers(manifest).items()}
 
@@ -880,6 +886,15 @@ def wg_apply(node):
     interfaces down: a peer list that is not the current manifest's is not one to answer on. An interrupt
     stays an interrupt, with an interface that could not be taken down noted on it."""
     mesh, svc = node.site["boot_mesh"], node.site["service_mesh"]
+    if sitecfg.profile(node.site) == sitecfg.SINGLE_NODE:
+        # dx7.6: no wg-svc and no wg-unlock on a single-node host (its boot mesh is its initrd's, to the owner); the site's
+        # shape only under a single-node manifest
+        manifest = node.manifest()
+        try:
+            sitecfg.require_profile(node.site, membership.profile(manifest))
+        except sitecfg.InvalidSite as invalid:
+            raise Refused(str(invalid)) from None
+        return manifest["epoch"]
     names = (svc["interface"], mesh["interface"])
     try:
         manifest = node.manifest()
@@ -1222,14 +1237,16 @@ class Sync:
         """Until `stop()`: the listeners in threads, then the pull loop and the watch in this one."""
         self.publish()
         mesh, svc = self.node.site["boot_mesh"], self.node.site["service_mesh"]
-        listeners = []
-        service = bind_when_up((self.node.own_address(self.manifest()), svc["sync_port"]), stop, family=socket.AF_INET6)
-        service.settimeout(1)
-        listeners.append(service)
-        unlocking = bind_when_up((mesh["address"], mesh["unlock_port"]), stop)
-        listeners.append(unlocking)
-        threads = [threading.Thread(target=sync.serve, args=(self.server(), service, stop), daemon=True),
-                   threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
+        listeners, threads = [], []
+        if svc is not None:
+            # dx7.6: a single-node host (no service_mesh) serves no peer and is nobody's unlock peer: no listener at all
+            service = bind_when_up((self.node.own_address(self.manifest()), svc["sync_port"]), stop, family=socket.AF_INET6)
+            service.settimeout(1)
+            listeners.append(service)
+            unlocking = bind_when_up((mesh["address"], mesh["unlock_port"]), stop)
+            listeners.append(unlocking)
+            threads = [threading.Thread(target=sync.serve, args=(self.server(), service, stop), daemon=True),
+                       threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
         for thread in threads:
             thread.start()
         watch, proposer = self.watch(), self.proposer()
@@ -1320,7 +1337,10 @@ def main(argv=None):
             # the anchor beside it (#66 B3): below the epoch while regalia-esp-advance has not yet run, or keeps failing
             print(json.dumps({"node_id": node.node_id, "epoch": node.manifest()["epoch"], "anchor": node.anchor().value()}))
         elif args.service == "wg-apply":
-            print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
+            if node.site["service_mesh"] is None:
+                print("single-node host: no wg-svc and no %s to apply under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
+            else:
+                print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
             trail = Trail(args.esp_trail or trails.where(ESP_TRAIL), ESP_TRAIL)
             try:

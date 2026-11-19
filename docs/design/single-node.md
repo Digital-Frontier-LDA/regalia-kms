@@ -212,6 +212,7 @@ The ones that decide the design:
   - no sync between peers.
 - `sitecfg`, `firewall`, `wgsvc`, `bootnet` and `initrd/wg-boot` accept that shape **only** when the manifest's profile says so.
 - `nft`'s empty `{ }` set (`firewall.py:64`) is avoided by not rendering the rule.
+- **Built (dx7.6).** The owner's WireGuard public key is pinned in the manifest as `owner_wg_pub`. It is a v5 field of the single-node profile only, root-only like the other ROOT_FIELDS, and unique against every node key. `propose --genesis --topology single-node` takes it as `--owner-wg-pub`. The owner endpoint's underlay and tunnel address are in the site config as `boot_mesh.owner`, with `peers: []` and `service_mesh: null`. `bootnet` renders the initrd's boot mesh to the owner and the owner's side (`owner_wg_conf`), and each boot-mesh shape is accepted only under its own profile. Not yet: the initrd's Go renderer (`cmd/regalia-unlock/bootcfg`) does not make the single-node unlock configuration (`regalia.unlock-boot/v2`, dx7.5), so `bootcreds.render` and `bootcfg.Render` both refuse a single-node host's credentials for now.
 - `regalia-sync` still serves the owner's `deliver` and exposes the chain for the collector.
 
 ### 4.10 Approvals

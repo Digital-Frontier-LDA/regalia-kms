@@ -6,6 +6,7 @@ prints docs/single-node-limits.md verbatim, reads `single node: I accept the lim
 records the shipped text's SHA-256 in topology.single_node_limits_sha256; `sign --genesis` shows the profile and the
 digest once the root fingerprint is confirmed and refuses any other digest. A three-node genesis is today's, byte for
 byte, but for the v5 schema line and its topology field (MultiNodeIsToday's: a digest recorded from main 36a36c62)."""
+import base64
 import hashlib
 import io
 import json
@@ -97,7 +98,22 @@ class Topology(unittest.TestCase):
         with unittest.mock.patch("sys.stderr", err):
             self.assertEqual(tool.main(["propose", "--root-key", self.g.root, "--chain", "c.json", "--topology", "single-node",
                                         "--set-state", "a=MAINTENANCE", "--out", os.path.join(self.g.d, "x")]), 2)
-        self.assertIn("--topology and the lifetimes are for --genesis only", err.getvalue())
+        self.assertIn("--topology, --owner-wg-pub and the lifetimes are for --genesis only", err.getvalue())
+
+    def test_a_single_node_genesis_pins_the_owner_s_wireguard_key_and_a_multi_node_one_refuses_it(self):
+        """dx7.6: the owner is the single-node boot mesh's only peer; its WireGuard key is pinned in the root-signed genesis."""
+        from tests.test_baremetal_membership_v5 import OWNER_WG
+        self.g.document = dict(self.g.document, nodes={"a": self.g.document["nodes"]["a"]})
+        alone_ = self.g.propose(entries=self.g.entries[:1], document=self.g.document, topology="single-node")
+        self.assertEqual(alone_["owner_wg_pub"], OWNER_WG)
+        for bad in (None, "0E" * 32, "0e" * 31):
+            with self.subTest(bad):
+                self.refused("a single-node genesis pins the owner's WireGuard public key: --owner-wg-pub", self.g.propose,
+                             entries=self.g.entries[:1], document=self.g.document, topology="single-node", owner_wg_pub=bad)
+
+    def test_a_multi_node_genesis_takes_no_owner_wireguard_key(self):
+        self.assertNotIn("owner_wg_pub", self.g.propose())
+        self.refused("--owner-wg-pub is the single-node profile's alone", self.g.propose, owner_wg_pub="0e" * 32)
 
     def test_the_thresholds_come_from_the_topology(self):
         three = self.g.propose()
@@ -159,6 +175,8 @@ class SingleNodeAcknowledgement(unittest.TestCase):
                                                        "sig": self.g.root_key.sign(m.DOMAIN + m.canonical(written)).hex()}}
         self.assertEqual(m.profile(m.accept(None, envelope, self.g.root)), m.SINGLE_NODE)
         self.assertIn("SINGLE-NODE (1 node)", out)
+        self.assertEqual(written["owner_wg_pub"], "0e" * 32)
+        self.assertIn("owner WireGuard key (the boot mesh's only peer, dx7.6): %s" % base64.b64encode(bytes(32 * [14])).decode(), out)
 
     def test_a_wrong_or_absent_phrase_writes_nothing(self):
         for typed in ("", "yes", self.phrase.upper(), PHRASE % "00000000", self.phrase + " please", "single node: I accept the limits",

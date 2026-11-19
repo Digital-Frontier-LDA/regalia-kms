@@ -103,6 +103,7 @@ CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.m
   * Run only with software keys, software TPMs and CI: no ceremony has run, and nothing here has signed on the
     production hardware yet (#297)."""
 import argparse
+import base64
 import datetime
 import getpass
 import hashlib
@@ -379,7 +380,7 @@ def offline_keys_record(envelope, root):
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None, anchor_policy=None, card_record=None,
-                    topology=None):
+                    topology=None, owner_wg_pub=None):
     """Epoch 1 (v5), unsigned, of the `topology` profile (--topology: single-node or multi-node, required; the signer
     rules from it, genesis_topology and genesis_signers): every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
     commits to, the owner's two keys, K_A (`anchor_policy`, offline_keys_record's typed entry), the card record that names the
@@ -421,6 +422,13 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
             require(key != node["signing_key"].get("key"), "the %s's key is %s's signing key" % (name, node["node_id"]))
     ids = [n["node_id"] for n in nodes]
     shape = genesis_topology(topology, len(nodes))
+    # dx7.6: the owner's WireGuard key, the single-node boot mesh's only peer, pinned as each node's wg_boot_pub is
+    if shape["profile"] == membership.SINGLE_NODE:
+        require(isinstance(owner_wg_pub, str) and re.fullmatch(r"[0-9a-f]{64}", owner_wg_pub) is not None,
+                "a single-node genesis pins the owner's WireGuard public key: --owner-wg-pub, 64 lowercase hex (`wg pubkey` "
+                "of the owner's boot-mesh key, as hex)")
+    else:
+        require(owner_wg_pub is None, "--owner-wg-pub is the single-node profile's alone: a multi-node boot mesh's peers are its nodes")
     candidate = dict(GENESIS_POLICY, **(policy or {}))
     candidate.update(genesis_signers(shape, ids))
     candidate.update({
@@ -428,6 +436,8 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         "owner_keys": [{"alg": "ed25519", "key": owners[serial]} for serial in sorted(owners)],
         "anchor_policy_key": anchor_policy, "card_record": {"sequence": card_record.get("sequence"), "digest": card_record.get("digest")},
         "nodes": nodes})
+    if owner_wg_pub is not None:
+        candidate["owner_wg_pub"] = owner_wg_pub
     membership.validate(candidate)
     membership.transition(None, candidate, "root")
     measurements.bind(candidate, document)
@@ -753,7 +763,7 @@ def _propose_genesis(args, root, confirm=None, say=print):
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
     anchor_policy, generated = offline_keys_record(read_json(args.offline_keys_record, membership.MAX_BYTES), root)
     candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy, anchor_policy, cards,
-                                args.topology)
+                                args.topology, args.owner_wg_pub)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
@@ -784,6 +794,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
         "private half signed a challenge when it was sealed" % (generated["at"], generated["master_id"], generated["threshold"], generated["shares"]))
     say("topology: %s" % describe_topology(candidate["topology"]))
     if candidate["topology"]["profile"] == membership.SINGLE_NODE:
+        say("owner WireGuard key (the boot mesh's only peer, dx7.6): %s: check it against the owner's `wg pubkey`"
+            % base64.b64encode(bytes.fromhex(candidate["owner_wg_pub"])).decode())
         acknowledge_single_node(confirm or keyfd.tty_line, say)
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
@@ -878,6 +890,8 @@ def main(argv=None):
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--topology", choices=sorted(TOPOLOGY_NODES), help="--genesis, required: the designed size, single-node (one "
                    "--node, after the limits text is acknowledged at the console) or multi-node (three); never inferred")
+    c.add_argument("--owner-wg-pub", metavar="HEX", help="--genesis with --topology single-node, required: the owner's WireGuard "
+                   "public key (64 hex), the boot mesh's only peer (dx7.6)")
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
     c.add_argument("--set-state", action="append", default=[], metavar="NODE=STATE", help="change a node's state; repeat")
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
@@ -921,9 +935,9 @@ def main(argv=None):
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
             require(not (args.node or args.system_pub or args.measurements or args.card_record or args.state_dir or args.offline_keys_record
-                         or args.heartbeat_max_lifetime_s or args.topology
+                         or args.heartbeat_max_lifetime_s or args.topology or args.owner_wg_pub
                          or args.owner_heartbeat_lifetime_s), "--node, --system-pub, --measurements, --card-record, --state-dir, "
-                    "--offline-keys-record, --topology and the lifetimes are for --genesis only")
+                    "--offline-keys-record, --topology, --owner-wg-pub and the lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
             require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")

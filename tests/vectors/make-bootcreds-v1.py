@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from deploy.baremetal import bootcreds, membership, sitecfg  # noqa: E402
+from tests.test_baremetal_membership_v5 import single5  # noqa: E402
 
 DEVICE = "/dev/disk/by-partlabel/regalia-root"
 WHERE = {"a": ("192.0.2.10", "10.89.0.1"), "b": ("198.51.100.7", "10.89.0.2"), "c": ("198.51.100.9", "10.89.0.3"),
@@ -59,6 +60,8 @@ SITES = {
     "a, other ports": site("a", listen_port=51999, unlock_port=7999),
     "a, with d": site("a", nodes=("a", "b", "c", "d")),
     "a, b only": site("a", nodes=("a", "b")),
+    # dx7.6: a single-node host, its boot mesh's one peer the owner
+    "a, single-node": site("a", nodes=("a",), owner={"underlay": "203.0.113.50", "address": "10.89.0.9"}),
 }
 MANIFESTS = {
     "all active": manifest(),
@@ -70,6 +73,7 @@ MANIFESTS = {
     "v2": manifest(v2=True), "v3": manifest(v3=True), "a large epoch": manifest(epoch=123456789012),
     "with d active": manifest(order=("a", "b", "c", "d")), "with d quarantined": manifest(order=("a", "b", "c", "d"), d="QUARANTINED"),
     "without a": manifest(order=("b", "c", "d")),
+    "single-node": single5(1, ""),
     "b's EK Name not a SHA-256 Name": dict(manifest(), nodes=[dict(n, ek_name="000c" + n["ek_name"][4:]) if n["node_id"] == "b" else n
                                                               for n in manifest()["nodes"]]),
 }
@@ -79,12 +83,13 @@ MANIFESTS = {
 CLASSES = [("not-json", r"duplicate field|floats are not allowed|not valid JSON|not UTF-8"), ("size", r"is at most \d+ bytes"),
            ("not-canonical", r"not in canonical form"), ("fields", r"fields mismatch|needs exactly|must be null or hold exactly"),
            ("schema", r"schema must be"), ("device", r"device must be a plain path"), ("no-mesh", r"boot_mesh must not be null"),
-           ("mac", r"nic_mac must be"), ("prefix", r"prefix must be"), ("gateway", r"gateway must"), ("peer-count", r"peers must list"),
-           ("peer-id", r"must be another node's ID"), ("shared-address", r"no two nodes share an address"),
+           ("mac", r"nic_mac must be"), ("prefix", r"prefix must be"), ("gateway", r"gateway must"), ("peer-count", r"peers must list|lists no peers"),
+           ("peer-id", r"must be another node's ID"), ("shared-address", r"no two (nodes|ends) share an address"),
            ("tunnel-is-host", r"is the tunnel's address, not host_ipv4"), ("interface", r"interface must be"),
            ("port", r"must be a port number"), ("node-id", r"is not a node ID"), ("address", r"must be an IPv4 address|must be a host address"),
            ("node-absent", r"is not in the manifest"), ("no-address", r"has no boot-mesh address for"), ("no-peer", r"no peer"),
-           ("tpm-name", r"must be a SHA-256 TPM Name")]
+           ("tpm-name", r"must be a SHA-256 TPM Name"), ("profile", r"the site configuration is for a"),
+           ("pending", r"boot credentials are not rendered yet")]
 
 
 def reason_class(message):
@@ -149,6 +154,27 @@ raw_sites = {
     "a float port": json.dumps(good, sort_keys=True, separators=(",", ":")).replace('"listen_port":51820', '"listen_port":51820.0').encode(),
     "a duplicate field": membership.canonical(good).replace(b'{"boot_mesh"', b'{"device":"x","boot_mesh"', 1),
 }
+# dx7.6: a single-node host's boot mesh (the owner its one peer), and what the initrd refuses of it
+single = json.loads(bootcreds.site_document(SITES["a, single-node"], DEVICE))
+
+
+def single_changed(fn):
+    doc = copy.deepcopy(single)
+    fn(doc)
+    return membership.canonical(doc)
+
+
+raw_sites.update({
+    "valid single-node": membership.canonical(single),
+    "a single-node boot mesh with a node peer": single_changed(lambda d: d["boot_mesh"].update(peers=good["boot_mesh"]["peers"][:1])),
+    "an owner with an extra field": single_changed(lambda d: d["boot_mesh"]["owner"].update(key="x")),
+    "an owner without its address": single_changed(lambda d: d["boot_mesh"]["owner"].pop("address")),
+    "an owner at the host's address": single_changed(lambda d: d["boot_mesh"]["owner"].update(underlay="192.0.2.10")),
+    "an owner inside the tunnel at the node's address": single_changed(lambda d: d["boot_mesh"]["owner"].update(address="10.89.0.1")),
+    "an owner whose two addresses are one": single_changed(lambda d: d["boot_mesh"]["owner"].update(address="203.0.113.50")),
+    "an owner at a loopback address": single_changed(lambda d: d["boot_mesh"]["owner"].update(underlay="127.0.0.1")),
+    "an owner that is not an object": single_changed(lambda d: d["boot_mesh"].update(owner="203.0.113.50")),
+})
 documents = []
 for name, raw in raw_sites.items():
     try:
@@ -156,7 +182,7 @@ for name, raw in raw_sites.items():
         outcome = {"taken": True}
     except membership.Refused as refusal:
         outcome = {"taken": False, "refused": str(refusal), "class": reason_class(str(refusal))}
-    assert outcome["taken"] == (name == "valid"), (name, outcome)
+    assert outcome["taken"] == name.startswith("valid"), (name, outcome)
     documents.append({"name": name, "hex": raw.hex(), **outcome})
 
 print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "device": DEVICE,

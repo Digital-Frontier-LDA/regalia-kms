@@ -928,11 +928,14 @@ class ProposeGenesis(unittest.TestCase):
         return {self.MAIN: self.owner_a, self.BACKUP: self.owner_b}
 
     def propose(self, entries=None, owners=None, release=None, policy=None, document=None, anchor=None, card_record=None,
-                topology="multi-node"):
+                topology="multi-node", owner_wg_pub="default"):
+        from tests.test_baremetal_membership_v5 import OWNER_WG
+        if owner_wg_pub == "default":                # dx7.6: a single-node genesis pins the owner's WireGuard key
+            owner_wg_pub = OWNER_WG if topology == "single-node" else None
         return tool.propose_genesis(self.entries if entries is None else entries, document or self.document,
                                     self.owners() if owners is None else owners, release or self.release, self.root,
                                     "2026-10-04T12:00:00Z", policy, anchor or self.anchor(),
-                                    card_record or {"sequence": 1, "digest": "ca" * 32}, topology)
+                                    card_record or {"sequence": 1, "digest": "ca" * 32}, topology, owner_wg_pub)
 
     def anchor(self, key=None):
         from tests.test_baremetal_membership_v4 import typed
@@ -1183,6 +1186,7 @@ class ProposeGenesis(unittest.TestCase):
         out = os.path.join(self.d, "e1.json")
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
                 "--issued-at", "2026-10-04T12:00:00Z"] + (["--topology", topology] if topology else []) \
+            + (["--owner-wg-pub", "0e" * 32] if topology == "single-node" else []) \
             + (["--card-record", cards] if with_record else []) \
             + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
         generated = os.path.join(self.d, "offline-keys.record.json")
@@ -1265,7 +1269,7 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --offline-keys-record, --topology and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--node, --system-pub, --measurements, --card-record, --state-dir, --offline-keys-record, --topology, --owner-wg-pub and the lifetimes are for --genesis only", stderr.getvalue())
 
     def test_each_node_was_enrolled_on_the_reviewed_image(self):
         """#399 (regalia-kms-d9): the PCR 11 each node's AK quoted at activation is the SYSTEM-phase value the genesis

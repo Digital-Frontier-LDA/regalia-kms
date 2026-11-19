@@ -24,6 +24,10 @@ With a `boot_mesh` (three-site, #66), two more openings, and nothing else:
           reached: no SSH and no KMS port inside the tunnel, whatever addresses the packet carries.
 The WireGuard peers themselves (which keys) come from the manifest: deploy/baremetal/bootnet.py.
 
+A SINGLE-NODE host (its boot_mesh's one peer is the owner, regalia-kms-dx7.6) opens neither: the running host is nobody's
+unlock peer (its boot mesh lives in its initrd only, bootnet.boot_ruleset), and it has no service_mesh. No rule with an
+empty peer set is rendered: nft refuses `{ }`.
+
 With a `service_mesh` (#80), the only IPv6 this host carries, and only on that interface:
   input   WireGuard (UDP listen_port) from the peers' declared addresses; and
           sync_port inside the tunnel, only between addresses of the tunnel's own prefix
@@ -55,7 +59,7 @@ def render(cfg):
     kms, ssh = cfg["kms_port"], cfg["ssh_port"]
     callers = cfg["client_cidrs"] + [n for n in cfg["monitoring_cidrs"] if n not in cfg["client_cidrs"]]
     mesh, mesh_rules = cfg["boot_mesh"], ""
-    if mesh:
+    if mesh and mesh["peers"]:          # dx7.6: a single-node host (peers [], the owner) is no unlock peer: no opening
         # After "ct state established,related accept": what reaches this rule begins a connection, and a
         # connection begins with a SYN and nothing else (see the service mesh below for why).
         mesh_rules = (

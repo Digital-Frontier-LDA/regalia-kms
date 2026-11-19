@@ -202,6 +202,67 @@
    "name": "a duplicate field",
    "refused": "duplicate field 'device'",
    "taken": false
+  },
+  {
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e39222c22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "valid single-node",
+   "taken": true
+  },
+  {
+   "class": "peer-count",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e39222c22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b7b2261646472657373223a2231302e38392e302e32222c226e6f64655f6964223a2262222c22756e6465726c6179223a223139382e35312e3130302e37227d5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "a single-node boot mesh with a node peer",
+   "refused": "regalia.site: a single-node boot_mesh lists no peers: its one peer is the owner (boot_mesh.owner)",
+   "taken": false
+  },
+  {
+   "class": "fields",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e39222c226b6579223a2278222c22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner with an extra field",
+   "refused": "regalia.site: boot_mesh.owner needs exactly ['underlay', 'address']",
+   "taken": false
+  },
+  {
+   "class": "fields",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner without its address",
+   "refused": "regalia.site: boot_mesh.owner needs exactly ['underlay', 'address']",
+   "taken": false
+  },
+  {
+   "class": "shared-address",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e39222c22756e6465726c6179223a223139322e302e322e3130227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner at the host's address",
+   "refused": "regalia.site: boot_mesh.owner: no two ends share an address, inside or outside the tunnel, and no address is both",
+   "taken": false
+  },
+  {
+   "class": "shared-address",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e31222c22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner inside the tunnel at the node's address",
+   "refused": "regalia.site: boot_mesh.owner: no two ends share an address, inside or outside the tunnel, and no address is both",
+   "taken": false
+  },
+  {
+   "class": "shared-address",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a223230332e302e3131332e3530222c22756e6465726c6179223a223230332e302e3131332e3530227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner whose two addresses are one",
+   "refused": "regalia.site: boot_mesh.owner: no two ends share an address, inside or outside the tunnel, and no address is both",
+   "taken": false
+  },
+  {
+   "class": "address",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a7b2261646472657373223a2231302e38392e302e39222c22756e6465726c6179223a223132372e302e302e31227d2c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner at a loopback address",
+   "refused": "regalia.site: boot_mesh.owner.underlay must be a host address",
+   "taken": false
+  },
+  {
+   "class": "fields",
+   "hex": "7b22626f6f745f6d657368223a7b2261646472657373223a2231302e38392e302e31222c2267617465776179223a6e756c6c2c22696e74657266616365223a2277672d756e6c6f636b222c226c697374656e5f706f7274223a35313832302c226e69635f6d6163223a2235323a35343a30303a61623a63643a3031222c226e6f64655f6964223a2261222c226f776e6572223a223230332e302e3131332e3530222c227065657273223a5b5d2c22707265666978223a33322c22756e6c6f636b5f706f7274223a373434337d2c22646576696365223a222f6465762f6469736b2f62792d706172746c6162656c2f726567616c69612d726f6f74222c22686f73745f69707634223a223139322e302e322e3130222c22736368656d61223a22726567616c69612e626f6f742d736974652f7631227d",
+   "name": "an owner that is not an object",
+   "refused": "regalia.site: boot_mesh.owner needs exactly ['underlay', 'address']",
+   "taken": false
   }
  ],
  "manifests": {
@@ -745,6 +806,81 @@
    ],
    "schema": "regalia.membership/v1"
   },
+  "single-node": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "key": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "key": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "key": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
   "v2": {
    "epoch": 1,
    "heartbeat_max_lifetime_s": 86400,
@@ -1151,6 +1287,12 @@
    "site": "a"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -1306,6 +1448,12 @@
    "class": "no-address",
    "manifest": "without a",
    "refused": "the site config has no boot-mesh address for d, which the manifest lets authorize",
+   "site": "b"
+  },
+  {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
    "site": "b"
   },
   {
@@ -1471,6 +1619,12 @@
    "site": "c"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "c"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -1625,6 +1779,12 @@
    "site": "a, peers listed in reverse"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, peers listed in reverse"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -1779,6 +1939,12 @@
    "site": "a, a /24 with a gateway"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, a /24 with a gateway"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -1933,6 +2099,12 @@
    "site": "a, a /31 gateway"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, a /31 gateway"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -2084,6 +2256,12 @@
    "class": "node-absent",
    "manifest": "without a",
    "refused": "a is not in the manifest",
+   "site": "a, other ports"
+  },
+  {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
    "site": "a, other ports"
   },
   {
@@ -2245,6 +2423,12 @@
    "site": "a, with d"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, with d"
+  },
+  {
    "class": "tpm-name",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "peer.ek_name must be a SHA-256 TPM Name",
@@ -2367,10 +2551,124 @@
    "site": "a, b only"
   },
   {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, b only"
+  },
+  {
    "class": "no-address",
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "the site config has no boot-mesh address for c, which the manifest lets authorize",
    "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "all active",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "c quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "c in maintenance",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "c draining",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "c retired",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "c revoked as stolen",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "b and c quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "a in maintenance",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "a quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "nodes listed c, b, a",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "v2",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "v3",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "a large epoch",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "with d active",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "with d quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "without a",
+   "refused": "a is not in the manifest",
+   "site": "a, single-node"
+  },
+  {
+   "class": "pending",
+   "manifest": "single-node",
+   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "b's EK Name not a SHA-256 Name",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
   }
  ],
  "sites": {
@@ -2380,6 +2678,7 @@
   "a, b only": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, other ports": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51999,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":32,\"unlock_port\":7999},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, peers listed in reverse": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"},{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
+  "a, single-node": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"owner\":{\"address\":\"10.89.0.9\",\"underlay\":\"203.0.113.50\"},\"peers\":[],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, with d": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"},{\"address\":\"10.89.0.4\",\"node_id\":\"d\",\"underlay\":\"203.0.113.20\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "b": "{\"boot_mesh\":{\"address\":\"10.89.0.2\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:02\",\"node_id\":\"b\",\"peers\":[{\"address\":\"10.89.0.1\",\"node_id\":\"a\",\"underlay\":\"192.0.2.10\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"198.51.100.7\",\"schema\":\"regalia.boot-site/v1\"}",
   "c": "{\"boot_mesh\":{\"address\":\"10.89.0.3\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:03\",\"node_id\":\"c\",\"peers\":[{\"address\":\"10.89.0.1\",\"node_id\":\"a\",\"underlay\":\"192.0.2.10\"},{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"198.51.100.9\",\"schema\":\"regalia.boot-site/v1\"}"
