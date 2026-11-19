@@ -199,7 +199,8 @@ def contribute_path(tip, document, request, fingerprint, state_dir, fingerprints
     for path in (envelope_out, wrapped_out):
         require(not os.path.lexists(path), "%s exists already: nothing was made" % path)
     attester = ownerunlock.verifier(tip, document, os.path.join(state_dir, "attest.json"))
-    wrapped, plain = ownerunlock.contribute(tip, request, fingerprint, attester, rand)
+    issued = ownerunlock.IssuedPaths(os.path.join(state_dir, ownerunlock.ISSUED_FILE))
+    wrapped, plain = ownerunlock.contribute(tip, request, fingerprint, attester, rand, issued)
     ownerunlock.gpg_encrypt(plain, fingerprints, envelope_out, run)
     del plain
     require(os.path.isfile(envelope_out), "gpg wrote no envelope at %s: nothing was given to the node" % envelope_out)
@@ -251,6 +252,11 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
     until, sent = clock() + serve_for, 0
     listener.settimeout(1.0)                               # to look at the clock and at stop() between connections
     while not stop() and clock() < until:
+        if peer.halted:
+            # the token latched its PIN: it signs nothing more, so serving on would only answer DENIED for ever. The node
+            # was told DENIED and nothing else; the owner reads the token's own way out here
+            say("HALTED: the owner key signs nothing more: %s" % peer.halted)
+            raise Refused("the owner key signs nothing more (its PIN is latched), after %d signed response(s) sent: %s" % (sent, peer.halted))
         try:
             conn, _ = listener.accept()
         except socket.timeout:
@@ -271,10 +277,10 @@ def serve_unlock(tip, document, state_dir, decrypted, signer, listener, say=prin
                            "peer": unlock.OWNER, "outcome": "ERROR", "reason": "the signed response was not sent (%s): it does not count, "
                            "and the node's next request is answered" % type(error).__name__})
                 continue
-            if "response" in reply:
-                sent += 1
-                say("SENT: signed response %d to %s, under manifest epoch %d. The node opens its disk with the first valid one it "
-                    "receives; if its console does not show the volume open, it asks again and is answered" % (sent, contribution[0], tip["epoch"]))
+        if "response" in reply:
+            sent += 1
+            say("SENT: signed response %d to %s, under manifest epoch %d. The node opens its disk with the first valid one it "
+                "receives; if its console does not show the volume open, it asks again and is answered" % (sent, contribution[0], tip["epoch"]))
     require(sent > 0, "no signed response was sent to %s while this ran" % contribution[0])
     say("STOPPED: %d signed response(s) sent to %s" % (sent, contribution[0]))
     return sent

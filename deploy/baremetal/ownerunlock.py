@@ -31,10 +31,13 @@ NO HEARTBEAT is asked of the node: the owner is present and holds the chain, and
 
 NOT HERE: the boot mesh with the owner as its only peer (dx7.6), and the hardware run with a real card (dx7.13).
 """
+import contextlib
 import hashlib
 import hmac
 import json
+import os
 import re
+import tempfile
 
 from deploy.baremetal import attest, convergence, lease, measurements, membership, replacement, unlock
 
@@ -98,6 +101,61 @@ def gpg_encrypt(plain, fingerprints, out_path, run):
             % done.returncode)
 
 
+# ---- the path epochs this owner has issued: never one twice ----
+
+ISSUED_SCHEMA = "regalia.owner-paths/v1"
+ISSUED_FILE = "owner-paths.json"
+
+
+class IssuedPaths:
+    """{target: [path epoch, ...]}: every path epoch this owner machine has minted a contribution at, in one 0600 file
+    of its --state directory, changed under a lock and replaced atomically. Public values only (no secret). A repair
+    of a node's owner path under the same manifest then gets a NEW path epoch, so the envelope of the old contribution
+    names an epoch the node's new token does not ask for, and is refused before anything is signed."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def _read(self):
+        try:
+            with open(self.path, "rb") as f:
+                require(os.fstat(f.fileno()).st_mode & 0o077 == 0, "%s is readable by others than its owner" % self.path)
+                state = membership.load(f.read(unlock.MAX_BYTES + 1), unlock.MAX_BYTES)
+        except FileNotFoundError:
+            return {"schema": ISSUED_SCHEMA, "targets": {}}
+        membership.exact(state, ("schema", "targets"), "issued owner paths")
+        require(state["schema"] == ISSUED_SCHEMA and isinstance(state["targets"], dict), "issued owner paths: schema must be %s" % ISSUED_SCHEMA)
+        for target, epochs in state["targets"].items():
+            unlock.node_id(target, "issued owner paths: %r" % (target,))
+            require(isinstance(epochs, list) and all(type(e) is int and e >= 1 for e in epochs), "issued owner paths.%s: path epochs" % target)
+        return state
+
+    def _write(self, state):
+        directory = os.path.dirname(self.path) or "."
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".owner-paths-")
+        try:
+            with os.fdopen(fd, "wb") as f:      # mkstemp: 0600 from the start
+                f.write(membership.canonical(state))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
+
+    def next(self, target, floor):
+        """A new path epoch for `target`: at least `floor` (the manifest's epoch) and above every one issued, recorded
+        BEFORE it is used, so a crash never hands the same epoch out twice."""
+        with membership._exclusive(self.path + ".lock"):
+            state = self._read()
+            epochs = state["targets"].setdefault(target, [])
+            epoch = max([floor] + [e + 1 for e in epochs])
+            epochs.append(epoch)
+            self._write(state)
+        return epoch
+
+
 # ---- enrolment: the node's request, the owner's answer ----
 
 def path_request(target, enrolment, ak_public):
@@ -120,11 +178,11 @@ def single_node(manifest, target, states=("ACTIVE",)):
     return nodes[target]
 
 
-def contribute(manifest, request, fingerprint, attester, rand):
+def contribute(manifest, request, fingerprint, attester, rand, issued):
     """On the owner's machine: judge the node's `request` under the verified `manifest`, adopt its AK into the owner's
     `attester`, mint the contribution, and return (the wrap for the node, the plaintext for the owner cards' envelope).
     `fingerprint` is the enrolment key's SHA-256 as the owner read it on the node's console. The path epoch is the
-    manifest's epoch."""
+    manifest's epoch, or above every one `issued` (IssuedPaths) for this target already: one contribution per path epoch."""
     membership.exact(request, REQUEST_KEYS, "the path request")
     require(request["schema"] == REQUEST_SCHEMA, "the path request is not a %s" % REQUEST_SCHEMA)
     target = unlock.node_id(request["target"], "target")
@@ -140,7 +198,7 @@ def contribute(manifest, request, fingerprint, attester, rand):
         raise Refused("the node's AK is refused: %s" % refusal) from None
     secret = rand(unlock.SECRET_BYTES)
     require(isinstance(secret, bytes) and len(secret) == unlock.SECRET_BYTES, "the random source did not give %d bytes" % unlock.SECRET_BYTES)
-    epoch = manifest["epoch"]
+    epoch = issued.next(target, manifest["epoch"])
     return unlock.wrap(secret, OWNER, target, epoch, der), plaintext(target, epoch, secret)
 
 
@@ -165,11 +223,14 @@ class OwnerPeer:
         target, epoch, secret = contribution
         single_node(manifest, target)
         owners = {e["key"] for e in manifest["owner_keys"] if e["alg"] == "ed25519"}
+        require(not getattr(signer, "latched", None), "the owner key's token refused its PIN before (latched: %s): it signs nothing until "
+                "the latch is cleared (p11sign.WAY_OUT)" % ((getattr(signer, "latched", None) or {}).get("reason"),))
         require(signer.public() in owners, "the token's key %s... is not one of the manifest's ed25519 owner_keys: it would sign "
                 "nothing the node accepts" % signer.public()[:16])
         self.manifest, self.attester, self.signer, self.audit = manifest, attester, signer, audit
         self.target, self.path_epoch, self._secret = target, epoch, secret
         self.peer_id = OWNER
+        self.halted = None                # why this owner key can sign nothing more (a latched PIN): serving stops
         self.signed = 0                   # responses signed (owner.serve_unlock counts the ones it sent in full)
 
     def handle(self, raw, caller=None):
@@ -229,7 +290,17 @@ class OwnerPeer:
         response = {"schema": unlock.RESPONSE_SCHEMA, "peer_id": OWNER, "node_id": requester, "epoch": self.manifest["epoch"],
                     "manifest_digest": membership.digest(self.manifest), "session_id": session_id, "transcript_sha256": transcript.hex(),
                     "path_epoch": epoch, "ciphertext": recipient.encrypt(self._secret, unlock._oaep(unlock.CONTRIBUTION_LABEL + transcript)).hex()}
-        sig = self.signer.sign(unlock.owner_signed_message(response))
+        try:
+            sig = self.signer.sign(unlock.owner_signed_message(response))
+        except Exception as error:      # noqa: BLE001 - the requester is told only DENIED; the owner is told why
+            latched = getattr(self.signer, "latched", None)
+            reason = convergence._printable(error, membership.REASON_LIMIT)
+            self.audit({"event": "unlock-sign", "epoch": self.manifest["epoch"], "manifest_digest": membership.digest(self.manifest),
+                        "subject": requester, "peer": OWNER, "outcome": "ERROR", "reason": reason})
+            if latched:
+                # a latched PIN never signs again in this process: stop, with the signer's own way out
+                self.halted = str(error)
+            raise Refused("the owner key did not sign") from None
         require(isinstance(sig, bytes) and len(sig) == 64, "the owner key did not give a 64-byte Ed25519 signature")
         self.signed += 1
         return {"response": response, "signature": {"alg": "ed25519", "key": self.signer.public(), "sig": sig.hex()}}

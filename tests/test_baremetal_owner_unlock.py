@@ -155,7 +155,7 @@ class Case(lt.Case):
         enrolment = unlock.Enrolment("a")
         request = ownerunlock.path_request("a", enrolment, self.keys["a"].ak_public)
         wrapped, plain = ownerunlock.contribute(manifest or self.m1, json.loads(json.dumps(request)), enrolment.fingerprint,
-                                                attester or self.attester, os.urandom)
+                                                attester or self.attester, os.urandom, ownerunlock.IssuedPaths(self.d + "/" + ownerunlock.ISSUED_FILE))
         epoch, secret = enrolment.open(json.loads(json.dumps(wrapped)), "owner")
         return epoch, secret, plain
 
@@ -227,7 +227,9 @@ class Exchange(Case):
                 ("the path request is not a regalia.owner-path-request/v1", self.m1, dict(good, schema="x"), enrolment.fingerprint))):
             with self.subTest(reason):
                 attester = ownerunlock.verifier(self.m1, self.doc, self.d + "/fresh-%d.json" % i)
-                self.refused(reason, ownerunlock.contribute, manifest, request, fingerprint, attester, never)
+                self.refused(reason, ownerunlock.contribute, manifest, request, fingerprint, attester, never,
+                             ownerunlock.IssuedPaths(self.d + "/refused-paths.json"))
+        self.assertFalse(os.path.exists(self.d + "/refused-paths.json"), "a refused request burns no path epoch")
         # the plaintext is exact: one canonical line for one target and path epoch
         self.assertEqual(ownerunlock.read_plaintext(self.plain), ("a", 1, self.secret))
         body = json.loads(self.plain)
@@ -271,6 +273,21 @@ class Exchange(Case):
         self.denied("the contribution this tool holds is for a, not b")
         self.assertEqual(self.owner.signed, 0)
         self.assertEqual(self.ask(session=self.boot()), self.secret)
+
+    def test_a_repair_gets_a_new_path_epoch_and_the_old_envelope_is_refused_unsigned(self):
+        """A second contribution for the same node under the same manifest (its keyslot was repaired) is at a new path
+        epoch: the old envelope then names an epoch the node's new token does not ask for, and nothing is signed for it."""
+        epoch, secret, plain = self.enrolled()
+        self.assertEqual((self.epoch, epoch), (1, 2))
+        self.assertNotEqual(secret, self.secret)
+        self.assertEqual(ownerunlock.read_plaintext(plain)[1], 2)
+        self.refused("the peer refused (DENIED)", self.ask, epoch=2)                     # the owner still holds the OLD envelope
+        self.denied("the node asks for path epoch 2; the contribution given is for path epoch 1")
+        self.assertEqual(self.signer.signed, [])
+        fresh = ownerunlock.OwnerPeer(self.m1, self.attester, ownerunlock.read_plaintext(plain), self.signer, self.events.append)
+        self.assertEqual(self.ask(session=self.boot(), epoch=2, transport=self.transport(fresh)), secret)
+        with open(self.d + "/" + ownerunlock.ISSUED_FILE) as f:
+            self.assertEqual(json.load(f)["targets"], {"a": [1, 2]})
 
     def test_the_owner_key_must_be_one_of_the_manifest_s(self):
         self.refused("is not one of the manifest's ed25519 owner_keys", ownerunlock.OwnerPeer, self.m1, self.attester,
@@ -348,7 +365,8 @@ class Disk(Case):
     def exchange(self, request, fingerprint):
         """The owner's machine: owner.contribute's judgement and mint, with the cards' envelope kept in this test's memory."""
         attester = ownerunlock.verifier(self.m1, self.doc, self.d + "/attest.json")
-        wrapped, plain = ownerunlock.contribute(self.m1, json.loads(json.dumps(request)), fingerprint, attester, os.urandom)
+        wrapped, plain = ownerunlock.contribute(self.m1, json.loads(json.dumps(request)), fingerprint, attester, os.urandom,
+                                                ownerunlock.IssuedPaths(self.d + "/disk-owner-paths.json"))
         self.given.append(ownerunlock.read_plaintext(plain))
         return json.loads(json.dumps(wrapped))
 
@@ -393,7 +411,7 @@ class Disk(Case):
         self.enrol()
         self.cs(["luksKillSlot", "--batch-mode", self.disk, "1"])                       # the keyslot goes; its token stays
         self.assertEqual(unlock.judge_tokens(unlock.luks_meta(self.disk, run), "a", ["owner"])[0], False)
-        self.assertEqual(self.enrol(), {"path_epoch": 1, "keyslot": 1})                 # asked again, not "existing"
+        self.assertEqual(self.enrol(), {"path_epoch": 2, "keyslot": 1})                 # asked again, not "existing", at a new path epoch
         self.assertEqual(len(self.given), 2)
         meta = unlock.luks_meta(self.disk, run)
         self.assertEqual((sorted(meta["keyslots"]), len(unlock.path_tokens(meta))), (["0", "1"], 1))
@@ -440,7 +458,7 @@ class Disk(Case):
                      enrolpeer.request_owner_path, self.m1, "a", self.exchange, self.keys["a"].ak_public, self.local, fake_seal(self.local),
                      self.disk, RECOVERY, run=failing_second)
         self.assertEqual(len(self.given), 1, "the owner was not asked")
-        self.assertEqual(self.enrol(), {"path_epoch": 1, "keyslot": 1})          # the rerun starts from the header as it is
+        self.assertEqual(self.enrol(), {"path_epoch": 2, "keyslot": 1})          # the rerun starts from the header as it is
 
     def test_the_node_takes_an_owner_path_only_single_node_and_never_below_its_epoch(self):
         multi = dict(manifest5(1, "", nodes4(), MULTI))
@@ -614,6 +632,71 @@ class OwnerCommands(Case):
         self.assertIn(("unlock-send", "ERROR"), [(e["event"], e["outcome"]) for e in events])
         self.assertEqual([line[:30] for line in said if line.startswith(("SENT", "STOPPED"))],
                          ["SENT: signed response 1 to a, ", "STOPPED: 1 signed response(s) "])
+
+    def serve_in_thread(self, signer, stopping):
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        said, outcome = [], []
+
+        def run_it():
+            try:
+                outcome.append(owner.serve_unlock(self.m1, self.doc, self.d, self.plain, signer, listener, say=said.append, stop=stopping.is_set))
+            except m.Refused as refusal:
+                outcome.append(refusal)
+        worker = threading.Thread(target=run_it, daemon=True)
+        worker.start()
+        wire = []
+        tcp = unlock.tcp_transport("127.0.0.1:%d" % listener.getsockname()[1])
+
+        def transport(raw):
+            reply = tcp(raw)
+            wire.append(json.loads(reply))
+            return reply
+        return worker, said, outcome, transport, wire
+
+    def test_a_latched_pin_stops_the_owner_and_the_node_hears_only_denied(self):
+        class Latching(SoftOwner):
+            latched = None
+
+            def sign(self, message):
+                self.latched = {"reason": "CKR_PIN_INCORRECT", "serial": "test", "at": 0}
+                raise m.Refused("the token refused the PIN (CKR_PIN_INCORRECT): latched, no further attempt is made; reset the token's counter")
+        stopping = threading.Event()
+        self.addCleanup(stopping.set)
+        worker, said, outcome, transport, wire = self.serve_in_thread(Latching(OWNER_KEYS[0]), stopping)
+        self.refused("unlock: the peer refused (DENIED)", self.ask, transport=transport)
+        self.assertEqual(wire[-1], {"v": 1, "error": "DENIED"})                          # nothing of the latch on the wire
+        worker.join(10)
+        self.assertFalse(worker.is_alive(), "the owner went on serving with a signer that cannot sign")
+        self.assertIsInstance(outcome[0], m.Refused)
+        self.assertIn("its PIN is latched", str(outcome[0]))
+        self.assertIn("CKR_PIN_INCORRECT", str(outcome[0]))
+        self.assertTrue(any(line.startswith("HALTED: the owner key signs nothing more: the token refused the PIN") for line in said), said)
+        # and a token latched before the owner starts is refused before anything is served
+        already = Latching(OWNER_KEYS[0])
+        already.latched = {"reason": "CKR_PIN_LOCKED"}
+        self.refused("refused its PIN before (latched: CKR_PIN_LOCKED)", ownerunlock.OwnerPeer, self.m1, self.attester,
+                     ownerunlock.read_plaintext(self.plain), already, self.events.append)
+
+    def test_a_signing_failure_that_is_not_a_latch_is_recorded_and_serving_goes_on(self):
+        class OnceFailing(SoftOwner):
+            failed = False
+
+            def sign(self, message):
+                if not self.failed:
+                    self.failed = True
+                    raise m.Refused("the touch timed out")
+                return super().sign(message)
+        stopping = threading.Event()
+        self.addCleanup(stopping.set)
+        worker, said, outcome, transport, wire = self.serve_in_thread(OnceFailing(OWNER_KEYS[0]), stopping)
+        self.refused("unlock: the peer refused (DENIED)", self.ask, transport=transport)
+        self.assertEqual(self.ask(transport=transport), self.secret)                    # asked again, in the same boot session
+        stopping.set()
+        worker.join(20)
+        self.assertEqual(outcome, [1])
+        events = [json.loads(line) for line in said if line.startswith("{")]
+        self.assertIn(("unlock-sign", "ERROR", "the touch timed out"), [(e["event"], e["outcome"], e["reason"]) for e in events])
 
     def test_unlock_keeps_serving_after_a_response_is_sent_until_it_is_stopped(self):
         """A response written in full is not known to have arrived (the exchange has no acknowledgement): the owner goes on
