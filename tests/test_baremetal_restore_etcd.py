@@ -185,6 +185,7 @@ class RestoreRealEtcd(unittest.TestCase):
         self.assertEqual(self.host.ctl("put", opstate.STATE_EPOCH_KEY, json.dumps(value, sort_keys=True, separators=(",", ":"))).returncode, 0)
         sha = self.save()
         self.after()
+        self.host.stop()                  # the lost disk: etcd is down, so only the snapshot's own epoch can be read
         with self.assertRaises(rs.Refused) as caught, contextlib.redirect_stdout(io.StringIO()):
             rs.run(self.host, statement(self.chain, epoch=3, floor=2, sha=sha), self.chain, "a", self.snapshot, NOW, sign)
         self.assertIn("the restored store holds state epoch 3, and the statement's 3 does not raise it: the daemon is not started",
