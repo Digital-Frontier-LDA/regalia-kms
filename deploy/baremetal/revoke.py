@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """A restrictive membership change without the root (#199 step 4b; the design is on #199): a node QUARANTINED or
-REVOKED_STOLEN by two nodes, each on its own local root's request, or by the owner alone. There is no authority host.
+REVOKED_STOLEN by as many nodes as a revocation_signers rule names (two of three), each on its own local root's request,
+or by the owner alone. There is no authority host. Under the single-node profile only the owner revokes, and revoking the
+only node is a shutdown of the KMS (docs/design/single-node.md 4.4): `import` says so and asks for a typed phrase.
 
     on a first node, root at its console:
         python3 -Es -m deploy.baremetal.revoke propose --config /etc/regalia/node.json --node b --state QUARANTINED --reason "..." --out HALF.json
     on a second node, root at its console (it checks, shows, signs and commits):
-        python3 -Es -m deploy.baremetal.revoke cosign  --config /etc/regalia/node.json --envelope HALF.json
+        python3 -Es -m deploy.baremetal.revoke cosign  --config /etc/regalia/node.json --envelope HALF.json [--out MORE.json]
+    (--out only when the rule needs yet another node: the envelope goes on to the next node's `cosign`)
     for the owner, off the nodes (regalia-kms-24):
         python3 -Es -m deploy.baremetal.revoke export  --config /etc/regalia/node.json --node b --state REVOKED_STOLEN --reason "..." --out PROPOSAL.json
         (on the owner's machine or the offline laptop: deploy.baremetal.owner sign-manifest, against the chain it holds)
@@ -22,9 +25,9 @@ the reason, the epoch and the SHA-256 of what is signed) and the operator types 
 hex digits before the TPM signs. A node signs with its TPM signing key (signkey.py), the same key as its heartbeats
 under another domain (membership.DOMAIN), and spends no heartbeat number.
 
-COMMITTING. Once the signatures meet one of the current manifest's revocation_signers rules (two counting nodes, or
-the owner alone), the envelope is committed to this node's store AS regalia-sync (runuser, as enrol does: the store
-is its own) through membership.Store.commit, and the chain republished; the other nodes pull it, and the nodes' next
+COMMITTING. Once the signatures meet one of the current manifest's revocation_signers rules (its threshold of counting
+nodes, or the owner alone; still_needed() counts what is missing), the envelope is committed to this node's store AS
+regalia-sync (runuser, as enrol does: the store is its own) through membership.Store.commit, and the chain republished; the other nodes pull it, and the nodes' next
 heartbeat is for the new epoch (beat.Proposer goes at once when it holds none for it).
 """
 import argparse
@@ -39,6 +42,11 @@ from deploy.baremetal import beat, keyfd, membership
 Refused, require = membership.Refused, membership.require
 
 RESTRICTIVE = ("QUARANTINED", "REVOKED_STOLEN")
+# Under the single-node profile a revocation of the only node is a shutdown of the KMS (docs/design/single-node.md 4.4): at
+# import the owner types this phrase, with the node's ID, at the console; the commit records it in the sync trail
+SHUTDOWN_PHRASE = "shut down the KMS on %s"
+COMMIT, HAND_ON = "commit", "hand on"                  # after_cosign's two outcomes
+SHUTDOWN_PROMPT = 'Type "%s" to commit it: '
 # Typed at the node's console, read from its controlling terminal (keyfd.tty_line), never from standard input: a pipe,
 # a script or a cron job cannot confirm a revocation (regalia-kms-51's read)
 PROMPT = "Type the epoch and the first 8 hex digits of the SHA-256: "
@@ -87,6 +95,62 @@ def node_signature(node_id, sign, manifest):
     return {"party": node_id, "key": None, "sig": sign(membership.DOMAIN + membership.canonical(manifest))}
 
 
+def still_needed(current, envelope):
+    """How many more counting NODE signatures the envelope needs to meet one of the current manifest's revocation_signers
+    rules: 0 once one is met, None when no rule can still be met by the nodes. Read from the rules' thresholds, never a
+    literal (docs/design/single-node.md 3.2): under three nodes' 2 of {a, b, c}, one more after the first node."""
+    enough, parties = met(current, envelope)
+    if enough:
+        return 0
+    left = []
+    for rule in current["revocation_signers"]:
+        may_sign = [p for p in rule["parties"] if p not in parties and counts(current, p)]
+        short = rule["threshold"] - len(parties & set(rule["parties"]))
+        if short <= len(may_sign):
+            left.append(short)
+    return min(left) if left else None
+
+
+def after_cosign(current, envelope):
+    """What follows this node's co-signature of `envelope` (cosign's result, its reason kept): (COMMIT, the full envelope,
+    0) once one of the current manifest's revocation rules is met, or (HAND_ON, the envelope as it is, the number of node
+    signatures still missing) when the rule needs yet another node (more than two of them), which co-signs it at its own
+    console. Refused when no rule can be met any more."""
+    more = still_needed(current, envelope)
+    require(more is not None, "the signatures (%s) can meet no revocation rule of the current manifest: nothing is committed"
+            % (", ".join(sorted(met(current, envelope)[1])) or "none"))
+    if more == 0:
+        return COMMIT, {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}, 0
+    return HAND_ON, envelope, more
+
+
+def shutdown_of(current, manifest):
+    """The node a revocation shuts the KMS down with, or None (docs/design/single-node.md 4.4). Under the single-node
+    profile, quarantining or revoking the only node leaves no node that may serve: the KMS stops until a root-signed
+    manifest enrols a replacement. The tool says so, and the owner types the shutdown phrase before it is committed."""
+    if membership.profile(current) != membership.SINGLE_NODE:
+        return None
+    before = {n["node_id"]: n["state"] for n in current["nodes"]}
+    target = [n["node_id"] for n in manifest["nodes"] if before.get(n["node_id"]) != n["state"] and n["state"] in RESTRICTIVE]
+    live = [n["node_id"] for n in manifest["nodes"] if n["state"] not in membership.NOT_COUNTING]
+    return target[0] if target and not live else None
+
+
+def shutdown_phrase(node_id):
+    return SHUTDOWN_PHRASE % node_id
+
+
+def shutdown_said(node_id, typed):
+    """Whether `typed` is the shutdown phrase for `node_id`, exactly (surrounding blanks aside)."""
+    return isinstance(typed, str) and typed.strip() == shutdown_phrase(node_id)
+
+
+def shutdown_notice(node_id):
+    return ("THIS IS A SHUTDOWN OF THE KMS: %s is the only node of this %s deployment. Once this revocation is committed no "
+            "node serves, and the KMS stays stopped until a root-signed manifest enrols a replacement."
+            % (node_id, membership.SINGLE_NODE))
+
+
 def counts(current, node_id):
     """Whether `node_id`'s signature counts toward one of the current manifest's revocation rules."""
     nodes = membership.validate(current)
@@ -118,22 +182,33 @@ def cosign(current, envelope, node_id, key, sign, confirm):
     return dict(envelope, signatures=envelope["signatures"] + [mine])
 
 
-def commit_as_sync(config_path, envelope, run=subprocess.run):
-    """Store.commit of the full envelope as regalia-sync, and the chain republished. Returns the new epoch."""
+def commit_as_sync(config_path, envelope, run=subprocess.run, shutdown=None):
+    """Store.commit of the full envelope as regalia-sync, and the chain republished. Returns the new epoch. `shutdown`
+    is the phrase typed for a revocation of the only node (shutdown_of), handed on for commit() to check and record."""
+    handed = {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}
+    if shutdown is not None:
+        handed["shutdown"] = shutdown
     done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", *membership.handover_env(),
                  sys.executable, "-Es", "-m", "deploy.baremetal.revoke", "_commit", "--config", config_path],
-               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps({"manifest": envelope["manifest"], "signatures": envelope["signatures"]}))
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=json.dumps(handed))
     require(done.returncode == 0, "the commit, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])["epoch"]
 
 
-def commit(node, envelope, trail):
-    """As regalia-sync: the envelope into the store (membership's rules decide), the chain republished."""
+def commit(node, envelope, trail, shutdown=None):
+    """As regalia-sync: the envelope into the store (membership's rules decide), the chain republished. A revocation of
+    the only node (shutdown_of) is committed only with the shutdown phrase typed for it, which the trail records."""
     from deploy.baremetal import node as node_module
     store = node.store()
     event = {"event": "revoke-commit", "epoch": envelope.get("manifest", {}).get("epoch"),
              "signers": sorted(s.get("party", "?") for s in envelope.get("signatures", []) if isinstance(s, dict))}
     try:
+        current = store.load()
+        sole = shutdown_of(current, envelope["manifest"]) if current is not None and isinstance(envelope.get("manifest"), dict) else None
+        if sole is not None:
+            require(shutdown_said(sole, shutdown), "a revocation of %s, the only node, is a shutdown of the KMS: it is committed only "
+                    "with the shutdown phrase typed at the console" % sole)
+            event["shutdown"] = shutdown.strip()
         nxt = store.commit(envelope)
     except Refused as refusal:
         trail(dict(event, outcome="DENY", reason=str(refusal)[:240]))
@@ -141,6 +216,29 @@ def commit(node, envelope, trail):
     node_module.publish(store, node.path(node_module.PUBLISHED))
     trail(dict(event, outcome="ALLOW", digest=membership.digest(nxt)))
     return nxt
+
+
+def committed(config_path, current, envelope, ask, say=print, run=subprocess.run):
+    """`import` and the last `cosign`: the full envelope checked against the current manifest's revocation rules, then
+    committed as regalia-sync (commit_as_sync). A revocation of the only node (shutdown_of) is first SAID to be a shutdown
+    of the KMS, and committed only once the phrase is typed (`ask(prompt)`: keyfd.tty_line, the console's own terminal);
+    commit() checks it again and records it in the trail. Returns the new epoch."""
+    enough, parties = met(current, envelope)
+    require(enough, "the signatures (%s) meet no revocation rule of the current manifest: nothing is committed"
+            % (", ".join(sorted(parties)) or "none"))
+    typed, sole = None, shutdown_of(current, envelope["manifest"])
+    if sole is not None:
+        say(shutdown_notice(sole))
+        typed = ask(SHUTDOWN_PROMPT % shutdown_phrase(sole))
+        require(shutdown_said(sole, typed), "the phrase typed is not %r: nothing is committed" % shutdown_phrase(sole))
+    return commit_as_sync(config_path, envelope, run=run, shutdown=typed)
+
+
+def _write(path, document):
+    """A new file (never over an existing one), 0644."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "w") as f:
+        json.dump(document, f, sort_keys=True)
 
 
 def main(argv=None):
@@ -158,6 +256,8 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         p.add_argument("--envelope", required=True)
+        if name == "cosign":
+            p.add_argument("--out", help="where the envelope goes when the rule needs yet another node's signature")
     p = sub.add_parser("_commit")
     p.add_argument("--config", required=True)
     args = parser.parse_args(argv)
@@ -165,8 +265,9 @@ def main(argv=None):
         node = node_module.Node(node_module.load(args.config))
         if args.op == "_commit":
             envelope = membership.load(sys.stdin.read(membership.MAX_BYTES + 1).encode())
+            shutdown = envelope.pop("shutdown", None) if isinstance(envelope, dict) else None
             trail = node_module.Trail(node.path("sync-audit.jsonl"), "sync")
-            print(json.dumps({"epoch": commit(node, envelope, trail)["epoch"]}))
+            print(json.dumps({"epoch": commit(node, envelope, trail, shutdown)["epoch"]}))
             return 0
         if os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
@@ -175,6 +276,9 @@ def main(argv=None):
         if args.op in ("propose", "export"):
             nxt = candidate(current, args.node, args.state, beat._now(node.clock()))
             out = {"manifest": nxt, "signatures": [], "reason": reason_ok(args.reason)}
+            sole = shutdown_of(current, nxt)
+            if sole is not None:
+                print(shutdown_notice(sole))
             if args.op == "propose":
                 require(counts(current, node.node_id), "%s does not count toward any revocation rule: it signs nothing" % node.node_id)
                 signer = node_module.node_beat_signer(node)
@@ -183,10 +287,8 @@ def main(argv=None):
                 require(confirmed(nxt, digest, keyfd.tty_line(PROMPT)),
                         "the epoch and digest typed are not this revocation's: nothing is signed")
                 out["signatures"].append(dict(node_signature(node.node_id, signer._sign, nxt), key=signer.key))
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-            with os.fdopen(fd, "w") as f:
-                json.dump(out, f, sort_keys=True)
-            print("WRITTEN: %s (%s)" % (args.out, "signed by %s; co-sign it on a second node" % node.node_id if args.op == "propose"
+            _write(args.out, out)
+            print("WRITTEN: %s (%s)" % (args.out, "signed by %s; co-sign it on another node" % node.node_id if args.op == "propose"
                                         else "unsigned; the owner signs it off the nodes"))
             return 0
         with open(args.envelope, "rb") as f:
@@ -195,10 +297,15 @@ def main(argv=None):
             signer = node_module.node_beat_signer(node)
             envelope = cosign(current, envelope, node.node_id, signer.key, signer._sign, lambda text: (print(text), keyfd.tty_line(PROMPT))[1])
         full = {"manifest": envelope["manifest"], "signatures": envelope["signatures"]}
-        enough, parties = met(current, full)
-        require(enough, "the signatures (%s) meet no revocation rule of the current manifest: nothing is committed"
-                % (", ".join(sorted(parties)) or "none"))
-        print("COMMITTED: epoch %d" % commit_as_sync(args.config, full))
+        if args.op == "cosign":
+            step, handed, more = after_cosign(current, envelope)
+            if step == HAND_ON:
+                require(args.out, "the revocation needs %d more node signature(s): pass --out to hand it to another node" % more)
+                _write(args.out, handed)
+                print("WRITTEN: %s (signed by %s; %d more node signature(s) needed, each at its own node's console)"
+                      % (args.out, node.node_id, more))
+                return 0
+        print("COMMITTED: epoch %d" % committed(args.config, current, full, keyfd.tty_line))
     except (Refused, OSError, ValueError, KeyError, EOFError) as refusal:
         print("REFUSED: %s" % refusal, file=sys.stderr)
         return 1
