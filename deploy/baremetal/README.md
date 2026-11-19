@@ -1027,7 +1027,8 @@ removing only what it can prove it made.
     from their public areas, the signing key certified by that AK (with the attributes and policy of the root's
     own system-phase key), and the identity quote over the bundle's own fields. Only then does it print the
     node's identity fields as a v4 manifest entry carries them, and the PCR 7 and 11 values quoted.
-  - `manifest propose --genesis` takes each node as `--node BUNDLE KEEP ACTIVATION` (no entry file in between)
+  - `manifest propose --genesis --topology single-node|multi-node` (required, never inferred from the node count;
+    regalia-kms-dx7.2) takes each node as `--node BUNDLE KEEP ACTIVATION` (no entry file in between)
     and runs the same checks, then JUDGES each node's quoted PCR 11 against the genesis measurements' system-phase
     value (PCR 7 too where they give it, else the nodes must agree). Enrolment on an image the measurements do not
     list, a bench image included, is therefore refused at the genesis: enrol on the reviewed production image.

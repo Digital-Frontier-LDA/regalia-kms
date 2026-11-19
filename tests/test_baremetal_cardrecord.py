@@ -616,7 +616,7 @@ def _genesis(test, root, record, state):
     # ProducersWriterRun.test_propose_genesis_takes_the_writer_s_record_and_state
     with open(os.path.join(d, "offline-keys.record.json"), "w") as f:
         json.dump({"stand-in": True}, f)
-    args = ["propose", "--genesis", "--offline-keys-record", os.path.join(d, "offline-keys.record.json"), "--root-key", root,
+    args = ["propose", "--genesis", "--topology", "multi-node", "--offline-keys-record", os.path.join(d, "offline-keys.record.json"), "--root-key", root,
             "--card-record", record, "--state-dir", state, "--measurements",
             os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"), "--issued-at", "2026-10-04T12:00:00Z",
             "--system-pub", os.path.join(d, "system.pem")]
@@ -694,7 +694,7 @@ class ProducersWriterRun(unittest.TestCase):
             json.dump({"stand-in": True}, f)
         generated = {"at": "2026-10-04T10:00:00Z", "master_id": "ab" * 16, "threshold": 2, "shares": 3}
         args = ["--offline-keys-record", os.path.join(d, "offline-keys.record.json")]
-        args = ["propose", "--genesis", *args, "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
+        args = ["propose", "--genesis", "--topology", "multi-node", *args, "--root-key", self.root, "--card-record", str(self.here / "card-record-2.record.json"),
                 "--state-dir", self.state, "--measurements", os.path.join(d, "doc.json"), "--out", os.path.join(d, "e1.json"),
                 "--issued-at", "2026-10-04T12:00:00Z", "--system-pub", os.path.join(d, "system.pem")]
         for e in entries:                   # each node as `enrol` proves it (#399; stubbed here: its proof is enrol's own test)
