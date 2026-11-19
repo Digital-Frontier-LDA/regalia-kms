@@ -177,7 +177,7 @@ mapfile -t PROVIDES < <(sed -n 's/^PROVIDES //p' <<< "$SPEC")
 mapfile -t BUILT < <(sed -n 's/^BUILT //p' <<< "$SPEC")
 [ -n "$PACKAGES" ] && [ "${#BUILT[@]}" -gt 0 ] || die "$LIST names no packages or no built programs"
 if [ "$VARIANT" = staging ]; then
-  STAGING_PACKAGES="$(python3 -BEs -c 'from deploy.baremetal import imagevariant as v; print(",".join(v.staging_packages()))')" \
+  STAGING_PACKAGES="$(python3 -BEs -m deploy.baremetal.imagevariant packages)" \
     && [ -n "$STAGING_PACKAGES" ] || die "$STAGING_DIR/packages.txt cannot be read"
   PACKAGES="$PACKAGES,$STAGING_PACKAGES"
   echo "build-rootfs: STAGING VARIANT (regalia-kms-dx7.14): adds $STAGING_PACKAGES and $STAGING_DIR"

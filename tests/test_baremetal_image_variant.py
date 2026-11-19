@@ -5,6 +5,8 @@ refused without regalia.staging=1, systemd-networkd for the staging management n
 asserts the production image has none of it. imagevariant.check is what build-rootfs.sh runs on every build's listing
 before writing anything (and e2e/rootfs-reproducible.sh on CI's production build); these tests hold its judgement and
 the staging files' own refusals."""
+import contextlib
+import io
 import json
 import pathlib
 import re
@@ -132,6 +134,14 @@ class TheStagingFiles(unittest.TestCase):
         self.assertIn("python3 -BEs -m deploy.baremetal.imagevariant check", E2E.read_text())
         self.assertNotRegex(BUILD.read_text(), r"python3 -Es[^\n]*imagevariant")
         self.assertIn("VARIANT=production", BUILD.read_text())
+
+    def test_the_build_reads_the_staging_packages_through_the_module(self):
+        # -m, not -c: tests/test_python_isolation.py's rule (a -c runs with the caller's sys.path)
+        self.assertIn('STAGING_PACKAGES="$(python3 -BEs -m deploy.baremetal.imagevariant packages)"', BUILD.read_text())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(v.main(["packages"]), 0)
+        self.assertEqual(out.getvalue(), ",".join(STAGING_PACKAGES) + "\n")
 
 
 if __name__ == "__main__":

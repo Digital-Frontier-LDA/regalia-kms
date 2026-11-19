@@ -85,7 +85,11 @@ def main(argv=None):
     c = sub.add_parser("check")
     c.add_argument("--listing", required=True)
     c.add_argument("--record", required=True)
+    sub.add_parser("packages", help="the staging variant's packages, comma-separated (build-rootfs.sh --variant staging)")
     a = p.parse_args(argv)
+    if a.cmd == "packages":
+        print(",".join(staging_packages()))
+        return 0
     with open(a.listing) as f:
         listing = f.read()
     with open(a.record) as f:
