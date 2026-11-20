@@ -217,6 +217,19 @@ def boot_entry(said):
     return found.group(1), (label.group(1).strip() if label else None)
 
 
+def esp_mount(said):
+    """The REGALIA-E2E-ESP line (regalia-kms-9tv) as {"mount", "source", "type", "options", "boot-competing",
+    "kernel", "modules-tree"}, or None. The options are the mountinfo field 6 of the /efi vfat mount, as
+    e2e-report reads it from /proc/self/mountinfo."""
+    found = re.search(
+        r"REGALIA-E2E-ESP mount=(\S+) source=(\S+) type=(\S+) options=(\S+) boot-competing=(\S+) kernel=(\S+) modules-tree=(\S+)",
+        said)
+    if not found:
+        return None
+    return dict(zip(("mount", "source", "type", "options", "boot-competing", "kernel", "modules-tree"),
+                    found.groups()))
+
+
 class VerityReport(unittest.TestCase):
     """The parsers of the verity boots' report lines, on lines as e2e-report writes them (no guest needed)."""
     SAID = ("REGALIA-E2E-VERITY usr=/dev/mapper/usr:erofs root=tmpfs:tmpfs var=/dev/mapper/root:ext4 status=verified roothash=" + "ab" * 32 + "\n"
@@ -253,6 +266,16 @@ class VerityReport(unittest.TestCase):
         self.assertEqual(boot_entry("REGALIA-E2E-BOOTENTRY current=0001 entry=Boot0001* UEFI Misc Device PciRoot(0x0)/Pci(0x3,0x0)"),
                          ("0001", "UEFI Misc Device"))
         self.assertEqual(boot_entry(""), (None, None))
+
+    def test_the_esp_line(self):
+        """The REGALIA-E2E-ESP line (regalia-kms-9tv), as e2e-report writes it: the shipped automount's source,
+        type, options, and the absence of a competing /boot mount."""
+        line = ("REGALIA-E2E-ESP mount=ok source=/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00 type=vfat "
+                "options=rw,nosuid,nodev,noexec,fmask=0077,dmask=0077 boot-competing=absent kernel=6.12.0 modules-tree=absent")
+        self.assertEqual(esp_mount(line), {"mount": "ok", "source": "/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00",
+                                           "type": "vfat", "options": "rw,nosuid,nodev,noexec,fmask=0077,dmask=0077",
+                                           "boot-competing": "absent", "kernel": "6.12.0", "modules-tree": "absent"})
+        self.assertIsNone(esp_mount("nothing"))
 
 
 class HostTpmFault(unittest.TestCase):
@@ -754,8 +777,11 @@ class OnQemu(tub.OnSwtpm):
         self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
-        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=absent",
-                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the UKI initrd must preload the ESP filesystem")
+        esp = esp_mount(said)
+        self.assertIsNotNone(esp, "no REGALIA-E2E-ESP line: the report did not run, or the line's shape changed")
+        self.assertEqual((esp["mount"], esp["type"], esp["modules-tree"]), ("ok", "vfat", "absent"),
+                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the shipped automount must mount the ESP at /efi, vfat, module-free")
+        self.assertIn("rw", esp["options"].split(","), esp)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1327,12 +1353,38 @@ class OnQemuVerity(OnQemu):
         self.assertEqual((self.installed["layout"], self.installed["usr"]["roothash"]), ("verity-ab", self.usr["a"]["roothash"]))
         self.machine_id = None
 
+    def esp_proof(self, said):
+        """The boot ESP, from the SHIPPED automount (regalia-kms-9tv): /efi, vfat, rw, the root-only masks and
+        noexec/nosuid/nodev, the source the ESP the disk carries (install-host.sh's partition 1, compared on the
+        host independently of the guest), no competing /boot mount of it, a successful write/read/remove, and the
+        module-free /usr."""
+        esp = esp_mount(said)
+        self.assertIsNotNone(esp, "no REGALIA-E2E-ESP line: the report did not run, or the line's shape changed")
+        self.assertEqual(esp["mount"], "ok", esp)
+        self.assertEqual(esp["type"], "vfat", esp)
+        self.assertEqual(esp["modules-tree"], "absent", esp)
+        # the source: /dev/disk/by-partuuid/<the disk's ESP>, compared with the disk image inspected from the host
+        loop, part = self.partition(1)
+        try:
+            disk_esp = run(["blkid", "-s", "PARTUUID", "-o", "value", part], capture_output=True, text=True).stdout.strip().lower()
+        finally:
+            run(["losetup", "-d", loop], capture_output=True)
+        self.assertTrue(disk_esp, "the disk's ESP partition has no PARTUUID: %s" % part)
+        self.assertIn("/dev/disk/by-partuuid/" + disk_esp, esp["source"],
+                      "the ESP's source %s is not the disk's partition 1 (%s): the guest mounted another ESP" % (esp["source"], disk_esp))
+        # the options: an unordered set, as mountinfo reports them (rw, the root-only FAT masks, the VFS protections)
+        opts = set(o for o in esp["options"].split(",") if o)
+        self.assertEqual(opts, {"rw", "nosuid", "nodev", "noexec", "fmask=0077", "dmask=0077"},
+                         "the ESP's options %s are not the image's policy (rw, the root-only masks, noexec/nosuid/nodev)" % esp["options"])
+        self.assertEqual(esp["boot-competing"], "absent",
+                         "a competing /boot mount of the ESP (%s): the generator's boot.mount/automount did not suppress gpt-auto" % esp)
+        print("boot proof: ESP %s %s %s" % (esp["source"], esp["type"], esp["options"]), file=sys.stderr)
+
     def proven(self, said, slot, entry=True):
         """What every boot that reached the system shows (the proof): /usr from dm-verity, verified, under the root hash
         of `slot`'s image; / a tmpfs; /var the LUKS2 mapping, mounted in the initrd; the firmware entry the installer's
         (`entry`); nothing enabled under /etc; one machine ID, kept on /var, boot after boot."""
-        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=absent",
-                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the shipped module-free /usr must mount and write the ESP")
+        self.esp_proof(said)
         self.assertIn("REGALIA-E2E-BINFMT mount=ok", said, "BINFMT_MOUNT_AFTER_SWITCH_ROOT (r1s.18)")
         proof = verity_proof(said)
         self.assertIsNotNone(proof, "no REGALIA-E2E-VERITY line: the report did not run")

@@ -16,17 +16,40 @@ verity="$(veritysetup status usr 2>&1)"
 vstatus="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1)"
 vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*//p' | head -1)"
 echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
-# r1s.19: after switch-root, mount the real ESP and write/read/remove a file as enrol commit --esp does.
-# /dev/vda1 is install-host.sh's ESP on the test's virtio disk. No modprobe here: the initrd must preload it.
+# regalia-kms-9tv: after switch-root, the SHIPPED automount (the image's generator's efi.automount, /efi): access
+# the ESP's path (a first open pulls the backing mount in), then assert what is mounted there: the source (by-
+# partuuid, the ESP the generator named), the type (vfat), the options (rw, the root-only masks, noexec, nosuid,
+# nodev), and the absence of a competing /boot mount of the same ESP (the generator's empty boot.mount/automount).
+# No modprobe here: the initrd must preload it. No mkdir, no mount: the guest performs no ESP mount of its own.
 esp=failed
-mkdir -p /efi
-if mount -t vfat -o umask=0077,codepage=437,iocharset=ascii /dev/vda1 /efi; then
-    mkdir -p /efi/EFI/regalia
-    if printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
-        [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then esp=ok; fi
-    rm -f /efi/EFI/regalia/e2e-mount-proof
+source=""; mtype=""; mopts=""; bootcompeting=absent
+if [ -d /efi/EFI ]; then
+    # the access above triggered the automount; now read the kernel's mount data for /efi, filtering out autofs
+    line="$(grep ' /efi ' /proc/self/mountinfo 2>/dev/null | tail -1)"
+    if [ -n "$line" ]; then
+        # mountinfo: id parent maj:min root mountpoint options ... - fstype source super-options
+        # (the options are the field after the mountpoint; the fields after " - " are fstype, source, super-options)
+        after="${line##* - }"
+        mtype="${after%% *}"
+        source="${after#* }"; source="${source%% *}"
+        # the options are field 6 of mountinfo (after the mountpoint, before the first " - ")
+        mopts="$(printf '%s\n' "$line" | awk '{ print $6 }')"
+        # the competing /boot mount, if any (the generator empties boot.mount/automount, so there is none)
+        if grep -q ' /boot ' /proc/self/mountinfo 2>/dev/null; then
+            bline="$(grep ' /boot ' /proc/self/mountinfo | tail -1)"
+            bsource="${bline##* - }"; bsource="${bsource#* }"; bsource="${bsource%% *}"
+            [ "$bsource" = "$source" ] && bootcompeting=present
+        fi
+    fi
+    # the write/read/remove probe: only after source and filesystem are established
+    if [ -n "$source" ] && [ "$mtype" = vfat ]; then
+        mkdir -p /efi/EFI/regalia
+        if printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
+            [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then esp=ok; fi
+        rm -f /efi/EFI/regalia/e2e-mount-proof
+    fi
 fi
-echo "REGALIA-E2E-ESP mount=$esp type=$(fstype /efi) kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
+echo "REGALIA-E2E-ESP mount=$esp source=$source type=$mtype options=$mopts boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
 # r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
 binfmt=failed
 mkdir -p /run/e2e-binfmt

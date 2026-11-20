@@ -1,0 +1,173 @@
+#!/bin/sh
+# /usr/lib/systemd/system-generators/regalia-boot-esp (regalia-kms-9tv): the boot ESP, at /efi — where every consumer
+# (regalia-site-check, regalia-esp-advance, the node CLIs) looks for it — instead of at /boot, where
+# systemd-gpt-auto-generator's automount puts it on the image (root=tmpfs: no /efi exists, so gpt-auto prefers /boot,
+# measured on the staging DL360, build 11: /boot rw vfat automount, /efi absent, host_probe's ESP check efi_rc=1).
+#
+# WHY A GENERATOR: the ESP's identity is this host's (its GPT PARTUUID), so no fstab line can name it, and /etc is
+# gone at every boot (/ is a tmpfs, EMPTY when PID 1 loads units; the image's fstab is comments only, #61). The
+# identity the generator reads is the EFI variable LoaderDevicePartUUID, which systemd-stub sets to the GPT partition
+# it was loaded from (bootnext.py's image() holds the same to an entry's partition, so the ESP mounted here is the
+# boot entry's ESP, not another disk's). It is read from /sys/firmware/efi/efivars, which the initrd's efivarfs
+# holds: the variable is already set when PID 1 runs the generators. Nothing is read from /var (mounted in the initrd,
+# the UKI's systemd.mount-extra=): a host booted without the stub has no identity at all, and nothing is substituted
+# for it (no arbitrary ESP, no writable directory standing in for the mount).
+#
+# WHAT IT WRITES (on the supported layout, below):
+#   efi.mount          the backing mount: the ESP (by-partuuid, the partition whose GPT type is the ESP's) at /efi,
+#                      vfat rw,nosuid,nodev,noexec,fmask=0077,dmask=0077, the point 0700
+#   efi.automount      lazy: PID 1 makes /efi on the tmpfs root; a first access (a unit's RequiresMountsFor=/efi,
+#                      site-check's bind, a CLI's open) pulls the backing mount in, and it drops after 120 s idle
+#   local-fs.target.wants/efi.automount.service (an empty want: local-fs starts the automount)
+#   boot.mount, boot.automount — empty files: systemd-gpt-auto-generator's units for this layout, suppressed, so its
+#                      /boot automount (its preference when /efi is absent at ITS run, measured) and its boot.device
+#                      are not in the boot's graph at all
+# The layout it supports is the image's (install-host.sh): one GPT partition of the ESP type
+# (C12A7328-F81F-11D2-BA4B-00A0C93EC93B), no XBOOTLDR. Anything else — a missing or malformed identity, an unsupported
+# layout — it fails closed: it says so on stderr (the journal) and writes nothing, so the consumers'
+# RequiresMountsFor=/efi and After=efi.mount fail them by name, and the journal names the generator's refusal. It
+# exits 0 either way: a generator's failure must not stop the boot, and the consumers' refusal is the boot's.
+#
+# THE MOUNT (the image's policy, recorded here and in deploy/baremetal/image/etc-inventory.txt's [boot]):
+#   vfat: the ESP's filesystem (install-host.sh's mkfs.vfat), read-write by root — the ESP's writers (esp-advance and
+#   site-advance through enrol.EspChain, reanchor through the same, update, enrol commit --esp) all write here, each
+#   only root. Read-write by default, not read-only: remounting it for each writer would race the writers' first
+#   access (a unit's mount trigger and its open are not ordered against a remount), and the root-only FAT masks are
+#   what keep the filesystem root's. The VFS flags are the kernel's protections (no setuid, no device nodes, no exec:
+#   an ESP file is a boot input, not a program), the same set the gpt-auto automount held on /boot (the staging
+#   build's options).
+#   DirectoryMode=0700: the automount point, on the world-readable tmpfs root, is root's alone.
+#   IdleTimeoutSec=120: the gpt-auto automount's own (a host that never touches the ESP pays for no mount).
+#
+# The device unit: systemd-udevd makes dev-disk-by-partuuid-….device for the partition (by-partuuid's symlink is its).
+# The mount names it in its [Install] WantedBy=, which orders the mount against it (a device unit's default
+# dependency: the mount starts after its device exists). The ESP is on the boot disk, so its device is ready when
+# local-fs.target is reached.
+#
+# Arguments: systemd's three output directories (the first, "normal", is used). Two more are for the tests only
+# (tests/test_baremetal_boot_esp.py: an efivars directory, and a list of GPT partitions instead of udev); systemd
+# never passes them.
+
+set -eu
+export LC_ALL=C
+
+out="${1:?a generator is given its output directory}"
+name="regalia-boot-esp"
+efivars="${4:-/sys/firmware/efi/efivars}"
+gpt="${5:-}"    # set: a list file of the GPT partitions ("TYPE-GUID PART-GUID" per line) instead of udev
+
+# systemd's loader vendor GUID, whose variables systemd-stub writes (bootnext.py's LOADER_VENDOR; its efivars read
+# is the same: 4 bytes of attributes, then UTF-16LE, NUL-padded)
+VENDOR=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+EFIVAR="$efivars/LoaderDevicePartUUID-$VENDOR"
+
+# the identity: this host's boot ESP, by its GPT PARTUUID, from the stub's variable
+if [ ! -r "$EFIVAR" ]; then
+  echo "$name: $EFIVAR is absent: this boot did not come from a GPT partition through systemd-stub: no ESP is mounted (the consumers' /efi is not a mount point and fails them)" >&2
+  exit 0
+fi
+# the value's text: 4 attribute bytes, then UTF-16LE, NUL-padded (the stub's write, bootnext.py's read the same); a
+# non-ASCII digit or a NUL before the end is a value the stub could not have written, and both fail closed below
+partuuid="$(python3 -I - "$EFIVAR" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as f:
+    raw = f.read(4096)
+text = raw[4:].decode("utf-16-le", "replace")
+print(text.rstrip("\x00").strip())
+PY
+)"
+case "$partuuid" in
+  *[!0-9a-fA-F-]*|"")
+    echo "$name: LoaderDevicePartUUID is not a GPT UUID (got '$partuuid'): no ESP is mounted" >&2
+    exit 0 ;;
+esac
+partuuid="$(printf '%s' "$partuuid" | tr 'A-F' 'a-f')"
+if [ "$(printf '%s' "$partuuid" | sed -n 's/^[0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}$/x/p')" != x ]; then
+  echo "$name: LoaderDevicePartUUID is not a GPT UUID (got '$partuuid'): no ESP is mounted" >&2
+  exit 0
+fi
+
+# the supported layout: exactly one GPT partition of the ESP type, no XBOOTLDR, and that partition is the one the
+# firmware loaded. Read only the GUIDs, never the contents.
+ESP_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+XBOOT_TYPE=eb0d1b61-9d14-4e60-b3f8-2c022c24dcb2
+if [ -n "$gpt" ]; then
+  partitions="$(cat "$gpt")"
+elif command -v udevadm >/dev/null 2>&1; then
+  # udev's partition map: the same two GUIDs per line, from the kernel's GPT (each device in the export database:
+  # ID_GPT_TYPE and ID_PART_ENTRY_UUID, one per line, NUL-separated records)
+  partitions="$(udevadm info --export-db 2>/dev/null | tr '\0' '\n' | awk '
+    /^ID_GPT_TYPE=/ { type=$0 }
+    /^ID_PART_ENTRY_UUID=/ && type != "" { sub(/^ID_GPT_TYPE=/, "", type); sub(/^ID_PART_ENTRY_UUID=/, "", $0); print type " " $0; type="" }')" || partitions=""
+else
+  # without udev there is no partition map to read: fail closed (the device is named by the GUID, and the boot's own
+  # udev makes it — but a map that cannot be read is not one)
+  echo "$name: udev is unavailable: no ESP partition is known: no ESP is mounted" >&2
+  exit 0
+fi
+device=""
+while read -r type part; do
+  [ -n "${type:-}" ] || continue
+  case "$type" in
+    "$XBOOT_TYPE")
+      echo "$name: a partition ($part) is an XBOOTLDR: the layout is not the image's (one ESP, no XBOOTLDR): no ESP is mounted" >&2
+      exit 0 ;;
+    "$ESP_TYPE")
+      if [ -n "$device" ]; then
+        echo "$name: two ESP partitions ($device and $part): the layout is not the image's (one ESP, no XBOOTLDR): no ESP is mounted" >&2
+        exit 0
+      fi
+      device="$part" ;;
+  esac
+done <<EOF
+$partitions
+EOF
+if [ -z "$device" ]; then
+  echo "$name: no partition of the ESP type ($ESP_TYPE) is known (this boot's ESP is $partuuid): no ESP is mounted" >&2
+  exit 0
+fi
+if [ "$device" != "$partuuid" ]; then
+  echo "$name: the ESP partition is $device, not the one the firmware loaded ($partuuid): no ESP is mounted" >&2
+  exit 0
+fi
+device="dev-disk-by-partuuid-${partuuid}-device"    # the udev name: the partition, by its GUID, not by its bus position
+
+{
+  echo "# Generated at boot by $0 (regalia-kms-9tv): the boot ESP, the partition systemd-stub booted from, at /efi"
+  echo "# (LoaderDevicePartUUID $partuuid, device $device): the image's ESP mount, where the consumers look for it"
+  echo "[Unit]"
+  echo "Description=Regalia KMS: the boot ESP (the partition the firmware loaded, at /efi)"
+  echo "Requires=$device"
+  echo "After=$device"
+  echo "[Mount]"
+  echo "What=/dev/disk/by-partuuid/$partuuid"
+  echo "Where=/efi"
+  echo "Type=vfat"
+  echo "Options=rw,nosuid,nodev,noexec,fmask=0077,dmask=0077"
+  echo "DirectoryMode=0700"
+  echo "[Install]"
+  echo "WantedBy=$device"
+} > "$out/efi.mount"
+
+{
+  echo "# Generated at boot by $0 (regalia-kms-9tv): the boot ESP's automount: PID 1 makes /efi, an access pulls in"
+  echo "# the backing mount (the consumers' RequiresMountsFor=/efi and first open), it drops after 120 s idle"
+  echo "[Unit]"
+  echo "Description=Regalia KMS: the boot ESP's automount (/efi)"
+  echo "Requires=efi.mount"
+  echo "After=efi.mount"
+  echo "[Automount]"
+  echo "Where=/efi"
+  echo "IdleTimeoutSec=120"
+  echo "[Install]"
+  echo "WantedBy=local-fs.target"
+} > "$out/efi.automount"
+
+# the want: local-fs starts the automount (a mount with no [Install] of its own would wait on nothing)
+mkdir -p "$out/local-fs.target.wants"
+: > "$out/local-fs.target.wants/efi.automount.service"
+
+# systemd-gpt-auto-generator's units for this layout, emptied so its /boot automount is not in the graph (the image's
+# mount is /efi's; an empty file masks a unit — non-empty it would be its own unit, which is why these are empty)
+: > "$out/boot.mount"
+: > "$out/boot.automount"

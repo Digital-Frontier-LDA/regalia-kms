@@ -254,6 +254,9 @@ else
   done
   install -D -m 0644 "$U/00-regalia-etc.tmpfiles.conf" "$GUEST/usr/lib/tmpfiles.d/00-regalia-etc.conf"
   install -D -m 0644 deploy/baremetal/image/regalia-kms.preset "$GUEST/usr/lib/systemd/system-preset/00-regalia-kms.preset"
+  # the boot ESP's generator (regalia-kms-9tv): the synthetic guest's filesystem-preload assertion uses the shared
+  # report, which reads the shipped automount (/efi), not a manual mount
+  install -D -m 0755 deploy/baremetal/generators/regalia-boot-esp "$GUEST/usr/lib/systemd/system-generators/regalia-boot-esp"
   find "$GUEST/etc/systemd/system" -type l -delete
   : > "$GUEST/etc/fstab"                      # / is a tmpfs, /usr and /var come from the command line
   : > "$GUEST/etc/machine-id"
