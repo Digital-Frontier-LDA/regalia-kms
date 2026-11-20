@@ -22,7 +22,7 @@ def unit_control(name, before, after, test, reason):
         output = io.StringIO()
         with patch.object(checks, "UNIT", unit):
             result = unittest.TextTestRunner(stream=output).run(checks.SitePresence(test))
-        failure = any(case.id().endswith("." + test) and reason in trace
+        failure = any(case.id().split(" (", 1)[0].endswith("." + test) and reason in trace
                       for case, trace in result.failures)
         killed = failure and not result.errors and not result.skipped
         print(name + ": " + ("KILLED by " + test if killed else "INVALID OR SURVIVED"), flush=True)
