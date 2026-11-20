@@ -609,11 +609,12 @@ class OnQemu(tub.OnSwtpm):
         return files
 
     def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e",
-             watch=None, nvram=None):
+             watch=None, nvram=None, recovery_delay=1):
         """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase; when it is
         a function of (console so far, seconds since start), only once that says so (and what it returns, when that is
-        bytes, is typed instead). `watch`, a function of the same, is
+        bytes, is typed instead). The console settles for `recovery_delay` seconds before input.
+        `watch`, a function of the same, is
         called as the console grows (to change the network under the guest), and the times it returned true are kept in
         self.watched."""
         self.on_esp = self.esp(credentials or {}, image)
@@ -683,7 +684,7 @@ class OnQemu(tub.OnSwtpm):
                     typed = recovery and prompts > answered and (recovery is True or recovery(text, elapsed))
                     if typed:
                         answered = prompts
-                        time.sleep(1)
+                        time.sleep(recovery_delay)
                         qemu.stdin.write((typed if isinstance(typed, bytes) else tub.RECOVERY) + b"\n")
                         qemu.stdin.flush()
                 elif qemu.poll() is not None:
@@ -831,13 +832,10 @@ class OnQemu(tub.OnSwtpm):
         # start, and the console asks, promptly: it asks from the start whatever the client does (#66, #70)
         broken = dict(credentials, **{"regalia.unlock-local": b"bm90IGEgY3JlZGVudGlhbA==\n"})
         self.reference = reference(espcreds.pcr12({n + ".cred": c for n, c in broken.items()}))
-        # Wait for the unit's failure on the console before answering. The prompt
-        # can appear while the mesh is still coming up and credential setup is pending.
-        def unlock_refused(console, _elapsed):
-            # PID 1 may ellipsize the unit name to fit the serial console.
-            return re.search(r"Failed to start [^\r\n]*regalia-unl", console) is not None
-
-        said = self.boot("1b-undecryptable", broken, recovery=unlock_refused)
+        # The password agent holds the console while it waits for input. Give
+        # the ordered mesh and credential setup time to finish, then read the
+        # refusal from the retained initrd journal once recovery opens the disk.
+        said = self.boot("1b-undecryptable", broken, recovery=True, recovery_delay=15)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertNotIn("regalia-unlock: gave the key", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
