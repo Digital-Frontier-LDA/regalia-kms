@@ -183,6 +183,8 @@ echo "### the initrd the builder made, beside the guest's kernel of the same sna
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
 BUILT_KVER="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["kernel"])' "$W/initrd-build/initrd-build.json")"
 [ "$BUILT_KVER" = "$KVER" ] || { echo "unlock-boot-qemu: the initrd was built for kernel $BUILT_KVER, the guest has $KVER"; exit 2; }
+echo "### Debian kernel $KVER config at snapshot $SNAPSHOT (the UKI kernel)"
+grep -E '^CONFIG_(FAT_FS|VFAT_FS|NLS_CODEPAGE_437|NLS_ASCII|NLS_ISO8859_1|NLS_UTF8|BINFMT_MISC)=' "$ROOT/boot/config-$KVER"
 cp "$W/initrd-build/initrd.img" "$ROOT/boot/initrd.e2e"
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
 for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'cryptsetup\.target\.wants/regalia-unlock\.service' 'regalia-wg-boot\.service$' \
@@ -234,13 +236,14 @@ if [ "$CASES" = verity ]; then
   tar -x --numeric-owner -f "$REGALIA_BOOT_IMAGE/rootfs.tar" -C "$GUEST" || { echo "unlock-boot-qemu: $REGALIA_BOOT_IMAGE/rootfs.tar cannot be read"; exit 2; }
   [ -d "$GUEST/usr/share/factory/etc" ] && [ -f "$GUEST/usr/lib/systemd/system/regalia-etc-factory.service" ] \
     || { echo "unlock-boot-qemu: $REGALIA_BOOT_IMAGE is not a verity image (no factory /etc, no regalia-etc-factory.service)"; exit 2; }
-  # the image has no kernel yet (build-rootfs.sh's limitations: no kernel/UKI pairing): the test's UKI kernel's modules,
-  # from this tree at the same snapshot, go into the guest's /usr, the one thing in it that is not the image's
-  [ ! -e "$GUEST/usr/lib/modules" ] || [ -z "$(ls -A "$GUEST/usr/lib/modules")" ] \
-    || { echo "unlock-boot-qemu: the image carries kernel modules now: pair them with the UKI's kernel instead of copying the test tree's"; exit 2; }
-  mkdir -p "$GUEST/usr/lib/modules"; cp -a "$ROOT/usr/lib/modules/$KVER" "$GUEST/usr/lib/modules/"
+  # Fidelity: the verity /usr is exactly the shipped module-free tree. Drivers needed after
+  # switch-root must already have been loaded by the UKI's initrd; never inject the builder's modules.
+  [ ! -d "$GUEST/usr/lib/modules" ] || { echo "unlock-boot-qemu: shipped /usr unexpectedly carries modules"; exit 2; }
 else
   GUEST="$ROOT"
+  # This synthetic guest models the same module-free /usr as the real image. The UKI initrd is
+  # already built; keep its kernel in /boot for ukify, but no builder modules may help after switch-root.
+  rm -rf -- "$GUEST/usr/lib/modules"
   U=deploy/baremetal/units
   for f in "$U/regalia-etc-factory.service" "$U/00-regalia-etc.tmpfiles.conf"; do
     [ -f "$f" ] || { echo "unlock-boot-qemu: $f is missing: the guest's /etc could not be made at boot"; exit 2; }
@@ -449,6 +452,8 @@ fi
 if ! grep -q "^$TEST" <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
+# The initrd's actual module payload and preload entry must belong to the UKI kernel just booted.
+python3 -BEs e2e/tests/image-esp-content.py "$W/initrd-build" --kernel "$KVER"
 [ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, the per-host units started after the reboot and gated without their files (the KMS refusing with no firewall), a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
 echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"
 

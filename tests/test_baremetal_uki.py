@@ -239,7 +239,8 @@ def unlock_initrd(change=None, drop=()):
              "etc/cmdline.d/10-quiet.conf": (0o100644, b"quiet rd.shell=0\n"),
              "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd"),
              uki.ROOT_KEY_PATH: (0o100644, ROOT_KEY),
-             uki.FIREWALL_MODULES_LOAD[0]: (0o100644, uki.FIREWALL_MODULES_LOAD[1])}
+             uki.FIREWALL_MODULES_LOAD[0]: (0o100644, uki.FIREWALL_MODULES_LOAD[1]),
+             uki.FILESYSTEM_MODULES_LOAD[0]: (0o100644, uki.FILESYSTEM_MODULES_LOAD[1])}
     for unit in uki.UNLOCK_UNITS:
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
     for link, target in uki.UNLOCK_ENABLED.items():
@@ -1277,12 +1278,26 @@ class InitrdReview(Case):
             with self.subTest(body=body):
                 self.refused_by(unlock_initrd({path: (0o100644, body)}), path + " is not this repository's")
 
-    def test_only_the_firewall_modules_file_is_allowed_in_modules_load_d(self):
+    def test_the_filesystem_modules_file_is_required_and_held_to_its_bytes(self):
+        path, body = uki.FILESYSTEM_MODULES_LOAD
+        self.passes(unlock_initrd())
+        self.refused_by(unlock_initrd(drop=(path,)), path + " is not in the image")
+        # Named controls: no preload, no vfat, missing codepage, missing binfmt, extra module.
+        for mutant, changed in (("DROP_VFAT_PRELOAD", body.replace(b"vfat\n", b"")),
+                                ("DROP_CP437_PRELOAD", body.replace(b"nls_cp437\n", b"")),
+                                ("DROP_BINFMT_PRELOAD", body.replace(b"binfmt_misc\n", b"")),
+                                ("ADD_UNREVIEWED_MODULE", body + b"ext4\n")):
+            with self.subTest(mutant=mutant):
+                self.refused_by(unlock_initrd({path: (0o100644, changed)}), path + " is not this repository's")
+
+    def test_only_the_pinned_module_files_are_allowed_in_modules_load_d(self):
         # r1s.15: refused by rule (reviewed against its own inventory, so only layer 1 can refuse), wherever systemd reads
         self.assertEqual(sorted(uki.MODULES_LOAD_DIRS), sorted(("etc/modules-load.d", "run/modules-load.d",
                                                                "usr/local/lib/modules-load.d", "usr/lib/modules-load.d")))
         for path in ("usr/lib/modules-load.d/other.conf", "etc/modules-load.d/regalia-firewall.conf",
-                     "run/modules-load.d/x.conf", "usr/local/lib/modules-load.d/y.conf"):
+                     "run/modules-load.d/x.conf", "usr/local/lib/modules-load.d/y.conf",
+                     "etc/modules-load.d/regalia-filesystems.conf", "run/modules-load.d/regalia-filesystems.conf",
+                     "usr/local/lib/modules-load.d/regalia-filesystems.conf"):
             with self.subTest(path=path):
                 self.refused_by(unlock_initrd({path: (0o100644, b"wireguard\n")}), path + ": a modules-load.d file that is not the module's")
 
