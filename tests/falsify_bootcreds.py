@@ -6,6 +6,7 @@ INVALID, never a caught defect. Every edit is restored in finally, and the clean
 baseline runs before and after. Python gets a fresh bytecode cache for each run.
 No refused fixture is reconstructed or transferred by this harness.
 """
+import json
 import pathlib
 import re
 import subprocess
@@ -20,6 +21,10 @@ CLIENT = ["go", "test", "-count=1", "./cmd/regalia-unlock", "-run",
           "^TestSingleNodeVerifiedRenderUnlocksOnlyWithCurrentOwner$"]
 PYTHON = [sys.executable, "-Es", "-m", "unittest", "-v", "tests.test_baremetal_bootcreds.Render",
           "tests.test_baremetal_bootcreds.EspFiles.test_single_node_esp_chain_and_site_render_owner_credentials"]
+with (ROOT / "tests/vectors/bootcreds-v1.json").open() as fixture:
+    prior_keys = json.load(fixture)["manifests"]["single-node"]["owner_keys"]
+OLD_OWNER_KEYS = "[]any{" + ",".join('map[string]any{"alg":"%s","key":"%s"}' % (k["alg"], k["public"])
+                                   for k in prior_keys) + "}"
 
 # name, file, unique source anchor, replacement, test command
 MUTANTS = [
@@ -40,7 +45,7 @@ MUTANTS = [
      'if len(ownerKeys) == 0 {', 'if false && len(ownerKeys) == 0 {', PARITY),
     ("go-ed25519-owner-filter", GO,
      'if key["alg"] == "ed25519" {', 'if true {', PARITY),
-    ("go-owner-key-rotation", GO,
+    ("go-owner-key-substitution", GO,
      '"key": key["key"]', '"key": manifest["owner_keys"].([]any)[0].(map[string]any)["key"]', PARITY),
     ("go-owner-key-order", GO,
      'for _, entry := range manifest["owner_keys"].([]any) {',
@@ -73,6 +78,9 @@ MUTANTS = [
       "tests.test_baremetal_bootcreds.EspFiles.test_a_chain_that_leaves_the_host_no_peer_writes_nothing"]),
     ("go-old-owner-accepted", "cmd/regalia-unlock/attest.go",
      'if !known {', 'if false && !known {', CLIENT),
+    ("go-stale-owner-keys", GO,
+     '= bootSingleSchema, membership.ProfileSingleNode, ownerKeys',
+     '= bootSingleSchema, membership.ProfileSingleNode, ' + OLD_OWNER_KEYS, CLIENT),
 ]
 
 
