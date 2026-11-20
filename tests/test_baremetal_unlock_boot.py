@@ -19,9 +19,12 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -388,6 +391,41 @@ class EspMountFailure(unittest.TestCase):
         self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 32, "", "", ""))
 
 
+class PreGenesisFixture(unittest.TestCase):
+    def test_first_boot_has_no_membership_anchor_or_chain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "disk.img").touch()
+            (root / "e2e.efi").touch()
+            (root / "esp/loader/credentials").mkdir(parents=True)
+            (root / "esp/EFI/BOOT").mkdir(parents=True)
+
+            fixture = OnQemu()
+            fixture.d, fixture.m1 = directory, {}
+            fixture.tcti, fixture.pids = {"a": "synthetic"}, {"a": 123}
+            fixture.partition_appeared_after = 0
+            fixture.partition = Mock(return_value=("/dev/loop-test", "/dev/loop-testp1"))
+            fixture.network = Mock()
+            fixture.on = Mock()
+            fixture.addCleanup = Mock()
+
+            # Exercise the real QEMU setup and ESP writer over an ordinary directory.
+            with (patch.object(sys.modules[__name__], "BOOT", directory),
+                  patch.object(sys.modules[__name__], "run", return_value=Mock(stdout="YWJj", returncode=0)),
+                  patch.object(tub.OnSwtpm, "setUp"), patch.object(os, "kill"),
+                  patch.object(membership, "HighWater") as high_water,
+                  patch.object(membership, "accept_chain"), patch.object(membership.Store, "_digests")):
+                fixture.setUp()
+                self.assertEqual(fixture.esp({}), {})
+
+            with self.subTest(evidence="TPM"):
+                high_water.return_value.define.assert_not_called()
+                high_water.return_value.anchor.assert_not_called()
+            with self.subTest(evidence="ESP"):
+                self.assertFalse((root / "esp" / bootcreds.CHAIN_ON_ESP).exists(),
+                                 "the ESP chain would make render refuse instead of skipping")
+
+
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
 class OnQemu(tub.OnSwtpm):
     # the fixtures of OnSwtpm are reused, not its tests
@@ -420,13 +458,7 @@ class OnQemu(tub.OnSwtpm):
         super().setUp()                                     # the three TPMs with their AKs, the manifest, the peers b and c
         self.image = BOOT + "/disk.img"
         self.disk = None                                    # the LUKS2 partition, through a loop device while the guest is off
-        # #66 B3: the chain the guest's ESP carries, signed by the root the image trusts, and the guest's TPM anchored
-        # to it (as enrolment leaves a host: the high-water at the chain's epoch, its manifest recorded), so the
-        # initrd's render verifies it against the TPM and refuses any other chain, however well signed
-        self.chain = [self.signed(self.m1)]
-        anchor = membership.HighWater("0x1500016", tcti=self.tcti["a"], lock_path=self.d + "/a-hw.lock")
-        anchor.define()
-        anchor.anchor(1, membership.Store._digests([membership.accept_chain(None, self.chain, self.signed({})["signature"]["key"])]))
+        self.chain = None                                   # boot 1 has neither ESP membership nor a TPM anchor
         # the guest's TPM is `a`: provisioned above through its socket, from here on QEMU's
         self.on("a", attest.tpm2, "shutdown", "-c")
         os.kill(self.pids.pop("a"), 15)
@@ -536,8 +568,8 @@ class OnQemu(tub.OnSwtpm):
     def esp(self, named, image="e2e"):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
         `image` (<image>.efi of REGALIA_BOOT_DIR, signed by e2e/unlock-boot-qemu.sh) as the one boot image, and
-        the membership chain (self.chain, #66 B3) at EFI/regalia/membership.json, and returns the credential
-        files as systemd-stub will read them. Nothing else changes on the ESP."""
+        the membership chain (self.chain, #66 B3) at EFI/regalia/membership.json once enrolled.
+        Returns the credential files as systemd-stub will read them."""
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
@@ -564,9 +596,12 @@ class OnQemu(tub.OnSwtpm):
             # disk has one: what an update leaves, the image to boot at the path the entry names (#61 K61V-4)
             if os.path.isdir(mnt + "/EFI/Linux"):
                 shutil.copyfile("%s/%s.efi" % (BOOT, image), mnt + "/EFI/Linux/e2e.efi")
-            os.makedirs(mnt + "/EFI/regalia", exist_ok=True)
-            with open(mnt + "/" + bootcreds.CHAIN_ON_ESP, "wb") as f:
-                f.write(membership.canonical(self.chain))
+            chain_path = Path(mnt) / bootcreds.CHAIN_ON_ESP
+            if self.chain is None:
+                chain_path.unlink(missing_ok=True)
+            else:
+                chain_path.parent.mkdir(parents=True, exist_ok=True)
+                chain_path.write_bytes(membership.canonical(self.chain))
         finally:
             unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
             run(["losetup", "-d", loop], capture_output=True)
@@ -773,6 +808,8 @@ class OnQemu(tub.OnSwtpm):
             "regalia.site": bootcreds.site_document(cfg, device)}
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
+
+        self.enrol_membership()
 
         # Present invalid site data must reach render validation and block both
         # consumers. The independent console agent can still open the volume.
@@ -1131,7 +1168,13 @@ class OnQemu(tub.OnSwtpm):
         no_shell(self, said)
         self.assertEqual([e for e in self.events[since:] if e.get("event") == "unlock"], [])
 
-    def anchor_guest(self, envelopes):
+    def enrol_membership(self):
+        """Initialise the guest's anchor after the recovery boot; the next boot writes the matching ESP chain."""
+        chain = [self.signed(self.m1)]
+        self.anchor_guest(chain, initial=True)
+        self.chain = chain
+
+    def anchor_guest(self, envelopes, initial=False):
         """The guest's TPM anchor moved to the tip of `envelopes` while the guest is off (what regalia-esp-advance
         does on a running host, after the ESP holds the chain: node.esp_advance)."""
         sock = self.d + "/a-off.sock"
@@ -1149,6 +1192,8 @@ class OnQemu(tub.OnSwtpm):
             membership.accept_chain(None, envelopes, self.signed({})["signature"]["key"])
             manifests = [e["manifest"] for e in envelopes]
             anchor = membership.HighWater("0x1500016", tcti=tcti, lock_path=self.d + "/a-hw.lock")
+            if initial:
+                anchor.define()
             anchor.anchor(len(manifests), membership.Store._digests(manifests))
             anchor.check(len(manifests))
             run(["tpm2_shutdown", "-c", "-T", tcti], capture_output=True, check=True)
@@ -1417,6 +1462,8 @@ class OnQemuVerity(OnQemu):
                        "regalia.wg-boot-key": sealed["wg-boot.cred"].encode() + b"\n",
                        "regalia.site": bootcreds.site_document(self.site("a"), device)}
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
+
+        self.enrol_membership()
 
         # boot v2, THE CONTROL: unattended through a peer, from the installer's firmware entry; the proof, and the
         # image's units started from their enablement under /usr
