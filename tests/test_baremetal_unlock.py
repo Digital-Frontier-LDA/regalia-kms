@@ -1059,7 +1059,9 @@ class Units(unittest.TestCase):
         for line in ("RuntimeDirectory=regalia", "RuntimeDirectoryPreserve=yes", "Conflicts=" + unit["Conflicts"]):
             self.assertIn("'%s'" % line, check)
             self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
-        self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
+        # The read-only condition and the unlock client use the same binary directly.
+        self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecCondition", "ExecStart"])
+        self.assertEqual(values["ExecCondition"], "/usr/bin/regalia-unlock -consumer-check unlock")
         self.assertEqual(values["LoadCredentialEncrypted"], "%s:/.extra/global_credentials/%s.cred" % ((unlock.LOCAL_NAME,) * 2))   # decrypted: never in plain
         # its configuration is rendered from the verified chain into /run/regalia-boot (#66 B3), not read from the ESP
         self.assertEqual([v for k, v in service if k == "LoadCredential"], [])
