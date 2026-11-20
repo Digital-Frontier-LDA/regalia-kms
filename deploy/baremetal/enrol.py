@@ -2185,7 +2185,7 @@ def commit_owner_auth(manifest, given, root_key, node_id, run=subprocess.run, di
     owner_auth = None if given is None else ownerauth.confirm(given[0], given[1], root_key, node_id)
     if manifest["schema"] in membership.QUORUM_SCHEMAS:
         ownerauth.require_production(run=run)
-        require(owner_auth is not None, "under %s the TPM's owner authorization is set and enrolment takes it from this "
+        require(owner_auth is not None or membership.profile(manifest) == membership.SINGLE_NODE, "under %s the TPM's owner authorization is set and enrolment takes it from this "
                 "node's envelope: gpg --decrypt ownerauth-%s.yk.gpg | enrol commit ... --ownerauth ownerauth.record.json"
                 % (membership.SCHEMA_V4, node_id))
     return owner_auth
