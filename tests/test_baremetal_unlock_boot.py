@@ -218,20 +218,14 @@ def boot_entry(said):
 
 
 def esp_mount(said):
-    """The REGALIA-E2E-ESP line (regalia-kms-9tv) as {"mount", "source", "partuuid", "type", "options",
-    "super-options", "probe", "boot-competing", "kernel", "modules-tree"}, or None. The options are the /efi vfat
-    mount's per-mount options (mountinfo field 6, the VFS flags: rw, nosuid, nodev, noexec), and the super-options
-    are its filesystem options (the mountinfo fields after the " - " separator: the vfat masks, fmask=0077 and
-    dmask=0077, which are NOT in the per-mount options) — both as e2e-report reads them from
-    /proc/self/mountinfo. The probe is the write/read/remove: ok only when the file was written, read back and
-    removed. The partuuid is the source's, compared with the disk's partition 1 (blkid, from the host)."""
-    found = re.search(
-        r"REGALIA-E2E-ESP mount=(\S+) source=(\S+) partuuid=(\S+) type=(\S+) options=(\S+) super-options=(\S+) probe=(\S+) boot-competing=(\S+) kernel=(\S+) modules-tree=(\S+)",
-        said)
+    """Parse the exact ESP mount and write probe reported by the guest."""
+    found = re.search(r"REGALIA-E2E-ESP ([^\r\n]+)", said)
     if not found:
         return None
-    return dict(zip(("mount", "source", "partuuid", "type", "options", "super-options", "probe",
-                     "boot-competing", "kernel", "modules-tree"), found.groups()))
+    fields = dict(field.split("=", 1) for field in found[1].split() if "=" in field)
+    required = {"mount", "source", "partuuid", "type", "options", "super-options",
+                "probe", "boot-competing", "kernel", "modules-tree", "target"}
+    return fields if required <= fields.keys() else None
 
 
 class VerityReport(unittest.TestCase):
@@ -277,13 +271,16 @@ class VerityReport(unittest.TestCase):
         per-mount ones), the probe (write/read/remove), and the absence of a competing /boot mount."""
         line = ("REGALIA-E2E-ESP mount=ok source=/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00 "
                 "partuuid=11223344-5566-7788-99aa-bbccddeeff00 type=vfat options=rw,nosuid,nodev,noexec "
-                "super-options=fmask=0077,dmask=0077 probe=ok boot-competing=absent kernel=6.12.0 modules-tree=absent")
+                "super-options=fmask=0077,dmask=0077 probe=ok boot-competing=absent kernel=6.12.0 modules-tree=absent target=/efi")
         self.assertEqual(esp_mount(line), {"mount": "ok",
                                            "source": "/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00",
                                            "partuuid": "11223344-5566-7788-99aa-bbccddeeff00",
                                            "type": "vfat", "options": "rw,nosuid,nodev,noexec",
                                            "super-options": "fmask=0077,dmask=0077", "probe": "ok",
-                                           "boot-competing": "absent", "kernel": "6.12.0", "modules-tree": "absent"})
+                                           "boot-competing": "absent", "kernel": "6.12.0", "modules-tree": "absent", "target": "/efi"})
+        failed = ("REGALIA-E2E-ESP mount=failed source= partuuid= type= options= "
+                  "super-options= probe=none boot-competing=absent kernel=6.12.0 modules-tree=absent target=")
+        self.assertEqual(esp_mount(failed)["mount"], "failed")
         self.assertIsNone(esp_mount("nothing"))
         # the line's OLD shape (the per-mount options carrying the masks, no partuuid or probe) is not this report's
         old = ("REGALIA-E2E-ESP mount=ok source=/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00 type=vfat "
@@ -768,6 +765,22 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
         return image, mnt
 
+    def esp_proof(self, said):
+        """Verify the shipped mount against partition 1 of the host-side disk image."""
+        esp = esp_mount(said)
+        self.assertIsNotNone(esp, "no REGALIA-E2E-ESP line")
+        self.assertEqual((esp["mount"], esp["target"], esp["type"], esp["modules-tree"]),
+                         ("ok", "/efi", "vfat", "absent"), esp)
+        disk_esp = run(["sfdisk", "--part-uuid", self.image, "1"],
+                      capture_output=True, text=True, check=True).stdout.strip().lower()
+        self.assertTrue(disk_esp, "the disk's ESP partition has no PARTUUID")
+        self.assertEqual(esp["partuuid"].lower(), disk_esp, esp)
+        self.assertEqual(set(esp["options"].split(",")), {"rw", "nosuid", "nodev", "noexec"}, esp)
+        self.assertTrue({"fmask=0077", "dmask=0077"} <= set(esp["super-options"].split(",")), esp)
+        self.assertEqual(esp["probe"], "ok", esp)
+        self.assertEqual(esp["boot-competing"], "absent", esp)
+        print("boot proof: ESP", esp, file=sys.stderr)
+
     def test_a_host_boots_through_a_peer_and_with_no_peer_it_asks_for_the_recovery_key(self):
         # boot 1, ENROLMENT: nothing is enrolled and no credential is given. The client has no configuration and
         # gives nothing, the console asks, the recovery key opens the volume (PoC 6.5: the manual path needs no
@@ -790,14 +803,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
-        esp = esp_mount(said)
-        self.assertIsNotNone(esp, "no REGALIA-E2E-ESP line: the report did not run, or the line's shape changed")
-        self.assertEqual((esp["mount"], esp["type"], esp["modules-tree"]), ("ok", "vfat", "absent"),
-                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the shipped automount must mount the ESP at /efi, vfat, module-free")
-        self.assertIn("rw", esp["options"].split(","), esp)
-        self.assertIn("fmask=0077", esp["super-options"].split(","), esp)
-        self.assertIn("dmask=0077", esp["super-options"].split(","), esp)
-        self.assertEqual(esp["probe"], "ok", esp)
+        self.esp_proof(said)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1368,49 +1374,6 @@ class OnQemuVerity(OnQemu):
             self.installed = json.load(f)
         self.assertEqual((self.installed["layout"], self.installed["usr"]["roothash"]), ("verity-ab", self.usr["a"]["roothash"]))
         self.machine_id = None
-
-    def esp_proof(self, said):
-        """The boot ESP, from the SHIPPED automount (regalia-kms-9tv): /efi, vfat, rw, the root-only masks and
-        noexec/nosuid/nodev, the source the ESP the disk carries (install-host.sh's partition 1, compared on the
-        host independently of the guest), no competing /boot mount of it, a successful write/read/remove, and the
-        module-free /usr. The per-mount options (rw, the VFS protections) and the filesystem super-options (the
-        root-only FAT masks, fmask/dmask) are separate: the masks are the vfat's options, not the per-mount ones, so
-        the test holds them apart as mountinfo reports them."""
-        esp = esp_mount(said)
-        self.assertIsNotNone(esp, "no REGALIA-E2E-ESP line: the report did not run, or the line's shape changed")
-        self.assertEqual(esp["mount"], "ok", esp)
-        self.assertEqual(esp["type"], "vfat", esp)
-        self.assertEqual(esp["modules-tree"], "absent", esp)
-        # the source: /dev/disk/by-partuuid/<the disk's ESP>, compared with the disk image inspected from the host —
-        # the disk's partition 1 (install-host.sh's layout) and the boot ESP the generator named, by their PARTUUID
-        loop, part = self.partition(1)
-        try:
-            disk_esp = run(["blkid", "-s", "PARTUUID", "-o", "value", part], capture_output=True, text=True).stdout.strip().lower()
-        finally:
-            run(["losetup", "-d", loop], capture_output=True)
-        self.assertTrue(disk_esp, "the disk's ESP partition has no PARTUUID: %s" % part)
-        self.assertEqual(esp["partuuid"], disk_esp,
-                         "the ESP's partuuid %s is not the disk's partition 1 (%s): the guest mounted another ESP"
-                         % (esp["partuuid"], disk_esp))
-        self.assertIn("/dev/disk/by-partuuid/" + disk_esp, esp["source"],
-                      "the ESP's source %s is not /dev/disk/by-partuuid/<the disk's ESP>: the guest mounted another ESP"
-                      % (esp["source"], disk_esp))
-        # the per-mount options: an unordered set, the VFS flags (rw, the protections)
-        mopts = set(o for o in esp["options"].split(",") if o)
-        self.assertEqual(mopts, {"rw", "nosuid", "nodev", "noexec"},
-                         "the ESP's per-mount options %s are not the image's VFS flags (rw, nosuid, nodev, noexec)" % esp["options"])
-        # the filesystem super-options: the root-only FAT masks (the vfat's options, NOT the per-mount ones)
-        superopts = set(o for o in esp["super-options"].split(",") if o)
-        self.assertIn("fmask=0077", superopts,
-                      "the ESP's super-options %s do not hold the root-only fmask" % esp["super-options"])
-        self.assertIn("dmask=0077", superopts,
-                      "the ESP's super-options %s do not hold the root-only dmask" % esp["super-options"])
-        # the probe: written, read back, AND removed
-        self.assertEqual(esp["probe"], "ok",
-                         "the ESP's write/read/remove probe is not ok: %s" % esp)
-        self.assertEqual(esp["boot-competing"], "absent",
-                         "a competing /boot mount of the ESP (%s): the generator's boot.mount/automount did not suppress gpt-auto" % esp)
-        print("boot proof: ESP %s %s %s super=%s" % (esp["source"], esp["type"], esp["options"], esp["super-options"]), file=sys.stderr)
 
     def proven(self, said, slot, entry=True):
         """What every boot that reached the system shows (the proof): /usr from dm-verity, verified, under the root hash

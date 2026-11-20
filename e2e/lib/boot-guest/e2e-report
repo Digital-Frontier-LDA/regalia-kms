@@ -16,56 +16,49 @@ verity="$(veritysetup status usr 2>&1)"
 vstatus="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1)"
 vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*//p' | head -1)"
 echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
-# regalia-kms-9tv: after switch-root, the SHIPPED automount (the image's generator's efi.automount, /efi): access
-# the ESP's path (a first open pulls the backing mount in), then assert what is mounted there: the source (by-
-# partuuid, the ESP the generator named), the type (vfat), the per-mount options (rw, noexec, nosuid, nodev) AND
-# the filesystem (super-) options (the root-only FAT masks, fmask/dmask — the mountinfo fields AFTER the " - "
-# separator, NOT the per-mount ones, field 6), and the absence of a competing /boot mount of the same ESP (the
-# generator's empty boot.mount/automount). No modprobe here: the initrd must preload it. No mkdir, no mount: the
-# guest performs no ESP mount of its own.
+# Trigger the shipped automount and inspect only an exact vfat mount.
+# mountinfo separates VFS options from filesystem options (the FAT masks).
 esp=failed
-source=""; partuuid=""; mtype=""; mopts=""; msuper=""; probe=none; bootcompeting=absent
+target=""; source=""; partuuid=""; mtype=""; mopts=""; msuper=""; probe=none; bootcompeting=absent
 if [ -d /efi/EFI ]; then
-    # the access above triggered the automount; now read the kernel's mount data for /efi, filtering out autofs:
-    # the exact /efi mount whose fstype is vfat (no ancestor match, no autofs record)
-    line="$(awk '$5 == "/efi" { for (i = 1; i <= NF; i++) if ($i == "-") { f = $((i+1)); s = $((i+2)); if (f == "vfat") { print; exit } } }' /proc/self/mountinfo 2>/dev/null)"
+    line="$(awk '$5 == "/efi" {
+        for (i = 7; i <= NF; i++)
+            if ($i == "-" && $(i+1) == "vfat") {
+                print $3, $5, $6, $(i+1), $(i+2), $(i+3)
+                exit
+            }
+    }' /proc/self/mountinfo)"
     if [ -n "$line" ]; then
-        # mountinfo: id parent maj:min root mountpoint per-mount-options ... - fstype source super-options
-        after="${line##* - }"
-        mtype="${after%% *}"
-        source="${after#* }"; source="${source%% *}"
-        # the partuuid: the source's, for the test's comparison with the disk's partition 1 (blkid, from the host)
-        case "$source" in
-            /dev/disk/by-partuuid/*) partuuid="${source##*/dev/disk/by-partuuid/}" ;;
-        esac
-        # the per-mount options: field 6 of mountinfo (after the mountpoint, before the first " - "): the VFS flags
-        mopts="$(printf '%s\n' "$line" | awk '{ print $6 }')"
-        # the filesystem (super-) options: the mountinfo fields after the source, the vfat's (fmask, dmask, iochar):
-        # the masks are the filesystem's options, NOT the per-mount ones, so a report that only reads field 6
-        # could never show them
-        msuper="$(printf '%s\n' "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i == "-") { s = $((i+3)); break }
-            print s }' | tr '\n' ',' | sed 's/,$//')"
-        # the competing /boot mount, if any (the generator empties boot.mount/automount, so there is none): a /boot
-        # mount of the SAME device as the ESP's. The source is the device identity: a by-partuuid symlink resolves
-        # to one source string (the kernel's canonical name for the device), and the kernel names a device the same
-        # in every mount record of it, so comparing the sources is comparing the devices (an alias is the same
-        # device; two different ESPs are two different sources).
-        if grep ' /boot ' /proc/self/mountinfo 2>/dev/null | sed -n 's/.* - [a-z0-9_-]* //p' | awk '{ print $1 }' |
-            grep -qx "$source"; then bootcompeting=present; fi
-    fi
-    # the write/read/remove probe: only after source and filesystem are established; ok when written, read back
-    # AND removed (a file left behind is not a clean probe)
-    if [ -n "$source" ] && [ "$mtype" = vfat ]; then
-        probe=failed
-        if mkdir -p /efi/EFI/regalia && printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
-            [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then
-            rm -f /efi/EFI/regalia/e2e-mount-proof
-            [ ! -e /efi/EFI/regalia/e2e-mount-proof ] && probe=ok
+        read -r device target mopts mtype source msuper <<EOF
+$line
+EOF
+        partuuid="$(lsblk --nodeps --raw --noheadings --output PARTUUID -- "$source")"
+        # Exercise the old automount path as well so a competing mount is visible.
+        test -d /boot/EFI || :
+        if awk -v device="$device" '$3 == device && $5 == "/boot" { found = 1 }
+            END { exit !found }' /proc/self/mountinfo; then
+            bootcompeting=present
         fi
-        esp="$probe"
+        if [ -n "$partuuid" ]; then
+            probe=failed
+            if marker="$(mktemp /efi/EFI/.e2e-mount-proof.XXXXXX)"; then
+                written=no
+                if printf 'esp-write-proof\n' > "$marker" && [ "$(cat "$marker")" = esp-write-proof ]; then
+                    written=yes
+                fi
+                if rm -f "$marker" && [ "$written" = yes ]; then
+                    probe=ok
+                fi
+            fi
+            esp="$probe"
+        fi
     fi
 fi
-echo "REGALIA-E2E-ESP mount=$esp source=$source partuuid=$partuuid type=$mtype options=$mopts super-options=$msuper probe=$probe boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
+echo "REGALIA-E2E-ESP mount=$esp source=$source partuuid=$partuuid type=$mtype options=$mopts super-options=$msuper probe=$probe boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent) target=$target" > /dev/console
+if [ "$esp" != ok ]; then
+    systemctl status efi.automount efi.mount --no-pager > /dev/console 2>&1
+    journalctl -b --no-pager -o cat --grep='regalia-boot-esp:' > /dev/console 2>&1
+fi
 # r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
 binfmt=failed
 mkdir -p /run/e2e-binfmt

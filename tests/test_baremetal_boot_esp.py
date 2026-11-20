@@ -10,9 +10,7 @@ layout, or a non-ESP partition must refuse (no units written, a named refusal on
 competing mount, and a successful write/read/remove.
 """
 import os
-import re
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,11 +31,11 @@ def _efivar(uuid):
 
 
 def _gpt(parts):
-    """A GPT partition list: "TYPE-GUID PART-GUID" per line, as the generator reads it (or udev gives it)."""
+    """A GPT partition list: "TYPE-GUID PART-GUID" per line, as the generator reads it (or lsblk gives it)."""
     return "\n".join("%s %s" % (t, p) for t, p in parts) + "\n"
 
 
-def _run(out, efivars, gpt):
+def _run(out, efivars, gpt, *, env=None):
     """Run the generator; (rc, stderr, {path: text or None}). The generator is given systemd's three output
     directories (out, the early, the late); the early suppression lives under the early directory, the units under
     the normal one, the want under the local-fs.target.wants the normal one makes."""
@@ -45,14 +43,14 @@ def _run(out, efivars, gpt):
     os.makedirs(early, exist_ok=True)
     done = subprocess.run(
         ["sh", str(ROOT / GENERATOR), out, early, out + "/late", efivars, gpt],
-        capture_output=True, text=True)
+        capture_output=True, text=True, env=env)
     units = {}
     for name in ("efi.mount", "efi.automount"):
         path = Path(out) / name
         units[name] = path.read_text() if path.exists() else None
     for name in ("boot.mount", "boot.automount"):
         path = Path(early) / name
-        units[name] = path.read_text() if path.exists() else None
+        units[name] = os.readlink(path) if path.is_symlink() else None
     want = Path(out) / "local-fs.target.wants" / "efi.automount"
     units["want"] = os.readlink(want) if os.path.islink(want) else ("present" if want.exists() else None)
     return done.returncode, done.stderr, units
@@ -115,7 +113,7 @@ class BootEsp(unittest.TestCase):
 
     def test_it_writes_the_mount_on_the_supported_layout(self):
         """The image's layout: one ESP partition, the stub's identity on it: efi.mount and efi.automount, the
-        want, and the gpt-auto units emptied in the EARLY output (where gpt-auto-generator's own output lives)."""
+        want, and early masks for the gpt-auto units."""
         self._write("11223344-5566-7788-99aa-bbccddeeff00",
                     [(ESP_TYPE, "11223344-5566-7788-99aa-bbccddeeff00"),
                      ("ea2b7845-6a63-4e81-9735-12a1a8576c3f", "99993344-5566-7788-99aa-bbccddeeff01")])
@@ -126,10 +124,8 @@ class BootEsp(unittest.TestCase):
         # the want: a symlink (the unit systemd wants, its name efi.automount) to this generator's efi.automount —
         # an empty efi.automount.service is not a unit, and a unit file of the same name would be loaded twice
         self.assertEqual(units["want"], "../efi.automount", units["want"])
-        # the gpt-auto suppression, in the EARLY output directory: an empty file masks a unit (non-empty it would
-        # be its own unit)
-        self.assertEqual(units["boot.mount"], "")
-        self.assertEqual(units["boot.automount"], "")
+        self.assertEqual(units["boot.mount"], "/dev/null")
+        self.assertEqual(units["boot.automount"], "/dev/null")
         mount = self._mount(units["efi.mount"])
         self.assertEqual(mount.get("What"), "/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00")
         self.assertEqual(mount.get("Where"), "/efi")
@@ -137,14 +133,10 @@ class BootEsp(unittest.TestCase):
         self.assertEqual(mount.get("Options"), "rw,nosuid,nodev,noexec,fmask=0077,dmask=0077")
         # the mount does not own the point's mode: the automount makes /efi (DirectoryMode is its section's)
         self.assertNotIn("DirectoryMode", mount, mount)
-        # the device unit: systemd's escaping of the kernel device's path
-        # (/dev/disk/by-partuuid/<uuid>: a dash is - (it is), a dot would be - (it is not)) and the kernel
-        # device's unit carries the -device suffix
-        self.assertEqual(self._unit(units["efi.mount"], "Unit", "Requires"),
-                         "dev-disk-by-partuuid-11223344-5566-7788-99aa-bbccddeeff00.device")
-        self.assertEqual(self._unit(units["efi.mount"], "Unit", "After"),
-                         "dev-disk-by-partuuid-11223344-5566-7788-99aa-bbccddeeff00.device")
-        self.assertNotIn("Install", units["efi.mount"].split("\n"), "the mount wants the device unit, no target")
+        # systemd derives the correctly escaped device dependencies from What=.
+        self.assertIsNone(self._unit(units["efi.mount"], "Unit", "Requires"))
+        self.assertIsNone(self._unit(units["efi.mount"], "Unit", "After"))
+        self.assertIsNone(self._unit(units["efi.mount"], "Install", "WantedBy"))
         auto = units["efi.automount"]
         # the automount makes the point and holds it until the idle timeout: its own options, not the mount's
         self.assertEqual(self._unit(auto, "Automount", "Where"), "/efi")
@@ -153,61 +145,26 @@ class BootEsp(unittest.TestCase):
         # no After=efi.mount: systemd orders an automount before its backing mount (the mount's implicit
         # BindsTo=efi.automount) — a manual After= is the opposite direction and a unit-graph cycle
         self.assertNotIn("After=efi.mount", [l.strip() for l in auto.splitlines()], auto)
-        self.assertEqual(self._unit(auto, "Install", "WantedBy"), "local-fs.target")
 
-    def test_the_udevadm_fallback_reads_the_kernel_names(self):
-        """The production path without partx: udevadm --export-db, and only the kernel's partition names
-        (ID_PART_ENTRY_UUID, ID_GPT_TYPE — the kernel's GPT, both as its canonical GUIDs): udevadm's
-        records are the kernel's (ID_*), one device per NUL record, the device the record's DEVPATH."""
-        import shutil
-        if not shutil.which("partx"):
-            self.skipTest("partx is the production path here: no fallback to exercise")
-        # a udevadm that speaks the kernel's names (a NUL record per device, DEVPATH the block device)
+    def test_the_production_partition_scan_reads_lsblk_columns(self):
+        uuid = "11223344-5566-7788-99aa-bbccddeeff00"
+        self._write(uuid)
         fake = Path(self.out) / "bin"
-        fake.mkdir(parents=True, exist_ok=True)
-        (fake / "partx").write_text("#!/bin/sh\necho the production partx is not on this PATH\nexit 1\n")
-        (fake / "udevadm").write_text(
-            "#!/bin/sh\necho DEVPATH=/devices/vda1; echo ID_PART_ENTRY_UUID=11223344-5566-7788-99aa-bbccddeeff00;"
-            " echo ID_GPT_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b; printf '\\0'\n"
-            "echo DEVPATH=/devices/vda5; echo ID_PART_ENTRY_UUID=99993344-5566-7788-99aa-bbccddeeff01;"
-            " echo ID_GPT_TYPE=ea2b7845-6a63-4e81-9735-12a1a8576c3f; printf '\\0'\n")
-        for b in ("partx", "udevadm"):
-            os.chmod(fake / b, 0o755)
-        self._write("11223344-5566-7788-99aa-bbccddeeff00", None)
-        done = subprocess.run(
-            ["sh", str(ROOT / GENERATOR), self.out, self.out + "/early", self.out + "/late", self.efivars],
-            capture_output=True, text=True, env=dict(os.environ,
-            PATH=str(fake) + os.pathsep + os.environ["PATH"]))
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertTrue((Path(self.out) / "efi.mount").exists(),
-                        "the udevadm fallback (the kernel's names) did not write efi.mount: %s" % done.stderr)
-        self.assertIn("/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00",
-                      (Path(self.out) / "efi.mount").read_text())
-
-    def test_a_udevadm_that_speaks_only_bare_ids_fails_closed(self):
-        """A udevadm whose records carry the BARE partition IDs (ID_ENTRY_UUID, the kernel's old names) — a map the
-        kernel's current names do not read: it is no map of the kernel's GPT: no ESP is mounted (the kernel's map
-        must be the map, and a map that cannot be read is not one)."""
-        import shutil
-        if not shutil.which("partx"):
-            self.skipTest("partx is the production path here: no fallback to exercise")
-        fake = Path(self.out) / "bin"
-        fake.mkdir(parents=True, exist_ok=True)
-        (fake / "partx").write_text("#!/bin/sh\nexit 1\n")
-        (fake / "udevadm").write_text(
-            "#!/bin/sh\necho DEVPATH=/devices/vda1;"
-            " echo ID_ENTRY_UUID=11223344-5566-7788-99aa-bbccddeeff00;"
-            " echo ID_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b; printf '\\0'\n")
-        for b in ("partx", "udevadm"):
-            os.chmod(fake / b, 0o755)
-        self._write("11223344-5566-7788-99aa-bbccddeeff00", None)
-        done = subprocess.run(
-            ["sh", str(ROOT / GENERATOR), self.out, self.out + "/early", self.out + "/late", self.efivars],
-            capture_output=True, text=True, env=dict(os.environ,
-            PATH=str(fake) + os.pathsep + os.environ["PATH"]))
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertFalse((Path(self.out) / "efi.mount").exists(), done.stderr)
-        self.assertIn("no partition of the ESP type", done.stderr)
+        fake.mkdir()
+        lsblk = fake / "lsblk"
+        lsblk.write_text(
+            "#!/bin/sh\n"
+            '[ "$*" = "--raw --noheadings --output PARTTYPE,PARTUUID" ] || exit 1\n'
+            "printf '%s\\n' ' ' 'abcd1234 ' "
+            f"'{ESP_TYPE.upper()} {uuid.upper()}'\n"
+        )
+        lsblk.chmod(0o755)
+        rc, said, units = _run(self.out, self.efivars, "", env={
+            **os.environ, "PATH": str(fake) + os.pathsep + os.environ["PATH"],
+        })
+        self.assertEqual(rc, 0, said)
+        self.assertEqual(self._mount(units["efi.mount"]).get("What"),
+                         "/dev/disk/by-partuuid/" + uuid, said)
 
     def test_a_missing_identity_refuses(self):
         """No LoaderDevicePartUUID (a boot without the stub, or a non-GPT boot): no units, a named refusal."""

@@ -56,7 +56,7 @@ HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
   * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
     exercised here (part 1 does that), and tabrmd keeps a disconnected client's sessions reclaimable where
     the kernel flushes them, so nothing that uses a session across processes is proven by it (#65).
-  * the ESP is a plain directory, /efi, on the runner's own filesystem, not a FAT partition: the unit's
+  * the ESP is a fixture mount at /efi, backed by tmpfs if the runner has no mount: the unit's
     RequiresMountsFor= and the write are exercised, not a vfat mount nor a boot from it (that is
     tests/test_baremetal_unlock_boot.py, boots 10-12).
   * the KMS daemon runs as the invoking user through systemd-run, not as the shipped regalia-kms.service
@@ -108,6 +108,7 @@ UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-app
          "regalia-site-check.service")
 ESP = "/efi"                     # the unit's ESP; made by the test where the runner has none, and removed after (MADE)
 MADE = []
+ESP_MOUNTS = []
 SITE_CRED = pathlib.Path(ESP) / node.SITE_ON_ESP     # the measured site document regalia-site-check binds (#615)
 SITE_PROM = pathlib.Path(metrics.RUN_DIR) / "site-check" / "site-check.prom"
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
@@ -300,9 +301,11 @@ def main():
         for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
+        if ESP_MOUNTS:
+            sh("umount", ESP)
         if MADE:
             shutil.rmtree(MADE[0], ignore_errors=True)
-        elif SITE_CRED.exists():                     # a runner's own /efi: only what this test wrote is removed
+        elif not ESP_MOUNTS and SITE_CRED.exists():
             SITE_CRED.unlink()
         dropins = [pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")] + \
                   [pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name) for name in UNITS]
@@ -478,6 +481,9 @@ def provision(work):
     if not os.path.exists(ESP):
         os.mkdir(ESP, 0o755)
         MADE.append(ESP)
+    if sh("mountpoint", "-q", ESP, check=False).returncode != 0:
+        sh("mount", "-t", "tmpfs", "-o", "mode=0700", "tmpfs", ESP)
+        ESP_MOUNTS.append(ESP)
     SITE_CRED.parent.mkdir(parents=True, exist_ok=True)
     SITE_CRED.write_bytes(bootcreds.site_document(sitecfg.validate(site), "/dev/disk/by-partlabel/regalia-root"))
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
