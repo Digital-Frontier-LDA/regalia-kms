@@ -831,7 +831,13 @@ class OnQemu(tub.OnSwtpm):
         # start, and the console asks, promptly: it asks from the start whatever the client does (#66, #70)
         broken = dict(credentials, **{"regalia.unlock-local": b"bm90IGEgY3JlZGVudGlhbA==\n"})
         self.reference = reference(espcreds.pcr12({n + ".cred": c for n, c in broken.items()}))
-        said = self.boot("1b-undecryptable", broken, recovery=True)
+        # Wait for the unit's failure on the console before answering. The prompt
+        # can appear while the mesh is still coming up and credential setup is pending.
+        def unlock_refused(console, _elapsed):
+            # PID 1 may ellipsize the unit name to fit the serial console.
+            return re.search(r"Failed to start [^\r\n]*regalia-unl", console) is not None
+
+        said = self.boot("1b-undecryptable", broken, recovery=unlock_refused)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertNotIn("regalia-unlock: gave the key", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
