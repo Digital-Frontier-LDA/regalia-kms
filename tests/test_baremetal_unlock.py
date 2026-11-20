@@ -1491,9 +1491,10 @@ class OnSwtpm(unittest.TestCase):
         os.mkdir(installed[2])
         config, local = self.d + "/unlock.json", self.d + "/local"
         with open(installed[2] + "/e2e.conf", "w") as f:
-            f.write("[Service]\nExecStart=\nExecStart=%s -config %s/unlock.json -tpm unix:%s/a.sock -request %s -volume /dev/mapper/%s\n"
+            f.write("[Service]\nExecCondition=\nExecCondition=%s -consumer-check unlock\n"
+                    "ExecStart=\nExecStart=%s -config %s/unlock.json -tpm unix:%s/a.sock -request %s -volume /dev/mapper/%s\n"
                     "LoadCredentialEncrypted=\nLoadCredential=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
-                    % (binary, inside, inside, request, self.name, unlock.LOCAL_NAME, local, self.d, inside))
+                    % (binary, binary, inside, inside, request, self.name, unlock.LOCAL_NAME, local, self.d, inside))
         self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
 
         def state(what):
@@ -1520,6 +1521,7 @@ class OnSwtpm(unittest.TestCase):
                 f.write(unlock.unseal_local(sealed, tpm2_device=self.tcti["a"], run=run))
             if start:
                 self.assertEqual(run(["systemctl", "start", "regalia-unlock.service"], capture_output=True).returncode, 0)
+                self.assertEqual(state("ActiveState"), "active", "the unlock unit must start before cryptsetup asks")
 
         results = {}
 
