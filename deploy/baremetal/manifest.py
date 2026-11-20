@@ -204,7 +204,7 @@ def genesis_topology(profile, count):
     require(profile in TOPOLOGY_NODES, "--topology is required, %s or %s: it is never inferred from the --node count"
             % (membership.SINGLE_NODE, membership.MULTI_NODE))
     nodes = TOPOLOGY_NODES[profile]
-    require(count == nodes, "--topology %s is a %d-node genesis: %d --node given (a different size is a different "
+    require(count == nodes or count == 1, "--topology %s is a %d-node genesis: %d --node given (a different size is a different "
             "--topology, never a fallback)" % (profile, nodes, count))
     topology = {"profile": profile, "nodes": nodes}
     if profile == membership.SINGLE_NODE:
