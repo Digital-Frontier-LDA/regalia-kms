@@ -81,6 +81,13 @@ func conditionFile(t *testing.T, path string) {
 	}
 }
 
+func useTestMarker(t *testing.T) {
+	t.Helper()
+	previous := preGenesisMarker
+	preGenesisMarker = filepath.Join(t.TempDir(), "regalia-pre-genesis")
+	t.Cleanup(func() { preGenesisMarker = previous })
+}
+
 func callRenderCheck(t *testing.T, env renderEnv, diagnostics io.Writer) int {
 	t.Helper()
 	factory := renderEnvForCheck
@@ -174,11 +181,21 @@ func TestRenderCondition(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			useTestMarker(t)
 			f := newConditionFixture(t)
 			c.change(t, f)
 			var diagnostics strings.Builder
 			if got := callRenderCheck(t, f.env, &diagnostics); got != c.code {
 				t.Fatalf("condition exit = %d, want %d: %s", got, c.code, diagnostics.String())
+			}
+			wantConsumer := 0
+			if c.code == 1 {
+				wantConsumer = 1
+			}
+			for _, name := range []string{"wg-boot", "unlock"} {
+				if got := run([]string{"-consumer-check", name}, io.Discard); got != wantConsumer {
+					t.Fatalf("%s consumer exit = %d, want %d after render exit %d", name, got, wantConsumer, c.code)
+				}
 			}
 			if c.code == 0 {
 				if diagnostics.Len() != 0 || f.mounts != 0 || f.nv.calls != 0 {
@@ -222,6 +239,7 @@ func TestRenderCheckDispatchExitCode(t *testing.T) {
 func TestRenderCheckRunCleanup(t *testing.T) {
 	for _, name := range []string{"normal", "panic"} {
 		t.Run(name, func(t *testing.T) {
+			useTestMarker(t)
 			f := newConditionFixture(t)
 			want := 1
 			if name == "panic" {
@@ -246,6 +264,7 @@ func TestRenderCheckRunCleanup(t *testing.T) {
 }
 
 func TestRenderCheckFactoryPanicFailsHard(t *testing.T) {
+	useTestMarker(t)
 	factory := renderEnvForCheck
 	t.Cleanup(func() { renderEnvForCheck = factory })
 	renderEnvForCheck = func(string) renderEnv { panic("synthetic environment factory panic") }
@@ -255,5 +274,65 @@ func TestRenderCheckFactoryPanicFailsHard(t *testing.T) {
 	}
 	if diagnostics.String() != "regalia-unlock: pre-genesis check aborted; boot render refused\n" {
 		t.Fatalf("condition factory panic must log one refusal: %q", diagnostics.String())
+	}
+}
+
+func TestRenderConditionClearsPriorDecision(t *testing.T) {
+	useTestMarker(t)
+	f := newConditionFixture(t)
+	check := func(want int) {
+		t.Helper()
+		var diagnostics strings.Builder
+		if got := callRenderCheck(t, f.env, &diagnostics); got != want {
+			t.Fatalf("condition exit = %d, want %d: %s", got, want, diagnostics.String())
+		}
+	}
+	check(1)
+	conditionFile(t, filepath.Join(f.stub, "regalia.site.cred"))
+	check(0)
+	if got := run([]string{"-consumer-check", "unlock"}, io.Discard); got != 0 {
+		t.Fatalf("consumer exit = %d, want 0 after enrolled retry", got)
+	}
+}
+
+func TestRenderConditionMarkerErrors(t *testing.T) {
+	for _, phase := range []string{"reset", "publish"} {
+		t.Run(phase, func(t *testing.T) {
+			useTestMarker(t)
+			f := newConditionFixture(t)
+			if phase == "reset" {
+				conditionFile(t, filepath.Join(preGenesisMarker, "unexpected"))
+			} else {
+				preGenesisMarker = filepath.Join(preGenesisMarker, "missing-parent")
+			}
+			var diagnostics strings.Builder
+			if got := callRenderCheck(t, f.env, &diagnostics); got != 255 ||
+				!strings.Contains(diagnostics.String(), "cannot "+phase+" pre-genesis decision") {
+				t.Fatalf("condition exit = %d, want hard failure during %s: %s", got, phase, diagnostics.String())
+			}
+		})
+	}
+}
+
+func TestConsumerConditionErrors(t *testing.T) {
+	useTestMarker(t)
+	conditionFile(t, preGenesisMarker)
+	for _, tc := range []struct {
+		args []string
+		line string
+	}{
+		{[]string{"-consumer-check", "wg-boot"}, "invalid pre-genesis decision marker"},
+		{[]string{"-consumer-check", "invalid-unit"}, "usage: -consumer-check"},
+	} {
+		var diagnostics strings.Builder
+		if got := run(tc.args, &diagnostics); got != 255 || !strings.Contains(diagnostics.String(), tc.line) {
+			t.Fatalf("%v exit = %d, want hard failure: %s", tc.args, got, diagnostics.String())
+		}
+	}
+	preGenesisMarker = filepath.Join(preGenesisMarker, "unexpected")
+	var diagnostics strings.Builder
+	if got := run([]string{"-consumer-check", "unlock"}, &diagnostics); got != 255 ||
+		!strings.Contains(diagnostics.String(), "cannot read pre-genesis decision") {
+		t.Fatalf("consumer exit = %d, want hard failure on stat error: %s", got, diagnostics.String())
 	}
 }

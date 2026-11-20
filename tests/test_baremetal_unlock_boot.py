@@ -161,6 +161,12 @@ def unattended(test, said):
     test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
 
 
+def initrd_unit(test, console, unit):
+    prefix = f"REGALIA-E2E-INITRD regalia-{unit} "
+    test.assertIn(prefix + "journal=ok", console, f"missing current-boot journal for {unit}")
+    return "\n".join(line[len(prefix):] for line in console.splitlines() if line.startswith(prefix))
+
+
 # ---- the verity /usr's boots (#61 K61V-4): what each boot's report says, parsed (e2e/lib/boot-guest/e2e-report) ----
 
 def verity_proof(said):
@@ -699,8 +705,15 @@ class OnQemu(tub.OnSwtpm):
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0])
         said = self.boot("1-enrolment", enrol_disk=image, recovery=True)
         self.assertRegex(said, PROMPT.pattern.decode())
-        # with no file on the ESP the two units do not start (a path that is not there is fatal), and the console
-        # asks promptly: nothing waits on the socket for a client that never came
+        for unit, diagnostic in (
+            ("boot-render", "no site credential: expected pre-genesis skip"),
+            ("wg-boot", "regalia-wg-boot: expected pre-genesis skip"),
+            ("unlock", "regalia-unlock: expected pre-genesis skip"),
+        ):
+            with self.subTest(pre_genesis_unit=unit):
+                journal = initrd_unit(self, said, unit)
+                self.assertIn(diagnostic, journal, f"{unit} did not skip before credential setup")
+                self.assertNotRegex(journal, r"Failed (?:with result|to start|to set up credentials)|243/CREDENTIALS")
         print("boot 1: the console asked %.0f s after the guest started" % self.prompted_after, file=sys.stderr)
         self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
@@ -761,6 +774,22 @@ class OnQemu(tub.OnSwtpm):
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
 
+        # Present invalid site data must reach render validation and block both
+        # consumers. The independent console agent can still open the volume.
+        bad_site = dict(credentials, **{"regalia.site": b"{"})
+        self.reference = reference(espcreds.pcr12({n + ".cred": c for n, c in bad_site.items()}))
+        said = self.boot("1a-bad-site", bad_site, recovery=True)
+        self.assertRegex(said, PROMPT.pattern.decode())
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        self.assertNotIn("regalia-unlock: gave the key", said)
+        journal = initrd_unit(self, said, "boot-render")
+        self.assertIn("regalia.site", journal)
+        self.assertIn("Failed with result 'exit-code'", journal)
+        self.assertNotIn("expected pre-genesis skip", journal)
+        for unit in ("wg-boot", "unlock"):
+            journal = initrd_unit(self, said, unit)
+            self.assertNotRegex(journal, r"(?m)^(Starting|Started|Finished) |expected pre-genesis skip|243/CREDENTIALS")
+
         # boot 1b, A SEALED CREDENTIAL THAT DOES NOT DECRYPT (another machine's, or damaged): the client cannot
         # start, and the console asks, promptly: it asks from the start whatever the client does (#66, #70)
         broken = dict(credentials, **{"regalia.unlock-local": b"bm90IGEgY3JlZGVudGlhbA==\n"})
@@ -769,6 +798,10 @@ class OnQemu(tub.OnSwtpm):
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertNotIn("regalia-unlock: gave the key", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        journal = initrd_unit(self, said, "unlock")
+        self.assertIn("Failed with result 'exit-code'", journal)
+        self.assertRegex(journal, r"243/CREDENTIALS|Failed to set up credentials")
+        self.assertNotIn("expected pre-genesis skip", journal)
         print("boot 1b: the console asked %.0f s after the guest started" % self.prompted_after, file=sys.stderr)
         self.assertLess(self.prompted_after, 120)
 

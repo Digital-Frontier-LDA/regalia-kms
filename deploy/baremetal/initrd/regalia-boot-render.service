@@ -41,6 +41,7 @@ StandardOutput=journal+console
 StandardError=journal+console
 # ExecCondition has no credential setup (systemd v257 service_exec_flags). Only proven absence of
 # ESP/stub enrolment state AND all TPM anchor indices returns 1; evidence or errors return 255.
+# The check publishes proven absence in /run for the two ordered consumers.
 ExecCondition=/usr/bin/regalia-unlock -render-check
 ExecStart=/usr/bin/regalia-unlock -render /run/regalia-boot
 # The one credential it reads, by fixed path, as data: the measured site document. The image's command line

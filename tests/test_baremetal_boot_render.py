@@ -5,7 +5,8 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-UNIT = ROOT / "deploy/baremetal/initrd/regalia-boot-render.service"
+INITRD = ROOT / "deploy/baremetal/initrd"
+UNIT = INITRD / "regalia-boot-render.service"
 SOURCE = "/.extra/global_credentials/regalia.site.cred"
 
 
@@ -31,12 +32,31 @@ class SitePresence(unittest.TestCase):
         for key, value in expected.items():
             self.assertEqual(self.unit["Service"][key], value, key)
 
+    def assert_consumer_gate(self, name):
+        unit = configparser.ConfigParser(interpolation=None, strict=False)
+        unit.optionxform = str
+        unit.read(INITRD / f"regalia-{name}.service")
+        self.assertEqual(unit["Service"].get("ExecCondition"),
+                         f"/usr/bin/regalia-unlock -consumer-check {name}",
+                         f"{name} must check the render decision before credential setup")
+        self.assertIn("LoadCredentialEncrypted", unit["Service"])
+        for key in ("Requires", "After"):
+            self.assertIn(UNIT.name, unit["Unit"][key].split())
+
+    def test_wg_boot_consumer_gate(self):
+        self.assert_consumer_gate("wg-boot")
+
+    def test_unlock_consumer_gate(self):
+        self.assert_consumer_gate("unlock")
+
     def test_the_inventory_pins_the_changed_unit(self):
-        inventory = (ROOT / "deploy/baremetal/initrd/initrd-inventory.txt").read_text().splitlines()
-        entries = [line.split() for line in inventory if " usr/lib/systemd/system/regalia-boot-render.service " in line]
-        self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0][-1], hashlib.sha256(UNIT.read_bytes()).hexdigest(),
-                         "unit inventory digest must match the shipped bytes")
+        inventory = (INITRD / "initrd-inventory.txt").read_text().splitlines()
+        for unit in (UNIT, INITRD / "regalia-wg-boot.service", INITRD / "regalia-unlock.service"):
+            entries = [line.split() for line in inventory
+                       if f" usr/lib/systemd/system/{unit.name} " in line]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0][-1], hashlib.sha256(unit.read_bytes()).hexdigest(),
+                             "unit inventory digest must match the shipped bytes")
 
 
 if __name__ == "__main__":

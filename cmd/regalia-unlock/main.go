@@ -71,6 +71,9 @@ func run(arguments []string, diagnostics io.Writer) (status int) {
 		}()
 		return runRenderCheck(arguments, diagnostics)
 	}
+	if len(arguments) > 0 && arguments[0] == "-consumer-check" {
+		return runConsumerCheck(arguments, diagnostics)
+	}
 	err := runUnlock(arguments, os.Stdout, diagnostics)
 	if errors.Is(err, flag.ErrHelp) {
 		return 0

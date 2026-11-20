@@ -29,6 +29,8 @@ Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=oneshot
+# Consume the ordered renderer's pre-genesis decision before loading encrypted credentials.
+ExecCondition=/usr/bin/regalia-unlock -consumer-check wg-boot
 RemainAfterExit=yes
 # No EnvironmentFile=: boot.env is read by the script as data. A file that may come from
 # storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
