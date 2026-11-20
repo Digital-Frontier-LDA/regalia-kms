@@ -39,6 +39,9 @@ RemainAfterExit=yes
 # production command line does not forward the journal to the console. None is a secret.
 StandardOutput=journal+console
 StandardError=journal+console
+# ExecCondition has no credential setup (systemd v257 service_exec_flags). Only proven absence of
+# ESP/stub enrolment state AND all TPM anchor indices returns 1; evidence or errors return 255.
+ExecCondition=/usr/bin/regalia-unlock -render-check
 ExecStart=/usr/bin/regalia-unlock -render /run/regalia-boot
 # The one credential it reads, by fixed path, as data: the measured site document. The image's command line
 # carries systemd.import_credentials=no; nothing else is taken from the ESP but the chain, which is verified.
