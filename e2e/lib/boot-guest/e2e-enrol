@@ -51,9 +51,25 @@ fi
 if [ -s /mnt/enrol/chrony.conf ]; then
   install -D -m 0644 /mnt/enrol/chrony.conf /var/lib/regalia-etc/chrony/regalia.conf
 fi
-# ... and node_exporter's arguments (MONITORING.md: metrics node-exporter-args), its EnvironmentFile's /var name
+# ... and node_exporter's arguments (MONITORING.md: metrics node-exporter-args), its EnvironmentFile's /var name.
+# Without this file the unit is skipped (its ConditionPathExists, regalia-kms-r1s.17) and listens on nothing
 if [ -s /mnt/enrol/node-exporter.default ]; then
   install -D -m 0644 /mnt/enrol/node-exporter.default /var/lib/regalia-etc/default/prometheus-node-exporter
+fi
+# ... and node_exporter's web configuration, the repository's production web.yml (regalia-kms-r1s.17): its
+# mutual TLS (RequireAndVerifyClientCert, TLS 1.3). Written beside the server material the test generates:
+# /var's names, because the test's /etc is a tmpfs copy made at every boot and its links must not break. The
+# server key goes to the service's user, as MONITORING.md's hand-off gives it to the node. The client
+# fixtures (a trusted client certificate, and one from another CA) are the test's probe inputs, kept on the
+# enrolment disk itself: the probe runs while that disk is still attached (the report does not power off)
+if [ -s /mnt/enrol/node-exporter.web.yml ]; then
+  install -D -m 0644 /mnt/enrol/node-exporter.web.yml /var/lib/regalia-etc/regalia/node-exporter/web.yml
+fi
+if [ -s /mnt/enrol/node-exporter.server.pem ]; then
+  install -D -m 0644 /mnt/enrol/node-exporter.server.pem /var/lib/regalia-etc/regalia/node-exporter/server.pem
+fi
+if [ -s /mnt/enrol/node-exporter.server.key ]; then
+  install -D -m 0640 -o root -g prometheus /mnt/enrol/node-exporter.server.key /var/lib/regalia-etc/regalia/node-exporter/server.key
 fi
 # THIS HOST'S FIREWALL, its audit collector configuration and a PIN credential (regalia-kms-r1s.8), when the enrolment disk
 # carries them, each written at its /var name as the operator writes it (README.md): the image enables nftables.service,

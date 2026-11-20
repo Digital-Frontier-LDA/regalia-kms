@@ -479,3 +479,21 @@ class NodeMetricsDirectories(unittest.TestCase):
         from deploy.baremetal import trails
         self.assertFalse(set(names) & {name + ".prom" for name in trails.TRAILS})     # no basename shared with a shipper's file
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["ExecStart"].count("-metrics /run/regalia-metrics/audit-ship/%i.prom"), 1)
+
+    def test_the_exporter_starts_only_on_this_hosts_own_arguments(self):
+        """regalia-kms-r1s.17: the image replaces Debian's /etc/default/prometheus-node-exporter with the tmpfiles
+        link to /var/lib/regalia-etc (00-regalia-etc.tmpfiles.conf), the operator's per-host ARGS (MONITORING.md).
+        Without it, the enabled unit failed at every boot with "Failed to load environment files" and hit the start
+        limit (staging DL360 build 8). The unit now skips until the per-host file is written: its gate is the
+        PERSISTENT /var name, not /etc's link, so the package's own file (the factory copy's L+ source) can never
+        satisfy it. Removing the line, or gating on /etc's link, makes this test fail by name."""
+        dropin = unit("prometheus-node-exporter.service.d/regalia.conf")
+        self.assertIn("Unit", dropin, "no [Unit] section: the exporter has no start guard")
+        self.assertEqual(dropin["Unit"]["ConditionPathExists"], "/var/lib/regalia-etc/default/prometheus-node-exporter")
+        # the /var name, not /etc's link: the link is always present (the factory copy), and its target may not be
+        self.assertNotEqual(dropin["Unit"]["ConditionPathExists"], "/etc/default/prometheus-node-exporter")
+        # and the image does keep that link to the same name: the gate and the link cannot drift apart
+        self.assertIn("L+ /etc/default/prometheus-node-exporter - - - - /var/lib/regalia-etc/default/prometheus-node-exporter",
+                      (UNITS / "00-regalia-etc.tmpfiles.conf").read_text())
+        # the guard must not have dropped the group: the textfile directories stay readable (the test above)
+        self.assertEqual(dropin["Service"]["SupplementaryGroups"], "regalia-metrics")

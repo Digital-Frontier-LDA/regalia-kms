@@ -217,6 +217,25 @@ def boot_entry(said):
     return found.group(1), (label.group(1).strip() if label else None)
 
 
+def exporter_state(said):
+    """The REGALIA-E2E-EXPORTER lines (regalia-kms-r1s.17) as {"state", "result", "restarts", "journal", "listen"},
+    or None: the enabled unit's condition-skip, by name. A boot whose report predates the line has None (an assertion
+    on a verity boot is the test's own, not the report's)."""
+    unit = re.search(r"REGALIA-E2E-EXPORTER unit=(\S+) result=(\S+) restarts=(\S+)", said)
+    if not unit:
+        return None
+    found = re.search(r"REGALIA-E2E-EXPORTER journal=(.*)", said)
+    listen = re.search(r"REGALIA-E2E-EXPORTER listen=(.*)", said)
+    return {"state": unit.group(1), "result": unit.group(2), "restarts": unit.group(3),
+            "journal": found.group(1) if found else "", "listen": listen.group(1) if listen else ""}
+
+
+def exporter_probes(said):
+    """The REGALIA-E2E-PROBE lines (the mTLS cases of the boot where the test's web.yml is staged) as
+    {name: "ok 200 14|refused ...|denied 403|..."}, or {}. "done" is the report's own end marker, dropped here."""
+    return {m.group(1): m.group(2) for m in re.finditer(r"REGALIA-E2E-PROBE (\S+) http=(.*)", said) if m.group(1) != "done"}
+
+
 def esp_mount(said):
     """Parse the exact ESP mount and write probe reported by the guest."""
     found = re.search(r"REGALIA-E2E-ESP ([^\r\n]+)", said)
@@ -286,6 +305,45 @@ class VerityReport(unittest.TestCase):
         old = ("REGALIA-E2E-ESP mount=ok source=/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00 type=vfat "
                "options=rw,nosuid,nodev,noexec,fmask=0077,dmask=0077 boot-competing=absent kernel=6.12.0 modules-tree=absent")
         self.assertIsNone(esp_mount(old))
+
+    def test_the_exporter_state_and_probes(self):
+        """regalia-kms-r1s.17: the exporter's lines, as e2e-report writes them. The skipped line is a unit whose
+        ConditionPathExists held it (inactive/dead/no, no restarts, its journal's clean); the started line is the
+        configured boot (active/running/yes, 9100 only). The probes' cases are the mTLS assertions, by name: the
+        trusted client got its metrics, and the unauthenticated and the foreign-CA clients did not. A mutant that
+        removes the guard, or starts the exporter on the package default, reads as one of the other shapes, and the
+        assertions fail on the line, not on a later PCR or the boot's outcome."""
+        skipped = ("REGALIA-E2E-EXPORTER unit=inactive/dead/no result=success restarts=0\n"
+                   "REGALIA-E2E-EXPORTER journal=none\n"
+                   "REGALIA-E2E-EXPORTER listen=skipped\n")
+        self.assertEqual(exporter_state(skipped), {"state": "inactive/dead/no", "result": "success", "restarts": "0",
+                                                   "journal": "none", "listen": "skipped"})
+        # the build 8 shape (the failure this guard removes): resources, a restart, the environment file's name
+        failed = ("REGALIA-E2E-EXPORTER unit=activating/start-limit/no result=resources restarts=4\n"
+                  "REGALIA-E2E-EXPORTER journal=Failed to load environment files: No such file or directory|\n"
+                  "REGALIA-E2E-EXPORTER listen=skipped\n")
+        self.assertEqual(exporter_state(failed)["state"], "activating/start-limit/no")
+        self.assertIn("Failed to load environment", exporter_state(failed)["journal"])
+        started = ("REGALIA-E2E-EXPORTER unit=active/running/yes result=success restarts=0\n"
+                   "REGALIA-E2E-EXPORTER journal=none\n"
+                   "REGALIA-E2E-EXPORTER listen=:9100\n")
+        self.assertEqual(exporter_state(started)["listen"], ":9100")
+        self.assertIsNone(exporter_state("nothing"))
+        # the probes: the configured boot's three cases, by name, with the report's own end marker dropped
+        probes = ("REGALIA-E2E-PROBE trusted http=ok 200 14\n"
+                  "REGALIA-E2E-PROBE missing http=refused reason=[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED]\n"
+                  "REGALIA-E2E-PROBE wrong http=refused reason=[SSL: TLSV1_ALERT_UNKNOWN_CA]\n"
+                  "REGALIA-E2E-PROBE done\n")
+        self.assertEqual(exporter_probes(probes), {"trusted": "ok 200 14",
+                                                   "missing": "refused reason=[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED]",
+                                                   "wrong": "refused reason=[SSL: TLSV1_ALERT_UNKNOWN_CA]"})
+        # a regression to the package default (no TLS, every address) reads as none of the cases' refusals
+        plaintext = ("REGALIA-E2E-PROBE trusted http=ok 200 14\n"
+                     "REGALIA-E2E-PROBE missing http=ok 200 14\n"
+                     "REGALIA-E2E-PROBE wrong http=ok 200 14\n"
+                     "REGALIA-E2E-PROBE done\n")
+        self.assertIn("ok", exporter_probes(plaintext)["missing"], "an unauthenticated client got metrics")
+        self.assertEqual(exporter_probes("nothing"), {})
 
 
 class HostTpmFault(unittest.TestCase):
@@ -1265,15 +1323,21 @@ class OnQemuVerity(OnQemu):
     the A/B slots and the fallback, and a broken factory /etc, each beside a boot that passes."""
     test_a_host_boots_through_a_peer_and_with_no_peer_it_asks_for_the_recovery_key = None
     LABEL = "regalia e2e"            # the entry e2e-enrol makes through bootnext, as install-host.sh's step 7 would
-    # node_exporter's EnvironmentFile, a link to /var that enrolment writes (00-regalia-etc.conf): without it the unit
-    # fails to start (Result=resources, measured on an unenrolled guest). The test's stand-in listens on loopback only
-    NODE_EXPORTER = b"# the test's (MONITORING.md: metrics node-exporter-args renders a host's)\nARGS=\"--web.listen-address=127.0.0.1:9100\"\n"
+    # node_exporter's EnvironmentFile, a link to /var that enrolment writes (00-regalia-etc.conf). The test's is
+    # the production rendering (metrics.node_exporter_args): its host's address in the guest, the web configuration
+    # (mutual TLS, regalia-kms-r1s.17) and the writers' textfile directories
+    NODE_EXPORTER = None
+    # the test's monitoring CA, server certificate and client fixtures, made per boot of the test (ephemeral, this
+    # machine only): the production web.yml's RequireAndVerifyClientCert, as the test's scraper would meet it
+    NODE_EXPORTER_TLS = None
     CHRONY = b"# the test's: two NTS servers no guest reaches (chronyd runs, and synchronises with nothing)\nserver 198.18.3.2 iburst nts\nserver 198.18.3.3 iburst nts\n"
     # THE PER-HOST FILES (regalia-kms-r1s.8), each at its /var name (e2e-enrol writes them as an operator does): what the
     # image's gates read. The node units' gate, node.json, is NOT written: the guest is no member of a membership, so
     # those units must stay skipped, which is their gate's other half shown
     RULESET_VAR = "lib/regalia-etc/nftables.d/regalia-kms.nft"           # under /var
     AUDIT_ENV_VAR = "lib/regalia-etc/regalia/audit-ship.env"
+    # the exporter's per-host EnvironmentFile, on /var (00-regalia-etc.tmpfiles.conf's L+): its absence skips the unit
+    EXPORTER_VAR = "lib/regalia-etc/default/prometheus-node-exporter"
     NODE_UNITS = ("regalia-authtime.service", "regalia-site-check.service", "regalia-wg-apply.service", "regalia-wg-apply.path",
                   "regalia-boot-session.service", "regalia-admission.service", "regalia-sync.service", "regalia-etcd.service",
                   "regalia-esp-advance.service", "regalia-esp-advance.path")
@@ -1374,6 +1438,56 @@ class OnQemuVerity(OnQemu):
             self.installed = json.load(f)
         self.assertEqual((self.installed["layout"], self.installed["usr"]["roothash"]), ("verity-ab", self.usr["a"]["roothash"]))
         self.machine_id = None
+        self.exporter_materials = None
+
+    def exporter_materials_ready(self):
+        """regalia-kms-r1s.17: the exporter's per-host inputs, made once for the test's boots. The ARGS is the
+        production rendering (metrics.node_exporter_args, this guest's site: the loopback address, the web
+        configuration, the writers' directories). The web.yml is the repository's own (mutual TLS 1.3,
+        RequireAndVerifyClientCert), and the server and client material is the test's: a monitoring CA, this
+        node's server certificate (the name its SAN carries, 127.0.0.1), a trusted client certificate, and a
+        client certificate of ANOTHER CA (the wrong-CA case). All of it ephemeral, this machine only: the
+        production image and its artifacts never carry it (the enrolment disk is the test's, and is the guest's
+        only channel)."""
+        if self.exporter_materials is not None:
+            return self.exporter_materials
+        import datetime
+        import ipaddress
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+        from deploy.baremetal import metrics
+        now = datetime.datetime.now(datetime.timezone.utc)
+        def certificate(cn, key, issuer, signer, ca, san=None):
+            builder = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+                       .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer)]))
+                       .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                       .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=30))
+                       .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+            if san:
+                builder = builder.add_extension(x509.SubjectAlternativeName([x509.IPAddress(san)]), critical=False)
+            return builder.sign(signer, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
+        def key(key_):
+            return key_.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        monitoring_ca_key, server_key, client_key, foreign_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(4))
+        monitoring_ca = certificate("e2e monitoring CA", monitoring_ca_key, "e2e monitoring CA", monitoring_ca_key, True)
+        server = certificate("127.0.0.1", server_key, "e2e monitoring CA", monitoring_ca_key, False, san=ipaddress.IPv4Address("127.0.0.1"))
+        trusted_client = certificate("e2e scraper", client_key, "e2e monitoring CA", monitoring_ca_key, False)
+        # the wrong-CA case: a CA of its own, whose certificate the production web.yml's client_ca_file does not hold
+        foreign_ca_key = ec.generate_private_key(ec.SECP256R1())
+        foreign_ca = certificate("e2e foreign CA", foreign_ca_key, "e2e foreign CA", foreign_ca_key, True)
+        wrong_client = certificate("e2e foreign scraper", foreign_key, "e2e foreign CA", foreign_ca_key, False)
+        cfg = self.site("a")   # node_exporter_args reads only host_ipv4, and this host's is the guest's own
+        args = b"ARGS=\"" + metrics.node_exporter_args(cfg).encode() + b"\"\n"
+        with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
+            web_yml = f.read()
+        self.exporter_materials = {"default": args, "web.yml": web_yml,
+                                   "server.pem": server, "server.key": key(server_key),
+                                   "monitoring-ca.pem": monitoring_ca,
+                                   "client.crt": trusted_client, "client.key": key(client_key),
+                                   "client-wrong.crt": wrong_client, "client-wrong.key": key(foreign_key)}
+        return self.exporter_materials
 
     def proven(self, said, slot, entry=True):
         """What every boot that reached the system shows (the proof): /usr from dm-verity, verified, under the root hash
@@ -1410,23 +1524,73 @@ class OnQemuVerity(OnQemu):
         no_shell(self, said)
         return proof
 
-    def started(self, said):
+    def started(self, said, configured=True):
         """The image's own units, enabled under /usr, ran: the factory /etc, the system users, AppArmor with the KMS's
         profile, chronyd, node_exporter, and the KMS's main process (started is what is shown, not serving: the test
         gives it no configuration). Not `systemctl is-enabled`: it counts links under /etc and /run only, and says
-        "disabled" for a unit the image wants from /usr (measured on the first local run); started is the proof."""
+        "disabled" for a unit the image wants from /usr (measured on the first local run); started is the proof.
+        `configured` (regalia-kms-r1s.17): the per-host EnvironmentFile's written on /var, so the exporter started.
+        Without it (the unconfigured boots) the exporter is the other half of the proof: skipped, by name."""
         units = unit_states(said)
         self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
         for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
             self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
-        for unit in ("chrony.service", "prometheus-node-exporter.service"):
-            self.assertEqual(units[unit]["active"], "active", (unit, units[unit]))
-            self.assertGreater(units[unit]["started"], 0, (unit, units[unit]))
+        self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
+        self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
+        if configured:
+            self.assertEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
+            self.assertGreater(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
+        else:
+            self.exporter_skipped(said, units)
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.per_host_started(said)
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
         # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
         self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
+
+    def exporter_skipped(self, said, units=None):
+        """regalia-kms-r1s.17, AC1: the enabled exporter, with its per-host EnvironmentFile absent (the L+ link to
+        /var dangling), is SKIPPED, not failed: its ConditionPathExists says no, its main process never started, it
+        has retried nothing (no restarts, no start limit, its Result is not resources) and it holds no listener.
+        A mutant that removes the guard makes the unit start, and a mutant that starts it on the package default
+        makes it listen: both fail these lines by name. (The journal is the boot-scoped exporter's own words: a unit
+        that has retried or failed names its cause there.)"""
+        units = units or unit_states(said)
+        state = exporter_state(said)
+        self.assertIsNotNone(state, "no REGALIA-E2E-EXPORTER line: the report did not run")
+        self.assertEqual(state["state"], "inactive/dead/no", "the exporter is not condition-skipped: %r" % state)
+        self.assertEqual(state["result"], "success", state)
+        self.assertEqual(state["restarts"], "0", "the exporter retried (a start limit would follow): %r" % state)
+        self.assertNotRegex(state["journal"], r"Failed to load environment|Failed with result|Start request|limit",
+                            "the exporter's journal says it failed or retried: %r" % state)
+        self.assertEqual(state["listen"], "skipped", "the exporter holds a listener with no per-host configuration: %r" % state)
+        self.assertEqual(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
+        self.assertNotEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
+        self.assertEqual(units["prometheus-node-exporter.service"]["result"], "success",
+                         "the exporter is failed (the package's environment file is gone): %r" % units["prometheus-node-exporter.service"])
+        print("boot proof: the unconfigured exporter is skipped, listens on nothing, %r" % state, file=sys.stderr)
+
+    def exporter_configured(self, said):
+        """regalia-kms-r1s.17, AC2: with the per-host ARGS and the mutual-TLS web.yml staged, the exporter is active,
+        holds exactly the listener its ARGS configure (127.0.0.1:9100 in the test), and serves the metrics only to
+        the client the monitoring CA authenticated: the report's probe cases, by name (a regression to the package
+        default, every address with no TLS, fails the listen line and the probes alike)."""
+        state = exporter_state(said)
+        self.assertIsNotNone(state, "no REGALIA-E2E-EXPORTER line: the report did not run")
+        self.assertEqual(state["state"], "active/running/yes", "the exporter did not start on its own configuration: %r" % state)
+        self.assertEqual(state["restarts"], "0", state)
+        self.assertNotRegex(state["journal"], r"Failed to load environment|Failed with result|limit", state)
+        self.assertEqual(state["listen"], ":9100", "the exporter does not listen on exactly 127.0.0.1:9100 (the package "
+                         "default, every address, would show more): %r" % state)
+        probes = exporter_probes(said)
+        self.assertIn("trusted", probes, "no trusted probe: the web material was not staged")
+        self.assertIn("ok 200 ", probes["trusted"], "the trusted client's metrics: %r" % probes)
+        self.assertRegex(probes["trusted"], r"^ok 200 \d+$", probes["trusted"])
+        self.assertIn("missing", probes, "no missing-cert probe")
+        self.assertNotIn("ok", probes["missing"], "an unauthenticated client got an answer: %r" % probes)
+        self.assertIn("wrong", probes, "no wrong-CA probe")
+        self.assertNotIn("ok", probes["wrong"], "a client of another CA got an answer: %r" % probes)
+        print("boot proof: the configured exporter on 9100, mTLS only: %r" % probes, file=sys.stderr)
 
     def write_slot_b(self, slot):
         """The updater's step, by hand: `slot`'s image into usr-b and usr-b-verity (partitions 4 and 5), their PARTUUIDs
@@ -1462,11 +1626,17 @@ class OnQemuVerity(OnQemu):
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
                                          extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY,
-                                                "node-exporter.default": self.NODE_EXPORTER, **self.per_host_files()})
+                                                **self.exporter_materials_ready(), **self.per_host_files()})
         said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
+        # the exporter, CONFIGURED: its per-host ARGS and the production web.yml's mutual TLS, staged on /var. It
+        # is active on its configured listener only, and the metrics go out to the monitoring CA's client and to
+        # no other (the report's probe cases, by name). This boot's enrolment disk stays attached (the test's
+        # channel: the probe's client fixtures are on it, and the report reads them before the power off)
+        self.started(said)
+        self.exporter_configured(said)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1516,11 +1686,25 @@ class OnQemuVerity(OnQemu):
 
         self.enrol_membership()
 
-        # boot v2, THE CONTROL: unattended through a peer, from the installer's firmware entry; the proof, and the
-        # image's units started from their enablement under /usr
+        # boot v2, THE UNCONFIGURED BOOT (regalia-kms-r1s.17, AC1): the same disk, but the exporter's per-host
+        # EnvironmentFile moved aside on /var (its L+ link now dangles: the factory /etc's copy is the package's
+        # own). The enabled exporter must be SKIPPED, not failed: no start, no restart, no start limit, no
+        # listener, and the host's units settle the same way as the control's (the KMS's AssertPathExists holds:
+        # its file is the ruleset's, not the exporter's)
         self.reference = reference(expected["pcr12"])
+        self.var_rename([(self.EXPORTER_VAR, self.EXPORTER_VAR + ".aside")])
         since = len(self.events)
-        said = self.boot("v2-control", credentials, nvram="host")
+        said = self.boot("v2-unconfigured", credentials, nvram="host")
+        unattended(self, said)
+        self.proven(said, "a")
+        self.started(said, configured=False)
+        self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
+
+        # boot v2c, THE CONTROL: the per-host file back, unattended through a peer, from the installer's firmware
+        # entry; the proof, and the image's units started from their enablement under /usr
+        self.var_rename([(self.EXPORTER_VAR + ".aside", self.EXPORTER_VAR)])
+        since = len(self.events)
+        said = self.boot("v2c-control", credentials, nvram="host")
         unattended(self, said)
         self.proven(said, "a")
         self.started(said)
