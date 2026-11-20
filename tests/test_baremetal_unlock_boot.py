@@ -705,7 +705,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
-        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=present",
+        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=absent",
                          "ESP_MOUNT_AFTER_SWITCH_ROOT: the UKI initrd must preload the ESP filesystem")
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):

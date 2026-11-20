@@ -463,6 +463,11 @@ RESET_DROPIN = ("99-regalia-no-credentials.conf", b"[Service]\nImportCredential=
 # and the review refuses an initrd without them or with other bytes (ours()).
 FIREWALL_MODULES = ("nf_tables", "nft_ct", "nf_conntrack")
 FIREWALL_MODULES_LOAD = ("usr/lib/modules-load.d/regalia-firewall.conf", "".join(m + "\n" for m in FIREWALL_MODULES).encode())
+# ESP mounts after switch-root (r1s.19), even before genesis: stock Debian builds these as modules.
+# The initrd already carries this set and vfat's fat dependency; loading it here preserves module-free /usr.
+# binfmt_misc fixes the same omission for systemd-binfmt (r1s.18). No extra .ko payload is added.
+FILESYSTEM_MODULES = ("vfat", "nls_cp437", "nls_ascii", "nls_iso8859-1", "nls_utf8", "binfmt_misc")
+FILESYSTEM_MODULES_LOAD = ("usr/lib/modules-load.d/regalia-filesystems.conf", "".join(m + "\n" for m in FILESYSTEM_MODULES).encode())
 # Where systemd 257 and udev read what they run, in the initrd (systemd.unit(5) "System Unit Search Path",
 # systemd.generator(7), systemd.environment-generator(7), udev(7), systemd-system.conf(5)). /lib is
 # /usr/lib on a merged-/usr image, and is read through its link.
@@ -485,8 +490,8 @@ SEARCH_DIRS = (
     "etc/sysctl.d", "run/sysctl.d", "usr/local/lib/sysctl.d", "usr/lib/sysctl.d",
     "etc/tmpfiles.d", "run/tmpfiles.d", "usr/local/lib/tmpfiles.d", "usr/lib/tmpfiles.d",
     "etc/modules-load.d", "run/modules-load.d", "usr/local/lib/modules-load.d", "usr/lib/modules-load.d")
-# modules-load.d: the one file allowed there is the firewall's (r1s.15); any other is refused by rule, not only by the
-# inventory, since it would make the initrd load a module on every boot
+# modules-load.d: only the firewall and filesystem files are allowed (r1s.15, r1s.19); every other path
+# is refused by rule as well as inventory, since it would load a module on every boot
 MODULES_LOAD_DIRS = tuple(d for d in SEARCH_DIRS if d.endswith("/modules-load.d"))
 SEARCH_FILES = ("etc/systemd/system.conf", "etc/profile", "etc/modprobe.conf", "etc/sysctl.conf", "etc/udev/udev.conf")
 UNIT_SEARCH_DIRS = SEARCH_DIRS[:12]
@@ -859,7 +864,8 @@ def ours():
         with open(os.path.join(INITRD_DIR, name), "rb") as f:
             pinned[path] = ("file", sha256(f.read()))
     pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
-    pinned[FIREWALL_MODULES_LOAD[0]] = ("file", sha256(FIREWALL_MODULES_LOAD[1]))
+    for path, body in (FIREWALL_MODULES_LOAD, FILESYSTEM_MODULES_LOAD):
+        pinned[path] = ("file", sha256(body))
     return pinned
 
 
@@ -1041,8 +1047,9 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 findings.append("%s: a drop-in of the unlock path that is not the module's" % path)
         if name == RESET_DROPIN[0] and kind == "file" and value != sha256(RESET_DROPIN[1]):
             findings.append("%s is not the module's credential reset" % path)
-        if any(path.startswith(d + "/") for d in MODULES_LOAD_DIRS) and path != FIREWALL_MODULES_LOAD[0]:
-            findings.append("%s: a modules-load.d file that is not the module's (only %s is allowed)" % (path, FIREWALL_MODULES_LOAD[0]))
+        if any(path.startswith(d + "/") for d in MODULES_LOAD_DIRS) and path not in (FIREWALL_MODULES_LOAD[0], FILESYSTEM_MODULES_LOAD[0]):
+            findings.append("%s: a modules-load.d file that is not the module's (only %s and %s are allowed)"
+                            % (path, FIREWALL_MODULES_LOAD[0], FILESYSTEM_MODULES_LOAD[0]))
     _instructions(files, findings)
     clients = {}
     for path in UNLOCK_BINARIES:

@@ -241,6 +241,9 @@ if [ "$CASES" = verity ]; then
   [ ! -d "$GUEST/usr/lib/modules" ] || { echo "unlock-boot-qemu: shipped /usr unexpectedly carries modules"; exit 2; }
 else
   GUEST="$ROOT"
+  # This synthetic guest models the same module-free /usr as the real image. The UKI initrd is
+  # already built; keep its kernel in /boot for ukify, but no builder modules may help after switch-root.
+  rm -rf -- "$GUEST/usr/lib/modules"
   U=deploy/baremetal/units
   for f in "$U/regalia-etc-factory.service" "$U/00-regalia-etc.tmpfiles.conf"; do
     [ -f "$f" ] || { echo "unlock-boot-qemu: $f is missing: the guest's /etc could not be made at boot"; exit 2; }
@@ -449,6 +452,8 @@ fi
 if ! grep -q "^$TEST" <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
+# The initrd's actual module payload and preload entry must belong to the UKI kernel just booted.
+python3 -BEs e2e/tests/image-esp-content.py "$W/initrd-build" --kernel "$KVER"
 [ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, the per-host units started after the reboot and gated without their files (the KMS refusing with no firewall), a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
 echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"
 
