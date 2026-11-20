@@ -270,12 +270,12 @@ class VerityReport(unittest.TestCase):
         partuuid, type, per-mount options, the vfat super-options (the masks, the filesystem's options, not the
         per-mount ones), the probe (write/read/remove), and the absence of a competing /boot mount."""
         line = ("REGALIA-E2E-ESP mount=ok source=/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00 "
-                "partuuid=11223344-5566-7788-99aa-bbccddeeff00 type=vfat options=rw,nosuid,nodev,noexec "
+                "partuuid=11223344-5566-7788-99aa-bbccddeeff00 type=vfat options=rw,nosuid,nodev,noexec,relatime "
                 "super-options=fmask=0077,dmask=0077 probe=ok boot-competing=absent kernel=6.12.0 modules-tree=absent target=/efi")
         self.assertEqual(esp_mount(line), {"mount": "ok",
                                            "source": "/dev/disk/by-partuuid/11223344-5566-7788-99aa-bbccddeeff00",
                                            "partuuid": "11223344-5566-7788-99aa-bbccddeeff00",
-                                           "type": "vfat", "options": "rw,nosuid,nodev,noexec",
+                                           "type": "vfat", "options": "rw,nosuid,nodev,noexec,relatime",
                                            "super-options": "fmask=0077,dmask=0077", "probe": "ok",
                                            "boot-competing": "absent", "kernel": "6.12.0", "modules-tree": "absent", "target": "/efi"})
         failed = ("REGALIA-E2E-ESP mount=failed source= partuuid= type= options= "
@@ -775,7 +775,7 @@ class OnQemu(tub.OnSwtpm):
                       capture_output=True, text=True, check=True).stdout.strip().lower()
         self.assertTrue(disk_esp, "the disk's ESP partition has no PARTUUID")
         self.assertEqual(esp["partuuid"].lower(), disk_esp, esp)
-        self.assertEqual(set(esp["options"].split(",")), {"rw", "nosuid", "nodev", "noexec"}, esp)
+        self.assertEqual(set(esp["options"].split(",")), {"rw", "nosuid", "nodev", "noexec", "relatime"}, esp)
         self.assertTrue({"fmask=0077", "dmask=0077"} <= set(esp["super-options"].split(",")), esp)
         self.assertEqual(esp["probe"], "ok", esp)
         self.assertEqual(esp["boot-competing"], "absent", esp)
