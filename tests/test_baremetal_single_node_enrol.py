@@ -44,6 +44,22 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
         result = subprocess.run(["tpm2_getcap", "handles-nv-index"], check=True, capture_output=True, text=True)
         return {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", result.stdout)}
 
+    def config_inventory(self, *roots):
+        """Presence, modes and bytes of the configuration and state commit may install."""
+        inventory = {}
+        for root in roots:
+            if not os.path.exists(root):
+                inventory[root] = None
+                continue
+            for directory, names, files in os.walk(root):
+                names.sort()
+                inventory[directory] = ("directory", os.stat(directory).st_mode)
+                for name in sorted(files):
+                    path = os.path.join(directory, name)
+                    with open(path, "rb") as f:
+                        inventory[path] = ("file", os.stat(path).st_mode, f.read())
+        return inventory
+
     def ceremony(self, mutant=None):
         from e2e.lib import signed_boot as sb
 
@@ -154,16 +170,36 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                                     probe=lambda config: ([], ["no other node exists"]))
 
             if mutant == "without-owner-auth":
-                with self.assertRaisesRegex(enrol.Refused, "the TPM's owner authorization is set and enrolment takes it"):
+                before_nv = self.nv_indices()
+                self.assertEqual(before_nv, set(), "the fixture starts with no NV indices")
+                config_roots = (etc, self.d + "/etc-chrony", example["state_dir"])
+                before_config = self.config_inventory(*config_roots)
+                with self.assertRaises((enrol.Refused, membership.Refused)) as refused:
                     commit(authorization=None)
-                self.assertEqual(self.nv_indices(), set())
+                after_nv = self.nv_indices()
+                after_config = self.config_inventory(*config_roots)
+                with self.subTest(assertion="ownerauth guard message"):
+                    self.assertIn("the TPM's owner authorization is set and enrolment takes it from this node's envelope",
+                                  str(refused.exception))
+                with self.subTest(assertion="no NV writes before ownerauth refusal"):
+                    self.assertEqual(after_nv, before_nv)
+                with self.subTest(assertion="no config writes before ownerauth refusal"):
+                    self.assertEqual(after_config, before_config)
                 self.assertEqual(handed, [])
-                self.assertFalse(os.path.exists(etc + "node.json"))
                 # Positive control: the very same inputs commit once the authorization is supplied.
             epoch, digest = commit()
             self.assertEqual((epoch, digest), (1, membership.digest(man)))
             self.assertEqual(handed, [None], "the policy-writing sync step receives no owner authorization")
             here = node.Node(node.load(etc + "node.json"))
+            chain_path = here.path("membership.json")
+            self.assertTrue(os.path.isfile(chain_path), "committed manifest chain is missing: " + chain_path)
+            try:
+                with open(chain_path, "rb") as f:
+                    held_chain = membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
+                committed_manifest = membership.accept_chain(None, held_chain, root)
+            except (OSError, membership.Refused) as refusal:
+                self.fail("committed manifest chain is not readable and verifiable: " + str(refusal))
+            self.assertEqual(committed_manifest, man)
             self.assertEqual((here.anchor().value(), here.anchor().record()), (1, (1, digest)))
             self.assertEqual(here.store().load(), man)
             self.assertTrue({int(example[k], 16) for k in ("nv_epoch", "nv_heartbeat", "nv_signing")} <= self.nv_indices())
