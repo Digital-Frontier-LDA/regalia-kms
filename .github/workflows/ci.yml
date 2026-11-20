@@ -120,7 +120,8 @@ jobs:
         run: |
           sudo apt-get install -y -qq --no-install-recommends locales softhsm2 opensc python3-pykcs11 >/dev/null
           sudo locale-gen en_US.UTF-8 >/dev/null
-          python3 -Es -m unittest discover -s tests -p 'test_*.py'
+          # Name every skipped test and its reason; skips are evidence gaps, not passes.
+          python3 -Es -m unittest discover -v -s tests -p 'test_*.py'
 
       - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
         env:
@@ -164,7 +165,7 @@ jobs:
           REGALIA_EXPECT_PYTHON: "1"
         run: |
           umask 002
-          go test -race ./...
+          go test -race -v ./...
           # The piv-tagged tests too (DEV1, 2026-10-24): `go test ./...` builds without the tag and never ran them, 24
           # files, hardware-free ones among them (the YubiKey PIV driver, its seam and conformance). The physical ones
           # skip without their env. The packages are DERIVED from the files, never listed, so a new piv-tagged test
@@ -172,12 +173,12 @@ jobs:
           mapfile -t piv < <(grep -rlE --include='*_test.go' '^//go:build .*\bpiv\b' . | xargs -r grep -LE '^//go:build .*!piv' | xargs -r -n1 dirname | sort -u)
           [ "${#piv[@]}" -gt 0 ] || { echo "::error::no piv-tagged test file found: the tag or this step's search changed"; exit 1; }
           echo "piv-tagged test packages:"; printf '  %s\n' "${piv[@]}"
-          go test -race -tags piv "${piv[@]}"
-          ( cd adapters/sops && go test -race ./... )
+          go test -race -v -tags piv "${piv[@]}"
+          ( cd adapters/sops && go test -race -v ./... )
           # regalia-sign's claim is that GnuPG and git accept what it makes, so both must be here:
           # with this set, a test that cannot find them fails instead of skipping.
           gpg --version | head -1 && git --version
-          ( cd adapters/gpgsign && REGALIA_EXPECT_GPG=1 go test -race ./... )
+          ( cd adapters/gpgsign && REGALIA_EXPECT_GPG=1 go test -race -v ./... )
 
   # Folded jobs (CI minutes): software-TPM end-to-end checks (swtpm, tpm2-tools; SoftHSM for runtime-admission). Each former job is ONE step named after it, with its own
   # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
