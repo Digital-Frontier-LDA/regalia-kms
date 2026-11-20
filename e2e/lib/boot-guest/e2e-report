@@ -70,6 +70,17 @@ echo "REGALIA-E2E-KMSUNIT dropins=$(systemctl show -P DropInPaths regalia-kms.se
 # /sysroot/var, kept across switch-root, and the boot's first line naming the real root's var.mount, if any
 initrdvar="$(journalctl -b -o cat --no-pager 2>/dev/null | grep -m1 -o 'Mounted sysroot-var.mount.*' | tr -s ' ' | cut -c1-120)"
 echo "REGALIA-E2E-VARMOUNT initrd=${initrdvar:-none}" > /dev/console
+# These are the three Regalia services installed in the initrd. Read their
+# retained current-boot journal because their unit objects are gone after switch-root.
+for u in regalia-boot-render regalia-wg-boot regalia-unlock; do
+    if records="$(journalctl -b -u "$u.service" -o cat --no-pager 2>/dev/null)"; then
+        printf '%s\n' "$records" |
+            sed -nE "/expected pre-genesis skip|regalia[.]site|Failed with result|Failed to start|Failed to set up credentials|243\/CREDENTIALS|^(Starting|Started|Finished) /s/^/REGALIA-E2E-INITRD $u /p" > /dev/console
+        echo "REGALIA-E2E-INITRD $u journal=ok" > /dev/console
+    else
+        echo "REGALIA-E2E-INITRD $u journal=failed" > /dev/console
+    fi
+done
 # whether the factory copy's assert held (AssertPathIsDirectory=/usr/share/factory/etc): "no" on a broken image
 echo "REGALIA-E2E-FACTORY assert=$(systemctl show -P AssertResult regalia-etc-factory.service 2>/dev/null || echo none)" > /dev/console
 # AppArmor: is the daemon's profile loaded, and in which mode (the kernel's own list)

@@ -34,6 +34,8 @@ Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
+# Consume the ordered renderer's pre-genesis decision before loading encrypted credentials.
+ExecCondition=/usr/bin/regalia-unlock -consumer-check unlock
 # Its lines on the console too, not only in the initrd's journal (#75, regalia-kms-d9): what an operator at the iLO
 # reads when a host does not come up — the initrd-phase PCR 11 it says first, each attempt and each refusal. None is
 # a secret (the key never leaves the process but into the request's answer).

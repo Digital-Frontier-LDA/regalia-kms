@@ -13,14 +13,15 @@ from unittest.mock import patch
 from tests import test_baremetal_boot_render as checks
 
 
-def unit_control(name, before, after, test, reason):
-    original = checks.UNIT.read_text()
+def unit_control(name, before, after, test, reason, consumer=None):
+    source = checks.UNIT if consumer is None else checks.INITRD / f"regalia-{consumer}.service"
+    original = source.read_text()
     assert original.count(before) == 1, name + ": mutation target drifted"
     with tempfile.TemporaryDirectory() as directory:
-        unit = Path(directory) / "render.service"
+        unit = Path(directory) / source.name
         unit.write_text(original.replace(before, after))
         output = io.StringIO()
-        with patch.object(checks, "UNIT", unit):
+        with patch.object(checks, "UNIT" if consumer is None else "INITRD", unit if consumer is None else unit.parent):
             result = unittest.TextTestRunner(stream=output).run(checks.SitePresence(test))
         failure = any(case.id().split(" (", 1)[0].endswith("." + test) and reason in trace
                       for case, trace in result.failures)
@@ -63,7 +64,10 @@ if __name__ == "__main__":
     render = "cmd/regalia-unlock/render.go"
     anchor = "cmd/regalia-unlock/membership/highwater.go"
     controls = [
-        ("pre-genesis-not-skipped", pre, "return true, nil", "return false, nil", "pre_genesis", "condition exit = 0, want 1"),
+        ("present-invalid-credential-skipped", pre,
+         "return false, nil // ExecStart's credential setup and site validation still fail closed.",
+         "return true, nil", "present_bad_site", "condition exit = 1, want 0"),
+        ("pre-genesis-not-skipped", pre, "return true, nil\n}", "return false, nil\n}", "pre_genesis", "condition exit = 0, want 1"),
         ("stub-evidence-ignored", pre, "if stubState {", "if false && stubState {", "enrolled_stub_site_deleted", "condition exit = 1, want 255"),
         ("esp-chain-evidence-ignored", pre, "if chain {", "if false && chain {", "enrolled_chain_site_deleted", "condition exit = 1, want 255"),
         ("esp-loader-evidence-ignored", pre, "if credentials {", "if false && credentials {", "enrolled_loader_site_deleted", "condition exit = 1, want 255"),
@@ -130,4 +134,9 @@ if __name__ == "__main__":
                  "DefaultDependencies=no\nConditionPathExistsGlob=" + checks.SOURCE + "\n", unit_test, "must not bypass the enrolment/TPM decision")
     unit_control("stale-unit-inventory-pin", "Description=Render", "Description=Verify",
                  "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
-    print("1ym: all 29 named mutants killed; no skips", flush=True)
+    for consumer in ("wg-boot", "unlock"):
+        unit_control("consumer-gate-removed-" + consumer,
+                     f"ExecCondition=/usr/bin/regalia-unlock -consumer-check {consumer}\n", "",
+                     f"test_{consumer.replace('-', '_')}_consumer_gate",
+                     f"{consumer} must check the render decision before credential setup", consumer=consumer)
+    print("all 32 named mutants killed; no skips", flush=True)

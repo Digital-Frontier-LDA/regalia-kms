@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 )
@@ -17,6 +19,10 @@ const espCredentials = "loader/credentials"
 // the same fixed paths and TPM transport as the renderer.
 var renderEnvForCheck = realRenderEnv
 
+// /run is volatile and shared across the initrd units. A skipped render loses its
+// RuntimeDirectory, so keep the decision outside /run/regalia-boot.
+var preGenesisMarker = "/run/regalia-pre-genesis"
+
 // ExecCondition runs without credential setup in systemd v257, unlike ExecStart. Keep this
 // separate from -render: a credential removed after this check must fail in ExecStart, not skip.
 // Only exit 1 is an expected skip; errors MUST be 255 (1..254 are non-failing to systemd).
@@ -26,6 +32,10 @@ func runRenderCheck(arguments []string, diagnostics io.Writer) int {
 		tpmPath = arguments[2]
 	} else if len(arguments) != 1 {
 		fmt.Fprintln(diagnostics, "regalia-unlock: usage: -render-check [-tpm DEVICE]")
+		return 255
+	}
+	if err := os.Remove(preGenesisMarker); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(diagnostics, "regalia-unlock: cannot reset pre-genesis decision: %v; boot render refused\n", err)
 		return 255
 	}
 	return renderCondition(renderEnvForCheck(tpmPath), diagnostics)
@@ -38,10 +48,44 @@ func renderCondition(env renderEnv, diagnostics io.Writer) int {
 		return 255
 	}
 	if skip {
+		// O_EXCL publishes an empty marker atomically in the root-owned /run.
+		marker, err := os.OpenFile(preGenesisMarker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			err = marker.Close()
+		}
+		if err != nil {
+			fmt.Fprintf(diagnostics, "regalia-unlock: cannot publish pre-genesis decision: %v; boot render refused\n", err)
+			return 255
+		}
 		fmt.Fprintln(diagnostics, "regalia-unlock: no site credential: expected pre-genesis skip (ESP/stub enrolment state and TPM anchors absent)")
 		return 1
 	}
 	return 0
+}
+
+// Both consumers are ordered after render. A missing marker lets systemd proceed
+// to credential setup. The consumer sandbox needs only a stat of the marker.
+func runConsumerCheck(arguments []string, diagnostics io.Writer) int {
+	if len(arguments) != 2 || (arguments[1] != "wg-boot" && arguments[1] != "unlock") {
+		fmt.Fprintln(diagnostics, "regalia-unlock: usage: -consumer-check {wg-boot|unlock}")
+		return 255
+	}
+	unit := "regalia-" + arguments[1]
+	info, err := os.Lstat(preGenesisMarker)
+	if os.IsNotExist(err) {
+		return 0
+	}
+	if err != nil {
+		fmt.Fprintf(diagnostics, "%s: cannot read pre-genesis decision: %v\n", unit, err)
+		return 255
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode() != 0o600 || info.Size() != 0 || stat.Uid != uint32(os.Geteuid()) {
+		fmt.Fprintf(diagnostics, "%s: invalid pre-genesis decision marker\n", unit)
+		return 255
+	}
+	fmt.Fprintf(diagnostics, "%s: expected pre-genesis skip (verified by boot render)\n", unit)
+	return 1
 }
 
 // A missing site alone proves nothing. Only absent ESP/stub enrolment artifacts AND a successful
