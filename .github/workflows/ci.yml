@@ -120,7 +120,7 @@ jobs:
         run: |
           sudo apt-get install -y -qq --no-install-recommends locales softhsm2 opensc python3-pykcs11 >/dev/null
           sudo locale-gen en_US.UTF-8 >/dev/null
-          python3 -Es -m unittest discover -s tests -p 'test_*.py'
+          python3 -Es -m unittest discover -v -s tests -p 'test_*.py'
 
       - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
         env:
@@ -220,19 +220,15 @@ jobs:
             export REGALIA_EXPECT_SWTPM='1'
             sudo apt-get install -y -qq --no-install-recommends wireguard-tools python3-cryptography
             # Both topologies, including the named single-node mutant controls. A skip is a failure.
-            python3 -BEs - <<'PY'
-          import sys
-          import unittest
-          suite = unittest.defaultTestLoader.loadTestsFromNames([
-              "tests.test_baremetal_enrol",
-              "tests.test_baremetal_single_node_enrol",
-          ])
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if result.skipped:
-              for test, reason in result.skipped:
-                  print(f"::error::{test}: skipped: {reason}", file=sys.stderr)
-          sys.exit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
-          PY
+            status=0
+            python3 -BEs -m unittest -v tests.test_baremetal_enrol tests.test_baremetal_single_node_enrol \
+              > "$RUNNER_TEMP/enrol.log" 2>&1 || status=$?
+            cat "$RUNNER_TEMP/enrol.log"
+            [ "$status" -eq 0 ] || exit "$status"
+            # unittest prints "OK (skipped=N)" for a skipped run; only an unqualified OK is green.
+            grep -q '^OK$' "$RUNNER_TEMP/enrol.log" && \
+              grep -Eq '^Ran [1-9][0-9]* tests? in ' "$RUNNER_TEMP/enrol.log" || {
+                echo "::error::the enrolment tests skipped or ran nothing; see test names and reasons above" >&2; exit 1; }
           )
 
       # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
