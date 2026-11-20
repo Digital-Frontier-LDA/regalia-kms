@@ -56,6 +56,9 @@ import (
 const ioTimeout = 10 * time.Second
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-render-check" {
+		os.Exit(runRenderCheck(os.Args[1:], os.Stderr))
+	}
 	err := run(os.Args[1:], os.Stdout, os.Stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return

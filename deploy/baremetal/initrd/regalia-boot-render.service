@@ -15,14 +15,9 @@
 # console's prompt (which asks from the start, #70) takes the recovery key.
 
 [Unit]
-Description=Render the boot configuration (no site credential: expected pre-genesis skip)
+Description=Render the boot configuration from the signed membership chain
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
-# Before enrolment/genesis the stub has no site credential. Skip before systemd sets up credentials;
-# the description makes its condition-skip journal line explain this expected state. Check presence,
-# not content/readability: an empty, unreadable or otherwise bad object must reach the hard failure.
-# Glob's lstat also counts a dangling symlink as present, unlike ConditionPathExists=.
-ConditionPathExistsGlob=/.extra/global_credentials/regalia.site.cred
 # the anchor is read from the TPM (its NV indices, with their own authorization), and, where an index is
 # written under a policy, the image's PCR key is read beside it (#242 B2a): not before the device is there
 Wants=tpm2.target
@@ -44,6 +39,9 @@ RemainAfterExit=yes
 # production command line does not forward the journal to the console. None is a secret.
 StandardOutput=journal+console
 StandardError=journal+console
+# ExecCondition has no credential setup (systemd v257 service_exec_flags). Only proven absence of
+# ESP/stub enrolment state AND all TPM anchor indices returns 1; evidence or errors return 255.
+ExecCondition=/usr/bin/regalia-unlock -render-check
 ExecStart=/usr/bin/regalia-unlock -render /run/regalia-boot
 # The one credential it reads, by fixed path, as data: the measured site document. The image's command line
 # carries systemd.import_credentials=no; nothing else is taken from the ESP but the chain, which is verified.

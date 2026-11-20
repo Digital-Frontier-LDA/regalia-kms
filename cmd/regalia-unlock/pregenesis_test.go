@@ -1,0 +1,190 @@
+package main
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
+)
+
+type conditionNV struct {
+	membership.NV // Public/Read must never be needed to establish index presence.
+	defined       map[uint32]bool
+	err           error
+	calls         int
+}
+
+func (n *conditionNV) Defined() (map[uint32]bool, error) {
+	n.calls++
+	return n.defined, n.err
+}
+
+type conditionFixture struct {
+	env                      renderEnv
+	stub, esp                string
+	nv                       *conditionNV
+	mounts, unmounts, closed int
+}
+
+func newConditionFixture(t *testing.T) *conditionFixture {
+	t.Helper()
+	dir := t.TempDir()
+	f := &conditionFixture{stub: filepath.Join(dir, "stub"), esp: filepath.Join(dir, "esp"),
+		nv: &conditionNV{defined: map[uint32]bool{}}}
+	if err := os.Mkdir(f.esp, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f.env = realRenderEnv("unused")
+	mapPath := func(path string) string {
+		if path == stubCredentials || strings.HasPrefix(path, stubCredentials+"/") {
+			return f.stub + strings.TrimPrefix(path, stubCredentials)
+		}
+		return path
+	}
+	present := f.env.present
+	f.env.present = func(path string) (bool, error) { return present(mapPath(path)) }
+	f.env.readDir = func(path string) ([]os.DirEntry, error) { return os.ReadDir(mapPath(path)) }
+	f.env.readFile = func(path string) ([]byte, error) {
+		if path == loaderDevicePartUUID {
+			return efivar(testUUID), nil
+		}
+		t.Fatal("the condition must not read credential contents")
+		return nil, os.ErrPermission
+	}
+	f.env.exists = func(string) bool { return true }
+	f.env.mkdtemp = func() (string, error) { return f.esp, nil }
+	f.env.mount = func(string, string) error { f.mounts++; return nil }
+	f.env.unmount = func(string) error { f.unmounts++; return nil }
+	f.env.remove = func(string) error { return nil }
+	f.env.nv = func() (membership.NV, func(), error) {
+		return f.nv, func() { f.closed++ }, nil
+	}
+	f.env.write = func(string, []byte) error { t.Fatal("the condition must not publish output"); return nil }
+	f.env.sleep = func(time.Duration) {}
+	return f
+}
+
+func conditionFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRenderCondition(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(*testing.T, *conditionFixture)
+		code   int
+		line   string
+	}{
+		{"pre_genesis", func(*testing.T, *conditionFixture) {}, 1, "no site credential: expected pre-genesis skip"},
+		{"pre_genesis_empty_directories", func(t *testing.T, f *conditionFixture) {
+			for _, dir := range []string{f.stub, filepath.Join(f.esp, espCredentials)} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, 1, "no site credential: expected pre-genesis skip"},
+		{"enrolled_chain_site_deleted", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.esp, chainOnESP))
+		}, 255, "missing site credential on an enrolled node: ESP membership state is present"},
+		{"enrolled_loader_site_deleted", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.esp, espCredentials, "regalia.unlock-local.cred"))
+		}, 255, "missing site credential on an enrolled node: ESP loader credentials are present"},
+		{"enrolled_stub_site_deleted", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.stub, "regalia.unlock-local.cred"))
+		}, 255, "missing site credential on an enrolled node: stub enrolment state is present"},
+		{"nv_counter_without_esp", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex] = true }, 255, "missing site credential on an enrolled node: TPM anchor state is present"},
+		{"nv_base_without_esp", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex+1] = true }, 255, "missing site credential on an enrolled node: TPM anchor state is present"},
+		{"nv_slot_0_without_esp", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex+4] = true }, 255, "missing site credential on an enrolled node: TPM anchor state is present"},
+		{"nv_slot_1_without_esp", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex+5] = true }, 255, "missing site credential on an enrolled node: TPM anchor state is present"},
+		{"tpm_open_error", func(t *testing.T, f *conditionFixture) {
+			f.env.nv = func() (membership.NV, func(), error) { return nil, nil, os.ErrPermission }
+		}, 255, "TPM cannot be opened; pre-genesis is unproven"},
+		{"tpm_inventory_error", func(t *testing.T, f *conditionFixture) { f.nv.err = os.ErrPermission }, 255, "TPM NV inventory cannot be read; pre-genesis is unproven"},
+		{"tpm_nil_inventory", func(t *testing.T, f *conditionFixture) { f.nv.defined = nil }, 255, "TPM NV inventory cannot be read; pre-genesis is unproven"},
+		{"site_stat_error", func(t *testing.T, f *conditionFixture) {
+			f.env.present = func(string) (bool, error) { return false, os.ErrPermission }
+		}, 255, "site credential presence cannot be checked"},
+		{"stub_read_error", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.stub, "regalia.unlock-local.cred"))
+			f.env.readDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrPermission }
+		}, 255, "stub enrolment state cannot be checked"},
+		{"esp_chain_stat_error", func(t *testing.T, f *conditionFixture) {
+			present := f.env.present
+			f.env.present = func(path string) (bool, error) {
+				if path == filepath.Join(f.esp, chainOnESP) {
+					return false, os.ErrPermission
+				}
+				return present(path)
+			}
+		}, 255, "ESP membership presence cannot be checked"},
+		{"esp_credentials_read_error", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.esp, espCredentials, "regalia.unlock-local.cred"))
+			f.env.readDir = func(string) ([]os.DirEntry, error) { return nil, os.ErrPermission }
+		}, 255, "ESP loader credentials cannot be checked"},
+		{"esp_mount_error", func(t *testing.T, f *conditionFixture) {
+			f.env.mount = func(string, string) error { return os.ErrPermission }
+		}, 255, "cannot be mounted read-only"},
+		{"esp_unmount_error", func(t *testing.T, f *conditionFixture) {
+			f.env.unmount = func(string) error { f.unmounts++; return errors.New("device busy") }
+		}, 255, "cannot be unmounted"},
+		{"esp_firmware_error", func(t *testing.T, f *conditionFixture) {
+			f.env.readFile = func(string) ([]byte, error) { return nil, os.ErrNotExist }
+		}, 255, "the ESP cannot be located; pre-genesis is unproven"},
+		{"esp_device_absent", func(t *testing.T, f *conditionFixture) { f.env.exists = func(string) bool { return false } }, 255, "the ESP cannot be located; pre-genesis is unproven"},
+		{"present_bad_site", func(t *testing.T, f *conditionFixture) {
+			conditionFile(t, filepath.Join(f.stub, "regalia.site.cred"))
+		}, 0, ""}, // The existing render tests check that ExecStart rejects these bytes.
+		{"present_dangling_site", func(t *testing.T, f *conditionFixture) {
+			if err := os.Mkdir(f.stub, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("absent-target", filepath.Join(f.stub, "regalia.site.cred")); err != nil {
+				t.Fatal(err)
+			}
+		}, 0, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newConditionFixture(t)
+			c.change(t, f)
+			var diagnostics strings.Builder
+			if got := renderCondition(f.env, &diagnostics); got != c.code {
+				t.Fatalf("condition exit = %d, want %d: %s", got, c.code, diagnostics.String())
+			}
+			if c.code == 0 {
+				if diagnostics.Len() != 0 || f.mounts != 0 || f.nv.calls != 0 {
+					t.Fatal("present credential must reach ExecStart without a skip decision")
+				}
+				return
+			}
+			if !strings.Contains(diagnostics.String(), c.line) || strings.Count(diagnostics.String(), "\n") != 1 {
+				t.Fatalf("condition must log exactly one reason containing %q: %q", c.line, diagnostics.String())
+			}
+			if f.mounts != f.unmounts || (f.nv.calls > 0 && f.closed != 1) {
+				t.Fatal("condition leaked a mount or TPM handle")
+			}
+			if c.code == 1 && (f.nv.calls != 1 || f.mounts != 1) {
+				t.Fatal("skip requires successful ESP inspection and TPM inventory")
+			}
+		})
+	}
+}
+
+func TestRenderCheckBadArgumentsFailHard(t *testing.T) {
+	for _, args := range [][]string{{"-render-check", "unexpected"}, {"-render-check", "-tpm", ""}} {
+		var diagnostics strings.Builder
+		if got := runRenderCheck(args, &diagnostics); got != 255 {
+			t.Fatalf("bad arguments exit = %d, want hard failure 255", got)
+		}
+	}
+}

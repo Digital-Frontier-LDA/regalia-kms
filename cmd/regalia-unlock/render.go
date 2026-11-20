@@ -36,6 +36,8 @@ const (
 // tested without a firmware, a disk or a TPM.
 type renderEnv struct {
 	readFile func(path string) ([]byte, error)
+	present  func(path string) (bool, error) // lstat: only ENOENT proves absence, including for directories
+	readDir  func(path string) ([]os.DirEntry, error)
 	exists   func(path string) bool
 	mount    func(device, dir string) error
 	unmount  func(dir string) error
@@ -56,7 +58,15 @@ const pcrPublicKey = "/.extra/tpm2-pcr-public-key.pem"
 func realRenderEnv(tpmPath string) renderEnv {
 	return renderEnv{
 		readFile: os.ReadFile,
-		exists:   func(path string) bool { _, err := os.Stat(path); return err == nil },
+		present: func(path string) (bool, error) {
+			_, err := os.Lstat(path)
+			if os.IsNotExist(err) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+		readDir: os.ReadDir,
+		exists:  func(path string) bool { _, err := os.Stat(path); return err == nil },
 		mount: func(device, dir string) error {
 			return syscall.Mount(device, dir, "vfat", syscall.MS_RDONLY|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "")
 		},
@@ -157,34 +167,45 @@ func espDevice(env renderEnv) (string, error) {
 	return device, nil
 }
 
-// readChain mounts the ESP read-only (nosuid, nodev, noexec) on a directory of its own, reads the chain, and
-// unmounts it before anything else is done: nothing of the ESP stays mounted. (regalia-boot-render.service
-// also runs with PrivateMounts=yes: a mount that could not be undone dies with the unit's namespace.)
-func readChain(env renderEnv, device string) (raw []byte, err error) {
+// withESP inspects the ESP read-only (nosuid, nodev, noexec) in a private directory. A failure to
+// unmount is an error even if inspect succeeded: it must never turn into a pre-genesis skip.
+func withESP(env renderEnv, device string, inspect func(string) error) (err error) {
 	dir, err := env.mkdtemp()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer env.remove(dir)
 	if err := env.mount(device, dir); err != nil {
-		return nil, fmt.Errorf("the ESP %s cannot be mounted read-only: %v", device, err)
+		return fmt.Errorf("the ESP %s cannot be mounted read-only: %v", device, err)
 	}
 	defer func() {
 		// an unmount that fails is reported, and never hides why the read failed
 		if unmountErr := env.unmount(dir); unmountErr != nil {
 			if err != nil {
-				raw, err = nil, fmt.Errorf("%v; and the ESP %s cannot be unmounted: %v", err, device, unmountErr)
+				err = fmt.Errorf("%v; and the ESP %s cannot be unmounted: %v", err, device, unmountErr)
 			} else {
-				raw, err = nil, fmt.Errorf("the ESP %s cannot be unmounted: %v", device, unmountErr)
+				err = fmt.Errorf("the ESP %s cannot be unmounted: %v", device, unmountErr)
 			}
 		}
 	}()
-	raw, readErr := env.readFile(filepath.Join(dir, chainOnESP))
-	if readErr != nil {
-		return nil, fmt.Errorf("the ESP holds no membership chain (%s: %v)", chainOnESP, readErr)
-	}
-	if len(raw) > maxChainBytes {
-		return nil, fmt.Errorf("the membership chain on the ESP is over %d bytes", maxChainBytes)
+	return inspect(dir)
+}
+
+// readChain leaves nothing mounted, including on a failed read.
+func readChain(env renderEnv, device string) (raw []byte, err error) {
+	err = withESP(env, device, func(dir string) error {
+		var readErr error
+		raw, readErr = env.readFile(filepath.Join(dir, chainOnESP))
+		if readErr != nil {
+			return fmt.Errorf("the ESP holds no membership chain (%s: %v)", chainOnESP, readErr)
+		}
+		if len(raw) > maxChainBytes {
+			return fmt.Errorf("the membership chain on the ESP is over %d bytes", maxChainBytes)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return raw, nil
 }

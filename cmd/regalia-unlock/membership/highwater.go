@@ -93,6 +93,25 @@ func newHighWater(nv NV, index uint32, policy func() ([]byte, error)) highWater 
 	return highWater{nv: nv, index: index, base: index + 1, slots: [2]uint32{index + 4, index + 5}, policy: &lazyPolicy{source: policy}}
 }
 
+// AnchorPresent detects any part of the anchor, even an incomplete or corrupt one. Use the same
+// layout as the reader; absence requires a successful inventory, never an NV read refusal.
+func AnchorPresent(nv NV) (bool, error) {
+	defined, err := nv.Defined()
+	if err != nil {
+		return false, err
+	}
+	if defined == nil {
+		return false, fmt.Errorf("the TPM returned no NV inventory")
+	}
+	h := newHighWater(nv, HighWaterIndex, nil)
+	for _, index := range []uint32{h.index, h.base, h.slots[0], h.slots[1]} {
+		if defined[index] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func name(index uint32) string { return fmt.Sprintf("0x%x", index) }
 
 func (h highWater) public(index uint32) (uint32, int, []byte, error) {

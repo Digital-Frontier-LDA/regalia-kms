@@ -723,12 +723,23 @@ the client are on the console with no kernel argument. It is not secret. When a 
   | `loader/credentials/regalia.site.cred` | the site document (`bootcreds.site_document`): host_ipv4, the root device, the site's `boot_mesh` (the card by its MAC address, its prefix, gateway and tunnel address, the peers' addresses) | yes | no |
   | `EFI/regalia/membership.json` | the signed membership chain | **no** | no |
 
-  Before enrolment or genesis, absence of `regalia.site.cred` is expected. The render unit's presence
-  condition skips it before credential setup, with a journal line naming
-  `no site credential: expected pre-genesis skip`. This is an inactive, non-failed condition skip,
-  rather than `243/CREDENTIALS`. Empty, unreadable, invalid or tampered credentials still fail:
-  presence alone passes the condition, then the existing fixed-path credential load and render
-  validation apply. A dangling symbolic link also counts as present and must fail, not skip.
+  Missing `regalia.site.cred` is an expected pre-genesis state **only if** the stub credentials
+  directory has no entries, the ESP has no membership chain or loader credentials, and a successful
+  TPM inventory lists none of the membership reader's four NV anchor indices (counter, base, both
+  record slots). `regalia-unlock -render-check` runs as the render unit's `ExecCondition`: it returns 1
+  only after proving all those absences, with one line naming `no site credential: expected pre-genesis
+  skip`. Enrolment evidence returns 255 and logs `missing site credential on an enrolled node`;
+  filesystem/TPM errors also return 255 because pre-genesis is unproven. A broken link counts as
+  present, and an unreadable directory is an error. Nothing is repaired, written or unsealed by this check.
+
+  Systemd v257 runs `ExecCondition` without credential setup, while `ExecStart` sets up credentials:
+  see [`service_exec_flags`](https://github.com/systemd/systemd/blob/v257/src/core/service.c#L1517-L1550),
+  [`service_enter_condition`](https://github.com/systemd/systemd/blob/v257/src/core/service.c#L2358-L2377)
+  and the [`exec_setup_credentials` guard](https://github.com/systemd/systemd/blob/v257/src/core/exec-credential.c#L936-L951).
+  Its [documented exit semantics](https://www.freedesktop.org/software/systemd/man/257/systemd.service.html#ExecCondition=)
+  make 1 a non-failed skip and 255 a hard failure. The fixed-path `LoadCredential=` stays in place for
+  `ExecStart`; present bad credentials still fail during credential setup or render validation.
+  A credential removed between the helper and `ExecStart` also hard-fails rather than skipping.
 
   **The membership chain is verified in the initrd, not measured.** `regalia-boot-render.service` runs
   `regalia-unlock -render /run/regalia-boot`: it finds the ESP by the `LoaderDevicePartUUID` EFI variable,
