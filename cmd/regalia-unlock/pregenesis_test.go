@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,5 +187,25 @@ func TestRenderCheckBadArgumentsFailHard(t *testing.T) {
 		if got := runRenderCheck(args, &diagnostics); got != 255 {
 			t.Fatalf("bad arguments exit = %d, want hard failure 255", got)
 		}
+	}
+}
+
+// Exercise main's actual process exit: falling through to the normal flag-error path would
+// return 1 and silently turn an invalid condition invocation into a non-failing unit skip.
+func TestRenderCheckMainExitStatus(t *testing.T) {
+	if os.Getenv("REGALIA_TEST_RENDER_CHECK_PROCESS") == "1" {
+		os.Args = []string{os.Args[0], "-render-check", "unexpected"}
+		main()
+		t.Fatal("main returned instead of exiting")
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestRenderCheckMainExitStatus$")
+	command.Env = append(os.Environ(), "REGALIA_TEST_RENDER_CHECK_PROCESS=1")
+	output, err := command.CombinedOutput()
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || exited.ExitCode() != 255 {
+		t.Fatalf("main must exit 255, not a non-failing skip: %v: %s", err, output)
+	}
+	if strings.Count(string(output), "\n") != 1 || !strings.Contains(string(output), "usage: -render-check") {
+		t.Fatalf("main must log one reason: %q", output)
 	}
 }

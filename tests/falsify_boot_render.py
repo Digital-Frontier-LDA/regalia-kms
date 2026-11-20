@@ -90,6 +90,9 @@ if __name__ == "__main__":
         controls.append(("anchor-omitted-" + subtest, anchor, layout, replacement, subtest, "condition exit = 1, want 255"))
     for name, path, before, after, subtest, reason in controls:
         go_control(name, path, before, after, "TestRenderCondition/" + subtest, reason)
+    go_control("main-condition-dispatch-removed", "cmd/regalia-unlock/main.go",
+               '\tif len(os.Args) > 1 && os.Args[1] == "-render-check" {\n\t\tos.Exit(runRenderCheck(os.Args[1:], os.Stderr))\n\t}\n',
+               "", "TestRenderCheckMainExitStatus", "main must exit 255, not a non-failing skip")
     for name, before, after, subtest in [
         ("invalid-site-accepted", "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", err",
          "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", nil", "invalid"),
@@ -104,4 +107,4 @@ if __name__ == "__main__":
                  "DefaultDependencies=no\nConditionPathExistsGlob=" + checks.SOURCE + "\n", unit_test, "must not bypass the enrolment/TPM decision")
     unit_control("stale-unit-inventory-pin", "Description=Render", "Description=Verify",
                  "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
-    print("1ym: all 21 named mutants killed; no skips", flush=True)
+    print("1ym: all 22 named mutants killed; no skips", flush=True)
