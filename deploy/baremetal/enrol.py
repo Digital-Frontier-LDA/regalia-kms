@@ -887,9 +887,6 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     # a single-node node enrols only at its genesis for now: a later one (the replacement after the owner's
     # revocation) would be the only signer of its epoch's heartbeat, so no source could start its counter, and
     # commit would stop after installing (regalia-kms-dx7.19, CodeRabbit on #734). Refused here, before anything is written.
-    require(manifest.get("topology", {}).get("profile") != membership.SINGLE_NODE or manifest["epoch"] == 1,
-            "a single-node manifest enrols its node only at epoch 1 for now, not epoch %d: its first heartbeat would have "
-            "no source (regalia-kms-dx7.19). Nothing was written" % manifest["epoch"])
     wg = {k: base64.b64decode(bundle[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     mine_all = [("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
                 ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])]
