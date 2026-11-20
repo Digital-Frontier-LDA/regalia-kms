@@ -29,7 +29,9 @@ class ImageESPContent(unittest.TestCase):
         self.assertEqual(versions, {kernel}, "only the image kernel's modules may ship")
         paths = {}
         for module in MODULES:
-            matches = [p for p in files if p.startswith(prefix) and p.rsplit("/", 1)[-1].split(".ko")[0] == module]
+            matches = [p for p in files if p.startswith(prefix) and uki.stat_regular(files[p][0])
+                       and p.endswith((".ko", ".ko.xz", ".ko.zst", ".ko.gz"))
+                       and p.rsplit("/", 1)[-1].split(".ko")[0] == module]
             self.assertEqual(len(matches), 1, "ESP_MODULE_PRESENT: " + module + " for " + kernel)
             paths[module] = matches[0]
         dep = files[prefix + "modules.dep"][1].decode()
