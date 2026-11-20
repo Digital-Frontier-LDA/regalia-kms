@@ -167,7 +167,8 @@ class BootMesh(Refuses):
         raw = bootcreds.site_document(self.cfg, "/dev/disk/by-partlabel/regalia-root")
         site, _ = bootcreds.read_site(raw)
         self.assertEqual(site["boot_mesh"]["owner"], OWNER)
-        self.refused("a single-node host's boot credentials are not rendered yet", bootcreds.render, self.single, site, "/dev/x")
+        files = bootcreds.render(self.single, site, "/dev/x")
+        self.assertEqual(json.loads(files["regalia.unlock-config"])["schema"], "regalia.unlock-boot/v2")
 
 
 class SingleNodeHost(tn.Case):

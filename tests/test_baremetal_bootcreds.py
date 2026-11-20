@@ -3,7 +3,10 @@ manifest and the site config. Deterministic (a peer recomputes them, and from th
 renderers that already exist, and handed out by esp_files only for a chain that verifies."""
 import copy
 import json
+import pathlib
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -11,6 +14,8 @@ from deploy.baremetal import bootcreds, bootnet, espcreds, sitecfg, unlock
 from deploy.baremetal import membership as m
 import tests.test_baremetal_bootnet as bn
 import tests.test_baremetal_heartbeat as hbt
+from tests.test_baremetal_single_node_network import single_site
+from tests.test_baremetal_membership_v5 import single5
 
 DEVICE = "/dev/disk/by-partlabel/regalia-root"
 
@@ -85,6 +90,28 @@ class EspFiles(unittest.TestCase):
         digests = m.Store._digests([m.accept_chain(None, envelopes[:i], self.root) for i in range(1, len(envelopes) + 1)])
         for epoch in range(1, len(envelopes) + 1):
             self.anchor.anchor(epoch, digests)
+
+    def test_single_node_esp_chain_and_site_render_owner_credentials(self):
+        self.cfg = sitecfg.validate(single_site())
+        envelopes = chain(single5(1, ""), single5(1, "", owner_wg_pub="0d" * 32))
+        self.anchor_to(envelopes)
+        files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
+        site, device = bootcreds.read_site(files["loader/credentials/regalia.site.cred"])
+        manifest = bootcreds.anchored(m.load(files[bootcreds.CHAIN_ON_ESP], m.MAX_CHAIN_BYTES), self.root, self.anchor)
+        rendered = bootcreds.render(manifest, site, device)
+        config = json.loads(rendered["regalia.unlock-config"])
+        pins = unlock.validate_boot_config(config)
+        self.assertEqual(set(pins), {m.OWNER})
+        self.assertEqual(pins[m.OWNER]["owner_keys"], manifest["owner_keys"])
+        self.assertEqual(config["schema"], unlock.BOOT_SINGLE_SCHEMA)
+        self.assertEqual(set(files), {bootcreds.CHAIN_ON_ESP, "loader/credentials/regalia.site.cred",
+                                     *("loader/credentials/%s.cred" % name for name in bootcreds.RENDERED)})
+        self.assertTrue(all(files["loader/credentials/%s.cred" % name] is None for name in bootcreds.RENDERED))
+
+    def test_shared_bootcreds_fixture_is_reproducible(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        generated = subprocess.check_output([sys.executable, "-Es", "tests/vectors/make-bootcreds-v1.py"], cwd=root)
+        self.assertEqual(generated, (root / "tests/vectors/bootcreds-v1.json").read_bytes())
 
     def test_the_site_document_the_chain_and_the_earlier_stage_removed(self):
         """#66 B3: the ESP holds the measured site document and the signed chain (not measured), and the four

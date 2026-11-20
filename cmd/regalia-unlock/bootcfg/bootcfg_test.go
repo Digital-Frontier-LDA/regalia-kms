@@ -54,31 +54,33 @@ func TestEveryRenderIsTheSameBytes(t *testing.T) {
 	for _, value := range v["renders"].([]any) {
 		r := value.(map[string]any)
 		name := r["site"].(string) + " / " + r["manifest"].(string)
-		site, err := ReadSite([]byte(sites[r["site"].(string)].(string)))
-		if err != nil {
-			t.Fatalf("%s: the site does not read: %v", name, err)
-		}
-		got, err := Render(manifests[r["manifest"].(string)].(map[string]any), site)
-		if want, ok := r["files"].(map[string]any); ok {
-			rendered++
+		t.Run(name, func(t *testing.T) {
+			site, err := ReadSite([]byte(sites[r["site"].(string)].(string)))
 			if err != nil {
-				t.Errorf("%s: Python rendered, Go: %v", name, err)
-				continue
+				t.Fatalf("%s: the site does not read: %v", name, err)
 			}
-			if len(got) != len(want) {
-				t.Errorf("%s: %d files, not %d", name, len(got), len(want))
-			}
-			for file, body := range want {
-				if string(got[file]) != body.(string) {
-					t.Errorf("%s: %s differs:\nPython: %q\nGo:     %q", name, file, body, got[file])
+			got, err := Render(manifests[r["manifest"].(string)].(map[string]any), site)
+			if want, ok := r["files"].(map[string]any); ok {
+				rendered++
+				if err != nil {
+					t.Errorf("%s: Python rendered, Go: %v", name, err)
+					return
 				}
+				if len(got) != len(want) {
+					t.Errorf("%s: %d files, not %d", name, len(got), len(want))
+				}
+				for file, body := range want {
+					if string(got[file]) != body.(string) {
+						t.Errorf("%s: %s differs:\nPython: %q\nGo:     %q", name, file, body, got[file])
+					}
+				}
+				return
 			}
-			continue
-		}
-		refused++
-		if got, ok := err.(*Refused); !ok || got.Class != r["class"] {
-			t.Errorf("%s: Python refused, for %s (%s); Go: %#v", name, r["class"], r["refused"], err)
-		}
+			refused++
+			if got, ok := err.(*Refused); !ok || got.Class != r["class"] {
+				t.Errorf("%s: Python refused, for %s (%s); Go: %#v", name, r["class"], r["refused"], err)
+			}
+		})
 	}
 	if rendered < 80 || refused < 20 {
 		t.Fatalf("%d rendered and %d refused", rendered, refused)
