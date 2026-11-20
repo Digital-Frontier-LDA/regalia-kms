@@ -57,7 +57,7 @@ fi
 echo "REGALIA-E2E-ESP mount=$esp source=$source partuuid=$partuuid type=$mtype options=$mopts super-options=$msuper probe=$probe boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent) target=$target" > /dev/console
 if [ "$esp" != ok ]; then
     systemctl status efi.automount efi.mount --no-pager > /dev/console 2>&1
-    journalctl -b --no-pager -o cat --grep='regalia-boot-esp:' > /dev/console 2>&1
+    dmesg | grep 'regalia-boot-esp:' > /dev/console
 fi
 # r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
 binfmt=failed

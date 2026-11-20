@@ -154,7 +154,7 @@ class BootEsp(unittest.TestCase):
         lsblk = fake / "lsblk"
         lsblk.write_text(
             "#!/bin/sh\n"
-            '[ "$*" = "--raw --noheadings --output PARTTYPE,PARTUUID" ] || exit 1\n'
+            '[ "$*" = "--properties-by blkid --raw --noheadings --output PARTTYPE,PARTUUID" ] || exit 1\n'
             "printf '%s\\n' ' ' 'abcd1234 ' "
             f"'{ESP_TYPE.upper()} {uuid.upper()}'\n"
         )

@@ -6,6 +6,11 @@
 set -eu
 export LC_ALL=C
 
+# Generators run before journald. Preserve diagnostics in the boot log.
+if [ "$#" -eq 3 ] && [ -w /dev/kmsg ]; then
+  exec 2>/dev/kmsg
+fi
+
 out="${1:?a generator is given its output directory}"
 early="${2:?a generator is given its early output directory}"
 name="regalia-boot-esp"
@@ -50,9 +55,9 @@ XBOOT_TYPE=eb0d1b61-9d14-4e60-b3f8-2c022c24dcb2
 if [ -n "$gpt" ]; then
   partitions="$(cat "$gpt")"
 else
-  # By switch-root, the initrd has discovered the boot disk. lsblk reads
-  # partition metadata from sysfs and udev, or probes with libblkid.
-  if ! partitions="$(lsblk --raw --noheadings --output PARTTYPE,PARTUUID)"; then
+  # The initrd clears the udev database just before switch-root. Probe
+  # the partitions directly, before the host udev coldplug runs.
+  if ! partitions="$(lsblk --properties-by blkid --raw --noheadings --output PARTTYPE,PARTUUID)"; then
     echo "$name: cannot read GPT partition metadata: no ESP is mounted" >&2
     exit 0
   fi
