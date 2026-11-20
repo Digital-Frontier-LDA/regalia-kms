@@ -328,7 +328,6 @@ install -D -m 0755 "$SRC/deploy/baremetal/generators/regalia-kms-credentials" "$
 # the boot ESP, at /efi (the consumers' path): the stub's LoaderDevicePartUUID, the image's mount policy (rw, the root-
 # only masks, 0700 the point, 120 s idle), and the suppression of gpt-auto's /boot automount (generators/regalia-boot-esp,
 # regalia-kms-9tv)
-install -D -m 0755 "$SRC/deploy/baremetal/generators/regalia-boot-esp" "$ROOT/usr/lib/systemd/system-generators/regalia-boot-esp"
 # the kernel settings, each with its reason (regalia-kms-r1s.5): under /usr, so verity covers them; os_probe's
 # kernel_sysctl_baseline measures them on the running kernel
 install -D -m 0644 "$SRC/deploy/baremetal/regalia-kms.sysctl.conf" "$ROOT/usr/lib/sysctl.d/90-regalia-kms.conf"
