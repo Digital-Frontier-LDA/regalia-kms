@@ -34,6 +34,14 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
     def test_mutant_commit_without_owner_auth_is_refused(self):
         self.ceremony("without-owner-auth")
 
+    def test_lower_tpm_guard_refuses_commit_without_owner_auth(self):
+        """Defence in depth: with enrolment's own ownerauth guard bypassed IN THIS TEST ONLY, the TPM's owner
+        authorization still refuses the owner-authorized anchor definition (membership's guard), and no NV anchor
+        and no committed manifest chain exist afterwards. OBSERVED, not asserted: by then commit() has already
+        installed the configuration (enrol.py install_config) and stored the measurements document
+        (store_documents); whether those pre-refusal writes should be rolled back or moved is regalia-kms-r7e."""
+        self.ceremony("lower-guard")
+
     def test_mutant_wrong_topology_is_refused(self):
         self.ceremony("wrong-topology")
 
@@ -187,6 +195,27 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                     self.assertEqual(after_config, before_config)
                 self.assertEqual(handed, [])
                 # Positive control: the very same inputs commit once the authorization is supplied.
+            if mutant == "lower-guard":
+                self.assertEqual(self.nv_indices(), set(), "the fixture starts with no NV indices")
+                upper = enrol.commit_owner_auth
+
+                def without_upper_guard(manifest_, given_, root_key, node_id, run=subprocess.run, directory=None):
+                    try:
+                        return upper(manifest_, given_, root_key, node_id, run, directory)
+                    except enrol.Refused:
+                        return None     # the test bypasses enrolment's guard; production code is unchanged
+
+                with patch.object(enrol, "commit_owner_auth", without_upper_guard), \
+                        self.assertRaises((enrol.Refused, membership.Refused)) as refused:
+                    commit(authorization=None)
+                with self.subTest(assertion="lower TPM guard message"):
+                    self.assertIn("the TPM's owner authorization is set and none was given", str(refused.exception))
+                with self.subTest(assertion="no NV anchor after lower-guard refusal"):
+                    self.assertEqual(self.nv_indices(), set())
+                with self.subTest(assertion="no committed manifest chain after lower-guard refusal"):
+                    self.assertFalse(os.path.exists(os.path.join(example["state_dir"], "membership.json")))
+                self.assertEqual(handed, [])
+                return
             epoch, digest = commit()
             self.assertEqual((epoch, digest), (1, membership.digest(man)))
             self.assertEqual(handed, [None], "the policy-writing sync step receives no owner authorization")
