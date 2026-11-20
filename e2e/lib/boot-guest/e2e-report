@@ -16,17 +16,49 @@ verity="$(veritysetup status usr 2>&1)"
 vstatus="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1)"
 vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*//p' | head -1)"
 echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
-# r1s.19: after switch-root, mount the real ESP and write/read/remove a file as enrol commit --esp does.
-# /dev/vda1 is install-host.sh's ESP on the test's virtio disk. No modprobe here: the initrd must preload it.
+# Trigger the shipped automount and inspect only an exact vfat mount.
+# mountinfo separates VFS options from filesystem options (the FAT masks).
 esp=failed
-mkdir -p /efi
-if mount -t vfat -o umask=0077,codepage=437,iocharset=ascii /dev/vda1 /efi; then
-    mkdir -p /efi/EFI/regalia
-    if printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
-        [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then esp=ok; fi
-    rm -f /efi/EFI/regalia/e2e-mount-proof
+target=""; source=""; partuuid=""; mtype=""; mopts=""; msuper=""; probe=none; bootcompeting=absent
+if [ -d /efi/EFI ]; then
+    line="$(awk '$5 == "/efi" {
+        for (i = 7; i <= NF; i++)
+            if ($i == "-" && $(i+1) == "vfat") {
+                print $3, $5, $6, $(i+1), $(i+2), $(i+3)
+                exit
+            }
+    }' /proc/self/mountinfo)"
+    if [ -n "$line" ]; then
+        read -r device target mopts mtype source msuper <<EOF
+$line
+EOF
+        partuuid="$(lsblk --nodeps --raw --noheadings --output PARTUUID -- "$source")"
+        # Exercise the old automount path as well so a competing mount is visible.
+        test -d /boot/EFI || :
+        if awk -v device="$device" '$3 == device && $5 == "/boot" { found = 1 }
+            END { exit !found }' /proc/self/mountinfo; then
+            bootcompeting=present
+        fi
+        if [ -n "$partuuid" ]; then
+            probe=failed
+            if marker="$(mktemp /efi/EFI/.e2e-mount-proof.XXXXXX)"; then
+                written=no
+                if printf 'esp-write-proof\n' > "$marker" && [ "$(cat "$marker")" = esp-write-proof ]; then
+                    written=yes
+                fi
+                if rm -f "$marker" && [ "$written" = yes ]; then
+                    probe=ok
+                fi
+            fi
+            esp="$probe"
+        fi
+    fi
 fi
-echo "REGALIA-E2E-ESP mount=$esp type=$(fstype /efi) kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
+echo "REGALIA-E2E-ESP mount=$esp source=$source partuuid=$partuuid type=$mtype options=$mopts super-options=$msuper probe=$probe boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent) target=$target" > /dev/console
+if [ "$esp" != ok ]; then
+    systemctl status efi.automount efi.mount --no-pager > /dev/console 2>&1
+    dmesg | grep 'regalia-boot-esp:' > /dev/console
+fi
 # r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
 binfmt=failed
 mkdir -p /run/e2e-binfmt

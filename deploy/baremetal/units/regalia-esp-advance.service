@@ -10,8 +10,11 @@
 [Unit]
 Description=Regalia KMS: the ESP's membership chain, then the TPM anchor
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
-# the ESP at /efi (systemd-gpt-auto-generator's automount, or fstab): mounted before this runs
+# the ESP at /efi (the image's generator's automount, regalia-kms-9tv): required and ordered, so a failed generation
+# (a missing identity, an unsupported layout) fails this by name, not with an unmounted ESP
 RequiresMountsFor=/efi
+Requires=efi.mount
+After=efi.mount
 
 # Triggered by a file regalia-sync writes: a burst of triggers must not stop the path unit (every run
 # re-verifies the chain and writes only what differs, so running again is harmless).

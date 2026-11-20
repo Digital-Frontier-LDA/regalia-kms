@@ -7,8 +7,11 @@
 [Unit]
 Description=Regalia KMS: the site configuration against the measured site document
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
-# the ESP at /efi (systemd-gpt-auto-generator's automount, or fstab): mounted before this runs
+# the ESP at /efi (the image's generator's automount, regalia-kms-9tv): required and ordered, so a failed generation
+# (a missing identity, an unsupported layout) fails this by name, not with a missing bind
 RequiresMountsFor=/efi
+Requires=efi.mount
+After=efi.mount
 
 [Service]
 Type=oneshot
