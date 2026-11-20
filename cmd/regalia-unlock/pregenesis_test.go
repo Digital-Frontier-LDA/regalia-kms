@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,6 +29,8 @@ type conditionFixture struct {
 	stub, esp                string
 	nv                       *conditionNV
 	mounts, unmounts, closed int
+	mounted                  bool
+	removed                  []string
 }
 
 func newConditionFixture(t *testing.T) *conditionFixture {
@@ -59,9 +60,9 @@ func newConditionFixture(t *testing.T) *conditionFixture {
 	}
 	f.env.exists = func(string) bool { return true }
 	f.env.mkdtemp = func() (string, error) { return f.esp, nil }
-	f.env.mount = func(string, string) error { f.mounts++; return nil }
-	f.env.unmount = func(string) error { f.unmounts++; return nil }
-	f.env.remove = func(string) error { return nil }
+	f.env.mount = func(string, string) error { f.mounts++; f.mounted = true; return nil }
+	f.env.unmount = func(string) error { f.unmounts++; f.mounted = false; return nil }
+	f.env.remove = func(path string) error { f.removed = append(f.removed, path); return nil }
 	f.env.nv = func() (membership.NV, func(), error) {
 		return f.nv, func() { f.closed++ }, nil
 	}
@@ -80,14 +81,17 @@ func conditionFile(t *testing.T, path string) {
 	}
 }
 
-func callRenderCondition(t *testing.T, env renderEnv, diagnostics io.Writer) int {
+func callRenderCheck(t *testing.T, env renderEnv, diagnostics io.Writer) int {
 	t.Helper()
+	factory := renderEnvForCheck
+	renderEnvForCheck = func(string) renderEnv { return env }
+	defer func() { renderEnvForCheck = factory }()
 	defer func() {
 		if recover() != nil {
 			t.Fatal("condition panic escaped instead of hard failure 255")
 		}
 	}()
-	return renderCondition(env, diagnostics)
+	return run([]string{"-render-check"}, diagnostics)
 }
 
 func TestRenderCondition(t *testing.T) {
@@ -173,7 +177,7 @@ func TestRenderCondition(t *testing.T) {
 			f := newConditionFixture(t)
 			c.change(t, f)
 			var diagnostics strings.Builder
-			if got := callRenderCondition(t, f.env, &diagnostics); got != c.code {
+			if got := callRenderCheck(t, f.env, &diagnostics); got != c.code {
 				t.Fatalf("condition exit = %d, want %d: %s", got, c.code, diagnostics.String())
 			}
 			if c.code == 0 {
@@ -204,22 +208,52 @@ func TestRenderCheckBadArgumentsFailHard(t *testing.T) {
 	}
 }
 
-// Exercise main's actual process exit: falling through to the normal flag-error path would
-// return 1 and silently turn an invalid condition invocation into a non-failing unit skip.
-func TestRenderCheckMainExitStatus(t *testing.T) {
-	if os.Getenv("REGALIA_TEST_RENDER_CHECK_PROCESS") == "1" {
-		os.Args = []string{os.Args[0], "-render-check", "unexpected"}
-		main()
-		t.Fatal("main returned instead of exiting")
+// Dispatch must precede normal flag parsing, whose error exit 1 is a non-failing unit skip.
+func TestRenderCheckDispatchExitCode(t *testing.T) {
+	var diagnostics strings.Builder
+	if status := run([]string{"-render-check", "unexpected"}, &diagnostics); status != 255 {
+		t.Fatalf("run must return 255, not a non-failing skip: %d: %s", status, diagnostics.String())
 	}
-	command := exec.Command(os.Args[0], "-test.run=^TestRenderCheckMainExitStatus$")
-	command.Env = append(os.Environ(), "REGALIA_TEST_RENDER_CHECK_PROCESS=1")
-	output, err := command.CombinedOutput()
-	var exited *exec.ExitError
-	if !errors.As(err, &exited) || exited.ExitCode() != 255 {
-		t.Fatalf("main must exit 255, not a non-failing skip: %v: %s", err, output)
+	if diagnostics.String() != "regalia-unlock: usage: -render-check [-tpm DEVICE]\n" {
+		t.Fatalf("run must log exactly one usage line: %q", diagnostics.String())
 	}
-	if strings.Count(string(output), "\n") != 1 || !strings.Contains(string(output), "usage: -render-check") {
-		t.Fatalf("main must log one reason: %q", output)
+}
+
+func TestRenderCheckRunCleanup(t *testing.T) {
+	for _, name := range []string{"normal", "panic"} {
+		t.Run(name, func(t *testing.T) {
+			f := newConditionFixture(t)
+			want := 1
+			if name == "panic" {
+				want = 255
+				present := f.env.present
+				f.env.present = func(path string) (bool, error) {
+					if path == filepath.Join(f.esp, chainOnESP) {
+						panic("synthetic inspect panic")
+					}
+					return present(path)
+				}
+			}
+			var diagnostics strings.Builder
+			if status := callRenderCheck(t, f.env, &diagnostics); status != want {
+				t.Fatalf("run exit = %d, want %d: %s", status, want, diagnostics.String())
+			}
+			if f.mounts != 1 || f.unmounts != 1 || f.mounted || len(f.removed) != 1 || f.removed[0] != f.esp {
+				t.Fatal("run returned before ESP unmount and private mountpoint removal")
+			}
+		})
+	}
+}
+
+func TestRenderCheckFactoryPanicFailsHard(t *testing.T) {
+	factory := renderEnvForCheck
+	t.Cleanup(func() { renderEnvForCheck = factory })
+	renderEnvForCheck = func(string) renderEnv { panic("synthetic environment factory panic") }
+	var diagnostics strings.Builder
+	if status := run([]string{"-render-check"}, &diagnostics); status != 255 {
+		t.Fatalf("condition factory panic must return 255: %d", status)
+	}
+	if diagnostics.String() != "regalia-unlock: pre-genesis check aborted; boot render refused\n" {
+		t.Fatalf("condition factory panic must log one refusal: %q", diagnostics.String())
 	}
 }

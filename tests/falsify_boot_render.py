@@ -82,7 +82,7 @@ if __name__ == "__main__":
         ("skip-log-explanation-removed", pre, "no site credential: expected pre-genesis skip", "skip", "pre_genesis", "condition must log exactly one reason"),
         ("enrolled-log-explanation-removed", pre, "missing site credential on an enrolled node: ESP membership state is present",
          "missing site", "enrolled_chain_site_deleted", "condition must log exactly one reason"),
-        ("panic-would-be-a-skip", pre, 'if recover() != nil {', 'if false {', "check_panic", "condition panic escaped instead of hard failure 255"),
+        ("panic-would-be-a-skip", "cmd/regalia-unlock/main.go", 'if recover() != nil {', 'if false {', "check_panic", "condition panic escaped instead of hard failure 255"),
     ]
     layout = "[]uint32{h.index, h.base, h.slots[0], h.slots[1]}"
     indices = ["h.index", "h.base", "h.slots[0]", "h.slots[1]"]
@@ -92,8 +92,11 @@ if __name__ == "__main__":
     for name, path, before, after, subtest, reason in controls:
         go_control(name, path, before, after, "TestRenderCondition/" + subtest, reason)
     go_control("main-condition-dispatch-removed", "cmd/regalia-unlock/main.go",
-               '\tif len(os.Args) > 1 && os.Args[1] == "-render-check" {\n\t\tos.Exit(runRenderCheck(os.Args[1:], os.Stderr))\n\t}\n',
-               "", "TestRenderCheckMainExitStatus", "main must exit 255, not a non-failing skip")
+               'if len(arguments) > 0 && arguments[0] == "-render-check" {',
+               'if false && len(arguments) > 0 && arguments[0] == "-render-check" {',
+               "TestRenderCheckDispatchExitCode", "run must return 255, not a non-failing skip")
+    go_control("run-panic-recover-removed", "cmd/regalia-unlock/main.go", 'if recover() != nil {', 'if false {',
+               "TestRenderCheckRunCleanup/panic", "condition panic escaped instead of hard failure 255")
     for name, before, after, subtest in [
         ("invalid-site-accepted", "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", err",
          "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", nil", "invalid"),
@@ -116,10 +119,15 @@ if __name__ == "__main__":
     after = '\tdefer func() {\n\t\tif recovered := recover(); recovered != nil { panic(recovered) }\n\t\t// an unmount that fails'
     go_control("inspect-panic-leaves-esp-mounted", render, before, after, "TestESPUnmountsAfterInspectPanic",
                "ESP remained mounted after inspect panic")
+    go_control("run-panic-cleanup-skipped", render, before, after, "TestRenderCheckRunCleanup/panic",
+               "run returned before ESP unmount and private mountpoint removal")
+    go_control("run-normal-cleanup-skipped", render, "if unmountErr := env.unmount(dir); unmountErr != nil {",
+               "if unmountErr := error(nil); unmountErr != nil {", "TestRenderCheckRunCleanup/normal",
+               "run returned before ESP unmount and private mountpoint removal")
     unit_test = "test_the_code_checks_enrolment_before_credential_setup"
     unit_control("helper-runs-after-credential-setup", "ExecCondition=", "ExecStartPre=", unit_test, "helper must run as ExecCondition")
     unit_control("file-only-condition-bypasses-code", "DefaultDependencies=no\n",
                  "DefaultDependencies=no\nConditionPathExistsGlob=" + checks.SOURCE + "\n", unit_test, "must not bypass the enrolment/TPM decision")
     unit_control("stale-unit-inventory-pin", "Description=Render", "Description=Verify",
                  "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
-    print("1ym: all 26 named mutants killed; no skips", flush=True)
+    print("1ym: all 29 named mutants killed; no skips", flush=True)

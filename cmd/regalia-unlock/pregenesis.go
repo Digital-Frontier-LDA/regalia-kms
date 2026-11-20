@@ -13,6 +13,10 @@ const stubCredentials = "/.extra/global_credentials"
 const stubSiteCredential = stubCredentials + "/regalia.site.cred"
 const espCredentials = "loader/credentials"
 
+// The condition's environment factory is replaceable in tests; the real command always uses
+// the same fixed paths and TPM transport as the renderer.
+var renderEnvForCheck = realRenderEnv
+
 // ExecCondition runs without credential setup in systemd v257, unlike ExecStart. Keep this
 // separate from -render: a credential removed after this check must fail in ExecStart, not skip.
 // Only exit 1 is an expected skip; errors MUST be 255 (1..254 are non-failing to systemd).
@@ -24,17 +28,10 @@ func runRenderCheck(arguments []string, diagnostics io.Writer) int {
 		fmt.Fprintln(diagnostics, "regalia-unlock: usage: -render-check [-tpm DEVICE]")
 		return 255
 	}
-	return renderCondition(realRenderEnv(tpmPath), diagnostics)
+	return renderCondition(renderEnvForCheck(tpmPath), diagnostics)
 }
 
-func renderCondition(env renderEnv, diagnostics io.Writer) (status int) {
-	// An unhandled Go panic exits 2, which systemd would treat as a non-failing condition skip.
-	defer func() {
-		if recover() != nil {
-			fmt.Fprintln(diagnostics, "regalia-unlock: pre-genesis check aborted; boot render refused")
-			status = 255
-		}
-	}()
+func renderCondition(env renderEnv, diagnostics io.Writer) int {
 	skip, err := preGenesis(env)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "regalia-unlock: %v; boot render refused\n", err)

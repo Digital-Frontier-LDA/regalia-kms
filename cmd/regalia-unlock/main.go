@@ -56,17 +56,30 @@ import (
 const ioTimeout = 10 * time.Second
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "-render-check" {
-		os.Exit(runRenderCheck(os.Args[1:], os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stderr))
+}
+
+// Return only after the command's deferred cleanup has completed. In particular, a condition
+// panic must become 255 here, rather than Go's exit 2 (a non-failing ExecCondition skip).
+func run(arguments []string, diagnostics io.Writer) (status int) {
+	if len(arguments) > 0 && arguments[0] == "-render-check" {
+		defer func() {
+			if recover() != nil {
+				fmt.Fprintln(diagnostics, "regalia-unlock: pre-genesis check aborted; boot render refused")
+				status = 255
+			}
+		}()
+		return runRenderCheck(arguments, diagnostics)
 	}
-	err := run(os.Args[1:], os.Stdout, os.Stderr)
+	err := runUnlock(arguments, os.Stdout, diagnostics)
 	if errors.Is(err, flag.ErrHelp) {
-		return
+		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "regalia-unlock: "+err.Error())
-		os.Exit(1)
+		fmt.Fprintln(diagnostics, "regalia-unlock: "+err.Error())
+		return 1
 	}
+	return 0
 }
 
 type options struct {
@@ -78,7 +91,7 @@ type options struct {
 	attempts   int    // attempts at the peers before giving up (tests); 0: for as long as the initrd lasts
 }
 
-func run(arguments []string, out, diagnostics io.Writer) error {
+func runUnlock(arguments []string, out, diagnostics io.Writer) error {
 	if len(arguments) > 0 && arguments[0] == "-render" {
 		return runRender(arguments, out, diagnostics)
 	}
