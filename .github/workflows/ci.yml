@@ -219,7 +219,20 @@ jobs:
           (
             export REGALIA_EXPECT_SWTPM='1'
             sudo apt-get install -y -qq --no-install-recommends wireguard-tools python3-cryptography
-            python3 -BEs -m unittest -v tests.test_baremetal_enrol
+            # Both topologies, including the named single-node mutant controls. A skip is a failure.
+            python3 -BEs - <<'PY'
+          import sys
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              "tests.test_baremetal_enrol",
+              "tests.test_baremetal_single_node_enrol",
+          ])
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.skipped:
+              for test, reason in result.skipped:
+                  print(f"::error::{test}: skipped: {reason}", file=sys.stderr)
+          sys.exit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)
+          PY
           )
 
       # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
