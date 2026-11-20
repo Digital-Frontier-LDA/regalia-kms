@@ -457,6 +457,43 @@ func TestSingleNodeRenderRefusalsWriteNothing(t *testing.T) {
 	}
 }
 
+// 1ym: a present credential passes the unit's presence condition. Its contents and read errors
+// must still be hard refusals, before the ESP or TPM is touched and before any output is published.
+func TestPresentSiteCredentialFailsClosed(t *testing.T) {
+	for _, name := range []string{"empty", "invalid", "tampered", "unreadable"} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			env := f.env()
+			switch name {
+			case "empty":
+				f.files["/creds/regalia.site"] = nil
+			case "invalid":
+				f.files["/creds/regalia.site"] = []byte("{")
+			case "tampered":
+				f.files["/creds/regalia.site"] = append(f.files["/creds/regalia.site"], ' ')
+			case "unreadable":
+				read := env.readFile
+				env.readFile = func(path string) ([]byte, error) {
+					if path == "/creds/regalia.site" {
+						return nil, os.ErrPermission
+					}
+					return read(path)
+				}
+			}
+			env.nv = func() (membership.NV, func(), error) {
+				t.Fatal("a bad site must be refused before opening the TPM")
+				return nil, nil, nil
+			}
+			if _, err := render("/run/regalia-boot", env); err == nil {
+				t.Fatal("present bad site was accepted instead of failing closed")
+			}
+			if f.mounts != 0 || f.mounted != "" || f.nWrites != 0 || len(f.writes) != 0 {
+				t.Fatal("bad site touched the ESP or published output")
+			}
+		})
+	}
+}
+
 // Every way the render can fail ends it with a reason, writes nothing, and leaves nothing mounted.
 func TestEveryFailureWritesNothingAndSaysWhy(t *testing.T) {
 	cases := map[string]struct {

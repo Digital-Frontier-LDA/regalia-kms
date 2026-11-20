@@ -15,9 +15,14 @@
 # console's prompt (which asks from the start, #70) takes the recovery key.
 
 [Unit]
-Description=Render the boot configuration from the signed membership chain
+Description=Render the boot configuration (no site credential: expected pre-genesis skip)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
+# Before enrolment/genesis the stub has no site credential. Skip before systemd sets up credentials;
+# the description makes its condition-skip journal line explain this expected state. Check presence,
+# not content/readability: an empty, unreadable or otherwise bad object must reach the hard failure.
+# Glob's lstat also counts a dangling symlink as present, unlike ConditionPathExists=.
+ConditionPathExistsGlob=/.extra/global_credentials/regalia.site.cred
 # the anchor is read from the TPM (its NV indices, with their own authorization), and, where an index is
 # written under a policy, the image's PCR key is read beside it (#242 B2a): not before the device is there
 Wants=tpm2.target

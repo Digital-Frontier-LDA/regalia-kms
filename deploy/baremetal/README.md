@@ -723,6 +723,13 @@ the client are on the console with no kernel argument. It is not secret. When a 
   | `loader/credentials/regalia.site.cred` | the site document (`bootcreds.site_document`): host_ipv4, the root device, the site's `boot_mesh` (the card by its MAC address, its prefix, gateway and tunnel address, the peers' addresses) | yes | no |
   | `EFI/regalia/membership.json` | the signed membership chain | **no** | no |
 
+  Before enrolment or genesis, absence of `regalia.site.cred` is expected. The render unit's presence
+  condition skips it before credential setup, with a journal line naming
+  `no site credential: expected pre-genesis skip`. This is an inactive, non-failed condition skip,
+  rather than `243/CREDENTIALS`. Empty, unreadable, invalid or tampered credentials still fail:
+  presence alone passes the condition, then the existing fixed-path credential load and render
+  validation apply. A dangling symbolic link also counts as present and must fail, not skip.
+
   **The membership chain is verified in the initrd, not measured.** `regalia-boot-render.service` runs
   `regalia-unlock -render /run/regalia-boot`: it finds the ESP by the `LoaderDevicePartUUID` EFI variable,
   mounts it read-only (nosuid, nodev, noexec, in the unit's own mount namespace), reads the chain and
