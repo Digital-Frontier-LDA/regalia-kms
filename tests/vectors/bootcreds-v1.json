@@ -881,6 +881,665 @@
     "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
    }
   },
+  "single-node DRAINING": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "DRAINING",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node MAINTENANCE": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "MAINTENANCE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node QUARANTINED": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "QUARANTINED",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node RETIRED": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "RETIRED",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node REVOKED_STOLEN": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "REVOKED_STOLEN",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node absent host": {
+   "activation_signers": {
+    "parties": [
+     "b"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "b"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node mixed owner keys": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ecdsa-p256",
+     "public": "0497bbc891d1be6db141ab5205b739c7b916f605ebaddcb69565a0dccccd44bd1e4ba89b95047334ac02b4819551003782d20ac3c84e2efae80fac7252d8b8b073"
+    },
+    {
+     "alg": "ed25519",
+     "public": "d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da"
+    },
+    {
+     "alg": "ed25519",
+     "public": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node no ed25519 owner": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ecdsa-p256",
+     "public": "0497bbc891d1be6db141ab5205b739c7b916f605ebaddcb69565a0dccccd44bd1e4ba89b95047334ac02b4819551003782d20ac3c84e2efae80fac7252d8b8b073"
+    }
+   ],
+   "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
+  "single-node rotated owner": {
+   "activation_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a"
+    ],
+    "threshold": 1
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
+    }
+   ],
+   "owner_wg_pub": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 1,
+    "profile": "single-node",
+    "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+   }
+  },
   "v2": {
    "epoch": 1,
    "heartbeat_max_lifetime_s": 86400,
@@ -978,6 +1637,124 @@
     "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
    ],
    "schema": "regalia.membership/v3"
+  },
+  "v5 multi-node": {
+   "activation_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c"
+    ],
+    "threshold": 2
+   },
+   "anchor_policy_key": {
+    "alg": "ecdsa-p256",
+    "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+   },
+   "card_record": {
+    "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+    "sequence": 1
+   },
+   "epoch": 1,
+   "heartbeat_max_lifetime_s": 21600,
+   "heartbeat_signers": {
+    "parties": [
+     "a",
+     "b",
+     "c",
+     "owner"
+    ],
+    "threshold": 2
+   },
+   "issued_at": "2026-10-04T09:00:00Z",
+   "nodes": [
+    {
+     "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+     "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+     "hsm_serials": [
+      "DENK0404100"
+     ],
+     "node_id": "a",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+     },
+     "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+     "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+    },
+    {
+     "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+     "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+     "hsm_serials": [
+      "DENK0404101"
+     ],
+     "node_id": "b",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04fbd0ea5bd96b8586f096b43c0753748e9aea493ce75ea2e1a86b572a15d3aa3a3c96371a3a3f5b91ddcfb18ffcc8e91652cbdfa0ec44d966e80bac6bca0ce8f2"
+     },
+     "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+     "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+    },
+    {
+     "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+     "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+     "hsm_serials": [
+      "DENK0404102"
+     ],
+     "node_id": "c",
+     "signing_key": {
+      "alg": "ecdsa-p256",
+      "public": "04f031507b5231561fb105d23f1d816ee19071fd76dd4f5df42453b5bb2e780803407cde0b4a792a9af326d11ae45c7a53548f6e6034a85cd8555f72ab9f903bee"
+     },
+     "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "state": "ACTIVE",
+     "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+     "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+    }
+   ],
+   "owner_heartbeat_lifetime_s": 3600,
+   "owner_keys": [
+    {
+     "alg": "ed25519",
+     "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+    },
+    {
+     "alg": "ed25519",
+     "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+    },
+    {
+     "alg": "ed25519",
+     "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+    }
+   ],
+   "policy_version": "p1",
+   "prev_digest": "",
+   "revocation_signers": [
+    {
+     "parties": [
+      "a",
+      "b",
+      "c"
+     ],
+     "threshold": 2
+    },
+    {
+     "parties": [
+      "owner"
+     ],
+     "threshold": 1
+    }
+   ],
+   "schema": "regalia.membership/v5",
+   "topology": {
+    "nodes": 3,
+    "profile": "multi-node"
+   }
   },
   "with d active": {
    "epoch": 1,
@@ -1287,9 +2064,73 @@
    "site": "a"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a"
   },
   {
@@ -1451,9 +2292,73 @@
    "site": "b"
   },
   {
-   "class": "pending",
+   "class": "node-absent",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:02\nBOOT_ADDRESS=198.51.100.7/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.2\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for b under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 192.0.2.10, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.2 ip daddr { 10.89.0.1, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"b\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4040404040404040404040404040404040404040404040404040404040404040\",\"ek_name\":\"000b1010101010101010101010101010101010101010101010101010101010101010\",\"endpoint\":\"10.89.0.1:7443\",\"node_id\":\"a\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# a\nPublicKey = oKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKA=\nAllowedIPs = 10.89.0.1/32\nEndpoint = 192.0.2.10:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node rotated owner",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node mixed owner keys",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node absent host",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node QUARANTINED",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node DRAINING",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node RETIRED",
+   "refused": "b is not in the manifest",
+   "site": "b"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "b is not in the manifest",
    "site": "b"
   },
   {
@@ -1619,9 +2524,73 @@
    "site": "c"
   },
   {
-   "class": "pending",
+   "class": "node-absent",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:03\nBOOT_ADDRESS=198.51.100.9/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.3\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for c under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 192.0.2.10, 198.51.100.7 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.3 ip daddr { 10.89.0.1, 10.89.0.2 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"c\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4040404040404040404040404040404040404040404040404040404040404040\",\"ek_name\":\"000b1010101010101010101010101010101010101010101010101010101010101010\",\"endpoint\":\"10.89.0.1:7443\",\"node_id\":\"a\"},{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# a\nPublicKey = oKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKA=\nAllowedIPs = 10.89.0.1/32\nEndpoint = 192.0.2.10:51820\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node rotated owner",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node mixed owner keys",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node QUARANTINED",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node DRAINING",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node RETIRED",
+   "refused": "c is not in the manifest",
+   "site": "c"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "c is not in the manifest",
    "site": "c"
   },
   {
@@ -1779,9 +2748,73 @@
    "site": "a, peers listed in reverse"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, peers listed in reverse"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, peers listed in reverse"
   },
   {
@@ -1939,9 +2972,73 @@
    "site": "a, a /24 with a gateway"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/24\nBOOT_GATEWAY=192.0.2.1\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /24 with a gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, a /24 with a gateway"
   },
   {
@@ -2099,9 +3196,73 @@
    "site": "a, a /31 gateway"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/31\nBOOT_GATEWAY=192.0.2.11\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, a /31 gateway"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, a /31 gateway"
   },
   {
@@ -2259,9 +3420,73 @@
    "site": "a, other ports"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7999\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7999\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51999\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51999\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, other ports"
   },
   {
@@ -2423,9 +3648,73 @@
    "site": "a, with d"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"pcrs\":[7,11,12],\"peers\":[{\"ak_name\":\"000b4141414141414141414141414141414141414141414141414141414141414141\",\"ek_name\":\"000b1111111111111111111111111111111111111111111111111111111111111111\",\"endpoint\":\"10.89.0.2:7443\",\"node_id\":\"b\"},{\"ak_name\":\"000b4242424242424242424242424242424242424242424242424242424242424242\",\"ek_name\":\"000b1212121212121212121212121212121212121212121212121212121212121212\",\"endpoint\":\"10.89.0.3:7443\",\"node_id\":\"c\"}],\"schema\":\"regalia.unlock-boot/v1\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# b\nPublicKey = oaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaE=\nAllowedIPs = 10.89.0.2/32\nEndpoint = 198.51.100.7:51820\n\n[Peer]\n# c\nPublicKey = oqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioqI=\nAllowedIPs = 10.89.0.3/32\nEndpoint = 198.51.100.9:51820\n"
+   },
+   "manifest": "v5 multi-node",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, with d"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, with d"
   },
   {
@@ -2551,9 +3840,69 @@
    "site": "a, b only"
   },
   {
-   "class": "pending",
+   "class": "profile",
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "no-address",
+   "manifest": "v5 multi-node",
+   "refused": "the site config has no boot-mesh address for c, which the manifest lets authorize",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node rotated owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node mixed owner keys",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node MAINTENANCE",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node QUARANTINED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node DRAINING",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node RETIRED",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, b only"
+  },
+  {
+   "class": "profile",
+   "manifest": "single-node REVOKED_STOLEN",
+   "refused": "the site configuration is for a multi-node host and the manifest is single-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, b only"
   },
   {
@@ -2659,9 +4008,101 @@
    "site": "a, single-node"
   },
   {
-   "class": "pending",
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
    "manifest": "single-node",
-   "refused": "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the single-node unlock configuration (regalia.unlock-boot/v2) yet",
+   "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "v5 multi-node",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node rotated owner",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da\"},{\"alg\":\"ed25519\",\"key\":\"20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node mixed owner keys",
+   "site": "a, single-node"
+  },
+  {
+   "class": "owner-key",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the manifest names no ed25519 owner key: the owner's response could not be checked",
+   "site": "a, single-node"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node MAINTENANCE",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node QUARANTINED",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node DRAINING",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node RETIRED",
+   "site": "a, single-node"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+   },
+   "manifest": "single-node REVOKED_STOLEN",
    "site": "a, single-node"
   },
   {
@@ -2669,8 +4110,373 @@
    "manifest": "b's EK Name not a SHA-256 Name",
    "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
    "site": "a, single-node"
+  },
+  {
+   "class": "profile",
+   "manifest": "all active",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "c quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "c in maintenance",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "c draining",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "c retired",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "c revoked as stolen",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "b and c quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "a in maintenance",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "a quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "nodes listed c, b, a",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "v2",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "v3",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "a large epoch",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "with d active",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "with d quarantined",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "without a",
+   "refused": "a is not in the manifest",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "v5 multi-node",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node rotated owner",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"d54207da194977dcf46adbfec2bc2e75b52d5a8a42184fedfdc00024f0e3e8da\"},{\"alg\":\"ed25519\",\"key\":\"20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node mixed owner keys",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "owner-key",
+   "manifest": "single-node no ed25519 owner",
+   "refused": "the manifest names no ed25519 owner key: the owner's response could not be checked",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "node-absent",
+   "manifest": "single-node absent host",
+   "refused": "a is not in the manifest",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node MAINTENANCE",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node QUARANTINED",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node DRAINING",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node RETIRED",
+   "site": "a, single-node other ports"
+  },
+  {
+   "files": {
+    "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+    "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 1. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.51 } udp dport 51999 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.8 } tcp dport 7999 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+    "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c\"},{\"alg\":\"ed25519\",\"key\":\"66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a\"},{\"alg\":\"ed25519\",\"key\":\"0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.8:7999\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+    "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = Dg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4ODg4=\nAllowedIPs = 10.89.0.8/32\nEndpoint = 203.0.113.51:51999\n"
+   },
+   "manifest": "single-node REVOKED_STOLEN",
+   "site": "a, single-node other ports"
+  },
+  {
+   "class": "profile",
+   "manifest": "b's EK Name not a SHA-256 Name",
+   "refused": "the site configuration is for a single-node host and the manifest is multi-node: the site's boot mesh is accepted only under the profile it is for",
+   "site": "a, single-node other ports"
   }
  ],
+ "single_chain": [
+  {
+   "manifest": {
+    "activation_signers": {
+     "parties": [
+      "a"
+     ],
+     "threshold": 1
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacaca",
+     "sequence": 1
+    },
+    "epoch": 1,
+    "heartbeat_max_lifetime_s": 21600,
+    "heartbeat_signers": {
+     "parties": [
+      "a"
+     ],
+     "threshold": 1
+    },
+    "issued_at": "2026-10-04T09:00:00Z",
+    "nodes": [
+     {
+      "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+      "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+      "hsm_serials": [
+       "DENK0404100"
+      ],
+      "node_id": "a",
+      "signing_key": {
+       "alg": "ecdsa-p256",
+       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+      },
+      "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+      "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+     }
+    ],
+    "owner_heartbeat_lifetime_s": 3600,
+    "owner_keys": [
+     {
+      "alg": "ed25519",
+      "public": "43a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c"
+     },
+     {
+      "alg": "ed25519",
+      "public": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a"
+     },
+     {
+      "alg": "ed25519",
+      "public": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d"
+     }
+    ],
+    "owner_wg_pub": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+    "policy_version": "p1",
+    "prev_digest": "",
+    "revocation_signers": [
+     {
+      "parties": [
+       "owner"
+      ],
+      "threshold": 1
+     }
+    ],
+    "schema": "regalia.membership/v5",
+    "topology": {
+     "nodes": 1,
+     "profile": "single-node",
+     "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    }
+   },
+   "signature": {
+    "public": "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0",
+    "sig": "6cfc7a852fa6524b037ce81a78c3ce8431719fbb58bd441759f21859686e7418cac972b11ee468b9456e9ff0ff820a9878d943232260d74e3e113e726ca7720c",
+    "signer": "root"
+   }
+  },
+  {
+   "manifest": {
+    "activation_signers": {
+     "parties": [
+      "a"
+     ],
+     "threshold": 1
+    },
+    "anchor_policy_key": {
+     "alg": "ecdsa-p256",
+     "public": "049afa410a0db0c8289d651bdf7d20472bd9e47028675863a5d416eebbe232a07c9786b0b136d9a2beacc38e65778ae3daefcd245cd744e41b4bd116f189658401"
+    },
+    "card_record": {
+     "digest": "cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcb",
+     "sequence": 2
+    },
+    "epoch": 2,
+    "heartbeat_max_lifetime_s": 21600,
+    "heartbeat_signers": {
+     "parties": [
+      "a"
+     ],
+     "threshold": 1
+    },
+    "issued_at": "2026-10-04T09:00:00Z",
+    "nodes": [
+     {
+      "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+      "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+      "hsm_serials": [
+       "DENK0404100"
+      ],
+      "node_id": "a",
+      "signing_key": {
+       "alg": "ecdsa-p256",
+       "public": "04f1ab44a7b46940712033b87924b759b685f0a807e5913c2dccadaa22a4444edd7e737e6e945916b2070d1801f18107b236a3b0523d2c97a20c740955cddfd492"
+      },
+      "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+      "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+     }
+    ],
+    "owner_heartbeat_lifetime_s": 3600,
+    "owner_keys": [
+     {
+      "alg": "ed25519",
+      "public": "20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7"
+     }
+    ],
+    "owner_wg_pub": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+    "policy_version": "p1",
+    "prev_digest": "194d024827086cacfa22fe67f58797de284c176acce6b03de8c84a2ebf762725",
+    "revocation_signers": [
+     {
+      "parties": [
+       "owner"
+      ],
+      "threshold": 1
+     }
+    ],
+    "schema": "regalia.membership/v5",
+    "topology": {
+     "nodes": 1,
+     "profile": "single-node",
+     "single_node_limits_sha256": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    }
+   },
+   "signature": {
+    "public": "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0",
+    "sig": "10029c4f05a7d16f4a21927013d22d02fd5a8180fca34584bd8989d053777e5e852620ab06133d466ee638258547e497969da3fb1245cb09c5fe50628dca3a0a",
+    "signer": "root"
+   }
+  }
+ ],
+ "single_chain_files": {
+  "regalia.boot-env": "BOOT_NIC_MAC=52:54:00:ab:cd:01\nBOOT_ADDRESS=192.0.2.10/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=10.89.0.1\n",
+  "regalia.boot-nft": "# Generated by deploy/baremetal/bootnet.py for a under manifest epoch 2. Do not edit by hand.\ntable inet regalia_boot\ndelete table inet regalia_boot\ntable inet regalia_boot {\n  chain input {\n    type filter hook input priority filter; policy drop;\n    iif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n  chain forward {\n    type filter hook forward priority filter; policy drop;\n  }\n  chain output {\n    type filter hook output priority filter; policy drop;\n    oif \"lo\" accept\n    meta nfproto ipv6 drop\n    ct state invalid drop\n    ct state established,related accept\n    ip daddr { 203.0.113.50 } udp dport 51820 accept comment \"WireGuard, to the peers' declared addresses\"\n    oifname \"wg-boot\" ip saddr 10.89.0.1 ip daddr { 10.89.0.9 } tcp dport 7443 tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"a new unlock request, inside the tunnel\"\n    icmp type { destination-unreachable, time-exceeded } accept comment \"path MTU discovery\"\n  }\n}\n",
+  "regalia.unlock-config": "{\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"node_id\":\"a\",\"owner_keys\":[{\"alg\":\"ed25519\",\"key\":\"20828bf5c5bdcacb684863336c202fb5599da48be5596615742170705beca9f7\"}],\"pcrs\":[7,11,12],\"peers\":[{\"endpoint\":\"10.89.0.9:7443\",\"node_id\":\"owner\"}],\"schema\":\"regalia.unlock-boot/v2\",\"topology\":\"single-node\"}",
+  "regalia.wg-boot-conf": "[Interface]\n\n[Peer]\n# owner\nPublicKey = DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0=\nAllowedIPs = 10.89.0.9/32\nEndpoint = 203.0.113.50:51820\n"
+ },
+ "single_root_public": "0d7550754e0800a5d237eef5826035766b9b3e5a15868a940ab289958788e3b0",
  "sites": {
   "a": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, a /24 with a gateway": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":\"192.0.2.1\",\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":24,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
@@ -2679,6 +4485,7 @@
   "a, other ports": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51999,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":32,\"unlock_port\":7999},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, peers listed in reverse": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"},{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, single-node": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"owner\":{\"address\":\"10.89.0.9\",\"underlay\":\"203.0.113.50\"},\"peers\":[],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
+  "a, single-node other ports": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51999,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"owner\":{\"address\":\"10.89.0.8\",\"underlay\":\"203.0.113.51\"},\"peers\":[],\"prefix\":32,\"unlock_port\":7999},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "a, with d": "{\"boot_mesh\":{\"address\":\"10.89.0.1\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:01\",\"node_id\":\"a\",\"peers\":[{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"},{\"address\":\"10.89.0.4\",\"node_id\":\"d\",\"underlay\":\"203.0.113.20\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"192.0.2.10\",\"schema\":\"regalia.boot-site/v1\"}",
   "b": "{\"boot_mesh\":{\"address\":\"10.89.0.2\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:02\",\"node_id\":\"b\",\"peers\":[{\"address\":\"10.89.0.1\",\"node_id\":\"a\",\"underlay\":\"192.0.2.10\"},{\"address\":\"10.89.0.3\",\"node_id\":\"c\",\"underlay\":\"198.51.100.9\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"198.51.100.7\",\"schema\":\"regalia.boot-site/v1\"}",
   "c": "{\"boot_mesh\":{\"address\":\"10.89.0.3\",\"gateway\":null,\"interface\":\"wg-unlock\",\"listen_port\":51820,\"nic_mac\":\"52:54:00:ab:cd:03\",\"node_id\":\"c\",\"peers\":[{\"address\":\"10.89.0.1\",\"node_id\":\"a\",\"underlay\":\"192.0.2.10\"},{\"address\":\"10.89.0.2\",\"node_id\":\"b\",\"underlay\":\"198.51.100.7\"}],\"prefix\":32,\"unlock_port\":7443},\"device\":\"/dev/disk/by-partlabel/regalia-root\",\"host_ipv4\":\"198.51.100.9\",\"schema\":\"regalia.boot-site/v1\"}"

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -314,6 +315,145 @@ func TestRenderWritesWhatBootcfgRendersFromTheAnchoredChain(t *testing.T) {
 	f.files["ESP/"+chainOnESP] = chainBytes(f.vector, "main", 4)
 	if _, err := render("/run/regalia-boot", f.env()); err != nil {
 		t.Errorf("the crash window: %v", err)
+	}
+}
+
+// The generated Python fixture supplies a root-signed single-node chain and the exact
+// four expected credentials. The initrd verifies it against a policy-written anchor.
+func bootCredentialVector(t *testing.T) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "vectors", "bootcreds-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := membership.Load(raw, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return document.(map[string]any)
+}
+
+func singleRenderFixture(t *testing.T) (*renderFixture, map[string]any) {
+	t.Helper()
+	v := bootCredentialVector(t)
+	chain := vectorManifest(v["single_chain"]).([]any)
+	f := newFixture(t)
+	f.files["/root-key.json"] = membership.Canonical(v["single_root_public"])
+	f.files["/creds/regalia.site"] = []byte(v["sites"].(map[string]any)["a, single-node"].(string))
+	f.files["ESP/"+chainOnESP] = membership.Canonical(chain)
+	key, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "pcr-keys", "system-1.pub.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.files["/pcr.pem"] = key
+	_, policy, err := membership.PCRKeyPolicy(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tpm = tpmCase(t, f.vector, "a policy-written anchor, this node's policy")
+	for _, entry := range f.tpm.nv {
+		if entry["policy"] != nil {
+			entry["policy"] = hex.EncodeToString(policy)
+		}
+	}
+	base, _ := hex.DecodeString(f.tpm.nv[membership.HighWaterIndex+1]["data"].(string))
+	f.tpm.nv[membership.HighWaterIndex]["data"] = hex.EncodeToString(binary.BigEndian.AppendUint64(nil, binary.BigEndian.Uint64(base)+2))
+	for i, envelope := range chain {
+		manifest := envelope.(map[string]any)["manifest"].(map[string]any)
+		digest, _ := hex.DecodeString(membership.Digest(manifest))
+		f.tpm.nv[membership.HighWaterIndex+4+uint32(i)]["data"] = hex.EncodeToString(membership.SlotBytes(uint64(i+1), digest))
+	}
+	return f, v
+}
+
+func TestSingleNodeAnchoredRenderUnlocksOnlyWithCurrentOwner(t *testing.T) {
+	f, v := singleRenderFixture(t)
+	if _, err := render("/run/regalia-boot", f.env()); err != nil {
+		t.Fatal(err)
+	}
+	want := v["single_chain_files"].(map[string]any)
+	if len(f.writes) != len(want) || f.mounts != 0 {
+		t.Fatalf("rendered %d files, left %d mounts", len(f.writes), f.mounts)
+	}
+	for name, body := range want {
+		if string(f.writes["/run/regalia-boot/"+name]) != body.(string) {
+			t.Errorf("%s differs from Python's bytes", name)
+		}
+	}
+	assertRenderedOwnerExchange(t, f.writes["/run/regalia-boot/regalia.unlock-config"])
+}
+
+// This part of the path needs no NV or PCR-key fixture: verify the generated signed
+// chain, render its tip, then use the resulting bytes in the real client exchange.
+func TestSingleNodeVerifiedRenderUnlocksOnlyWithCurrentOwner(t *testing.T) {
+	v := bootCredentialVector(t)
+	manifests, err := membership.ReadChain(vectorManifest(v["single_chain"]).([]any), v["single_root_public"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, err := bootcfg.ReadSite([]byte(v["sites"].(map[string]any)["a, single-node"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := bootcfg.Render(manifests[len(manifests)-1], site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRenderedOwnerExchange(t, files["regalia.unlock-config"])
+}
+
+func assertRenderedOwnerExchange(t *testing.T, raw []byte) {
+	t.Helper()
+	config, err := loadText(t, string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Schema != bootSingleSchema || len(config.Peers) != 1 || config.Peers[0].NodeID != ownerPeer {
+		t.Fatal("the rendered configuration does not name exactly the owner")
+	}
+	peer := newFakePeer(t, ownerPeer)
+	_, current := ownerKeyPair(t, 20) // the fixture's fixed rotated owner
+	boot, err := newSession(config.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := boot.ask(config.Peers[0], 1, ownerSend(t, peer, current, nil), noQuote)
+	if err != nil || string(got) != string(peer.contribution) || !boot.consumed {
+		t.Fatalf("rendered current owner did not unlock: %v", err)
+	}
+	_, old := ownerKeyPair(t, 10)
+	boot, err = newSession(config.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boot.ask(config.Peers[0], 1, ownerSend(t, peer, old, nil), noQuote); err == nil ||
+		!strings.Contains(err.Error(), "not signed by one of the owner_keys") || boot.consumed {
+		t.Fatalf("the previous owner was not refused by the rendered key pin: %v", err)
+	}
+}
+
+func TestSingleNodeRenderRefusalsWriteNothing(t *testing.T) {
+	for name, change := range map[string]func(*renderFixture, map[string]any){
+		"rollback": func(f *renderFixture, v map[string]any) {
+			chain := vectorManifest(v["single_chain"]).([]any)
+			f.files["ESP/"+chainOnESP] = membership.Canonical(chain[:1])
+		},
+		"tampered chain": func(f *renderFixture, v map[string]any) {
+			chain := vectorManifest(v["single_chain"]).([]any)
+			chain[1].(map[string]any)["manifest"].(map[string]any)["owner_wg_pub"] = strings.Repeat("0c", 32)
+			f.files["ESP/"+chainOnESP] = membership.Canonical(chain)
+		},
+		"wrong profile": func(f *renderFixture, v map[string]any) {
+			f.files["/creds/regalia.site"] = []byte(v["sites"].(map[string]any)["a"].(string))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, v := singleRenderFixture(t)
+			change(f, v)
+			if _, err := render("/run/regalia-boot", f.env()); err == nil || f.nWrites != 0 || len(f.writes) != 0 || f.mounts != 0 {
+				t.Fatalf("refusal: %v, write attempts %d, files %d, mounts %d", err, f.nWrites, len(f.writes), f.mounts)
+			}
+		})
 	}
 }
 

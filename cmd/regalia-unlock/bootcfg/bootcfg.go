@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	SiteSchema   = "regalia.boot-site/v1"
-	siteMaxBytes = 16 * 1024
-	bootSchema   = "regalia.unlock-boot/v1" // unlock.BOOT_SCHEMA
-	table        = "regalia_boot"           // bootnet.TABLE
-	bootIF       = "wg-boot"                // bootnet.BOOT_INTERFACE
+	SiteSchema       = "regalia.boot-site/v1"
+	siteMaxBytes     = 16 * 1024
+	bootSchema       = "regalia.unlock-boot/v1" // unlock.BOOT_SCHEMA
+	bootSingleSchema = "regalia.unlock-boot/v2" // unlock.BOOT_SINGLE_SCHEMA
+	table            = "regalia_boot"           // bootnet.TABLE
+	bootIF           = "wg-boot"                // bootnet.BOOT_INTERFACE
 )
 
 // UnlockPCRs is bootcreds.UNLOCK_PCRS: the PCRs a booting host's quote covers.
@@ -41,11 +42,6 @@ var (
 	singleMeshKeys = append(append([]string(nil), meshKeys...), "owner")
 	ownerKeys      = []string{"underlay", "address"}
 )
-
-// singleNodePending is bootcreds.SINGLE_NODE_PENDING: a single-node host's credentials are refused alike on both sides
-// until this renderer makes the single-node unlock configuration (regalia.unlock-boot/v2, dx7.5) too.
-const singleNodePending = "a single-node host's boot credentials are not rendered yet: the initrd's renderer does not make the " +
-	"single-node unlock configuration (regalia.unlock-boot/v2) yet"
 
 // Peer is one boot_mesh peer: where it is, outside the tunnel and inside.
 type Peer struct{ NodeID, Underlay, Address string }
@@ -312,7 +308,16 @@ func others(site Site, manifest map[string]any) ([]authorizer, error) {
 	if _, named := nodes[site.NodeID]; !named {
 		return nil, refuse("node-absent", "%s is not in the manifest", site.NodeID)
 	}
-	// bootnet._single: each boot-mesh shape only under its own profile (Render refused single-node manifests before this)
+	// bootnet._single: each boot-mesh shape only under its own profile.
+	profile, _ := membership.Profile(manifest) // Validate above already checked the profile.
+	if profile == membership.ProfileSingleNode {
+		if site.Owner == nil {
+			return nil, refuse("profile", "the site configuration is for a multi-node host and the manifest is single-node: the site's boot "+
+				"mesh is accepted only under the profile it is for")
+		}
+		owner := map[string]any{"node_id": membership.OwnerParty, "wg_service_pub": manifest["owner_wg_pub"]}
+		return []authorizer{{owner, *site.Owner}}, nil
+	}
 	if site.Owner != nil {
 		return nil, refuse("profile", "the site configuration is for a single-node host and the manifest is multi-node: the site's boot "+
 			"mesh is accepted only under the profile it is for")
@@ -347,9 +352,6 @@ func set(values []string) string { return "{ " + strings.Join(values, ", ") + " 
 
 // Render is bootcreds.render: {credential name: bytes}.
 func Render(manifest map[string]any, site Site) (map[string][]byte, error) {
-	if profile, err := membership.Profile(manifest); err == nil && profile == membership.ProfileSingleNode {
-		return nil, refuse("pending", "%s", singleNodePending)
-	}
 	peers, err := others(site, manifest)
 	if err != nil {
 		return nil, err
@@ -360,19 +362,35 @@ func Render(manifest map[string]any, site Site) (map[string][]byte, error) {
 	}
 	// unlock.boot_config: the peers in the manifest's order
 	var pins []any
-	for _, entry := range manifest["nodes"].([]any) {
-		node := entry.(map[string]any)
-		id := node["node_id"].(string)
-		endpoint, has := endpoints[id]
-		if id == site.NodeID || !has || !membership.May(manifest, id, "authorize") {
-			continue
-		}
-		for _, k := range []string{"ek_name", "ak_name"} {
-			if !tpmNamePattern.MatchString(node[k].(string)) {
-				return nil, refuse("tpm-name", "peer.%s must be a SHA-256 TPM Name", k)
+	profile, _ := membership.Profile(manifest)
+	single := profile == membership.ProfileSingleNode
+	var ownerKeys []any
+	if single {
+		for _, entry := range manifest["owner_keys"].([]any) {
+			key := entry.(map[string]any)
+			if key["alg"] == "ed25519" {
+				ownerKeys = append(ownerKeys, map[string]any{"alg": key["alg"], "key": key["key"]})
 			}
 		}
-		pins = append(pins, map[string]any{"node_id": id, "endpoint": endpoint, "ek_name": node["ek_name"], "ak_name": node["ak_name"]})
+		if len(ownerKeys) == 0 {
+			return nil, refuse("owner-key", "the manifest names no ed25519 owner key: the owner's response could not be checked")
+		}
+		pins = []any{map[string]any{"node_id": membership.OwnerParty, "endpoint": endpoints[membership.OwnerParty]}}
+	} else {
+		for _, entry := range manifest["nodes"].([]any) {
+			node := entry.(map[string]any)
+			id := node["node_id"].(string)
+			endpoint, has := endpoints[id]
+			if id == site.NodeID || !has || !membership.May(manifest, id, "authorize") {
+				continue
+			}
+			for _, k := range []string{"ek_name", "ak_name"} {
+				if !tpmNamePattern.MatchString(node[k].(string)) {
+					return nil, refuse("tpm-name", "peer.%s must be a SHA-256 TPM Name", k)
+				}
+			}
+			pins = append(pins, map[string]any{"node_id": id, "endpoint": endpoint, "ek_name": node["ek_name"], "ak_name": node["ak_name"]})
+		}
 	}
 	if len(pins) == 0 {
 		return nil, refuse("no-peer", "the manifest leaves %s no peer with an address", site.NodeID)
@@ -388,6 +406,9 @@ func Render(manifest map[string]any, site Site) (map[string][]byte, error) {
 		pcrs[i] = p
 	}
 	config := map[string]any{"schema": bootSchema, "node_id": site.NodeID, "device": site.Device, "pcrs": pcrs, "peers": pins}
+	if single {
+		config["schema"], config["topology"], config["owner_keys"] = bootSingleSchema, membership.ProfileSingleNode, ownerKeys
+	}
 
 	// bootnet.boot_wg_conf: by their WG-SERVICE keys, at their declared addresses, sorted by node ID
 	wg := "[Interface]\n"

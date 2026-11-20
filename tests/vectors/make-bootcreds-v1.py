@@ -17,7 +17,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from deploy.baremetal import bootcreds, membership, sitecfg  # noqa: E402
-from tests.test_baremetal_membership_v5 import single5  # noqa: E402
+from tests.test_baremetal_membership_v5 import single5, manifest5, nodes4, one  # noqa: E402
+from tests.test_baremetal_membership_v4 import ed25519, p256, typed, pub  # noqa: E402
+from tests.test_baremetal_membership import sign  # noqa: E402
 
 DEVICE = "/dev/disk/by-partlabel/regalia-root"
 WHERE = {"a": ("192.0.2.10", "10.89.0.1"), "b": ("198.51.100.7", "10.89.0.2"), "c": ("198.51.100.9", "10.89.0.3"),
@@ -62,6 +64,8 @@ SITES = {
     "a, b only": site("a", nodes=("a", "b")),
     # dx7.6: a single-node host, its boot mesh's one peer the owner
     "a, single-node": site("a", nodes=("a",), owner={"underlay": "203.0.113.50", "address": "10.89.0.9"}),
+    "a, single-node other ports": site("a", nodes=("a",), listen_port=51999, unlock_port=7999,
+                                      owner={"underlay": "203.0.113.51", "address": "10.89.0.8"}),
 }
 MANIFESTS = {
     "all active": manifest(),
@@ -74,6 +78,13 @@ MANIFESTS = {
     "with d active": manifest(order=("a", "b", "c", "d")), "with d quarantined": manifest(order=("a", "b", "c", "d"), d="QUARANTINED"),
     "without a": manifest(order=("b", "c", "d")),
     "single-node": single5(1, ""),
+    "v5 multi-node": manifest5(1, "", nodes4()),
+    "single-node rotated owner": single5(1, "", owner_wg_pub="0d" * 32, owner_keys=[typed(ed25519(20))]),
+    "single-node mixed owner keys": single5(1, "", owner_keys=[typed(p256(80)), typed(ed25519(21)), typed(ed25519(20))]),
+    "single-node no ed25519 owner": single5(1, "", owner_keys=[typed(p256(80))]),
+    "single-node absent host": single5(1, "", nid="b"),
+    **{"single-node " + state: single5(1, "", nodes=[one(state=state)]) for state in
+       ("MAINTENANCE", "QUARANTINED", "DRAINING", "RETIRED", "REVOKED_STOLEN")},
     "b's EK Name not a SHA-256 Name": dict(manifest(), nodes=[dict(n, ek_name="000c" + n["ek_name"][4:]) if n["node_id"] == "b" else n
                                                               for n in manifest()["nodes"]]),
 }
@@ -89,7 +100,7 @@ CLASSES = [("not-json", r"duplicate field|floats are not allowed|not valid JSON|
            ("port", r"must be a port number"), ("node-id", r"is not a node ID"), ("address", r"must be an IPv4 address|must be a host address"),
            ("node-absent", r"is not in the manifest"), ("no-address", r"has no boot-mesh address for"), ("no-peer", r"no peer"),
            ("tpm-name", r"must be a SHA-256 TPM Name"), ("profile", r"the site configuration is for a"),
-           ("pending", r"boot credentials are not rendered yet")]
+           ("owner-key", r"names no ed25519 owner key")]
 
 
 def reason_class(message):
@@ -195,6 +206,18 @@ for name, raw in raw_sites.items():
     assert outcome["taken"] == name.startswith("valid"), (name, outcome)
     documents.append({"name": name, "hex": raw.hex(), **outcome})
 
+# A fixed, root-signed single-node chain for the initrd integration test, with the same
+# generated expected bytes as the renderer parity cases. No private key is written.
+root = ed25519(90)
+first = MANIFESTS["single-node"]
+second = dict(MANIFESTS["single-node rotated owner"], epoch=2, prev_digest=membership.digest(first),
+              card_record={"sequence": 2, "digest": "cb" * 32})
+single_chain = [sign(first, root), sign(second, root)]
+assert membership.accept_chain(None, single_chain, pub(root)) == second
+
 print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "device": DEVICE,
                   "sites": {name: bootcreds.site_document(cfg, DEVICE).decode("ascii") for name, cfg in SITES.items()},
-                  "manifests": composed(MANIFESTS), "renders": renders, "documents": documents}, indent=1, sort_keys=True))
+                  "manifests": composed(MANIFESTS), "renders": renders, "documents": documents,
+                  "single_chain": composed(single_chain), "single_root_public": pub(root),
+                  "single_chain_files": {k: v.decode("ascii") for k, v in
+                                         bootcreds.render(second, SITES["a, single-node"], DEVICE).items()}}, indent=1, sort_keys=True))
