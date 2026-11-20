@@ -1057,6 +1057,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     # in the store already, #332), from the chain it is given, since nothing is committed yet; and it reads and writes
     # by that same policy. Owner-written when they name none.
     tip = membership.accept_chain(None, envelopes, cfg["root_key"])
+    if membership.profile(tip) == membership.SINGLE_NODE:
+        return tip["epoch"], membership.digest(tip)
     policy = lambda: node_module.define_policy(cfg, manifest=tip)
     hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
                               image_key=lambda: node_module.image_key(cfg, manifest=tip), owner_auth=owner_auth)
