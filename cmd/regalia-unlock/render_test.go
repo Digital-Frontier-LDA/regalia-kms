@@ -320,7 +320,7 @@ func TestRenderWritesWhatBootcfgRendersFromTheAnchoredChain(t *testing.T) {
 
 // The generated Python fixture supplies a root-signed single-node chain and the exact
 // four expected credentials. The initrd verifies it against a policy-written anchor.
-func singleRenderFixture(t *testing.T) (*renderFixture, map[string]any) {
+func bootCredentialVector(t *testing.T) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "vectors", "bootcreds-v1.json"))
 	if err != nil {
@@ -330,7 +330,12 @@ func singleRenderFixture(t *testing.T) (*renderFixture, map[string]any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := document.(map[string]any)
+	return document.(map[string]any)
+}
+
+func singleRenderFixture(t *testing.T) (*renderFixture, map[string]any) {
+	t.Helper()
+	v := bootCredentialVector(t)
 	chain := vectorManifest(v["single_chain"]).([]any)
 	f := newFixture(t)
 	f.files["/root-key.json"] = membership.Canonical(v["single_root_public"])
@@ -375,7 +380,31 @@ func TestSingleNodeAnchoredRenderUnlocksOnlyWithCurrentOwner(t *testing.T) {
 			t.Errorf("%s differs from Python's bytes", name)
 		}
 	}
-	config, err := loadText(t, string(f.writes["/run/regalia-boot/regalia.unlock-config"]))
+	assertRenderedOwnerExchange(t, f.writes["/run/regalia-boot/regalia.unlock-config"])
+}
+
+// This part of the path needs no NV or PCR-key fixture: verify the generated signed
+// chain, render its tip, then use the resulting bytes in the real client exchange.
+func TestSingleNodeVerifiedRenderUnlocksOnlyWithCurrentOwner(t *testing.T) {
+	v := bootCredentialVector(t)
+	manifests, err := membership.ReadChain(vectorManifest(v["single_chain"]).([]any), v["single_root_public"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, err := bootcfg.ReadSite([]byte(v["sites"].(map[string]any)["a, single-node"].(string)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := bootcfg.Render(manifests[len(manifests)-1], site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRenderedOwnerExchange(t, files["regalia.unlock-config"])
+}
+
+func assertRenderedOwnerExchange(t *testing.T, raw []byte) {
+	t.Helper()
+	config, err := loadText(t, string(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
