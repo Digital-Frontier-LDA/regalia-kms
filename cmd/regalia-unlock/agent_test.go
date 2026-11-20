@@ -391,14 +391,14 @@ func TestTheCommandLine(t *testing.T) {
 	var out, diagnostics bytes.Buffer
 	_, err := loadBootConfig(filepath.Join(t.TempDir(), "absent"))
 	wantError(t, err, "cannot read the boot configuration")
-	wantError(t, run([]string{"-attempts", "-1"}, &out, &diagnostics), "usage:")
-	wantError(t, run([]string{"extra"}, &out, &diagnostics), "usage:")
-	wantError(t, run([]string{"-request", ""}, &out, &diagnostics), "usage:")
-	if err := run([]string{"-h"}, &out, &diagnostics); !errors.Is(err, errHelp()) || !strings.Contains(out.String(), "-request") ||
+	wantError(t, runUnlock([]string{"-attempts", "-1"}, &out, &diagnostics), "usage:")
+	wantError(t, runUnlock([]string{"extra"}, &out, &diagnostics), "usage:")
+	wantError(t, runUnlock([]string{"-request", ""}, &out, &diagnostics), "usage:")
+	if err := runUnlock([]string{"-h"}, &out, &diagnostics); !errors.Is(err, errHelp()) || !strings.Contains(out.String(), "-request") ||
 		!strings.Contains(out.String(), askpass.RootID) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
-	wantError(t, run([]string{"-config", filepath.Join(t.TempDir(), "absent")}, &out, &diagnostics), "cannot read the boot configuration")
+	wantError(t, runUnlock([]string{"-config", filepath.Join(t.TempDir(), "absent")}, &out, &diagnostics), "cannot read the boot configuration")
 	_, err = localContribution("")
 	wantError(t, err, "no credentials directory")
 	directory := t.TempDir()
