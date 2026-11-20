@@ -413,15 +413,22 @@ func assertRenderedOwnerExchange(t *testing.T, raw []byte) {
 	}
 	peer := newFakePeer(t, ownerPeer)
 	_, current := ownerKeyPair(t, 20) // the fixture's fixed rotated owner
-	boot := testSession(t)
+	boot, err := newSession(config.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := boot.ask(config.Peers[0], 1, ownerSend(t, peer, current, nil), noQuote)
 	if err != nil || string(got) != string(peer.contribution) || !boot.consumed {
 		t.Fatalf("rendered current owner did not unlock: %v", err)
 	}
 	_, old := ownerKeyPair(t, 10)
-	boot = testSession(t)
-	if _, err := boot.ask(config.Peers[0], 1, ownerSend(t, peer, old, nil), noQuote); err == nil || boot.consumed {
-		t.Fatal("the previous owner unlocked through the rendered configuration")
+	boot, err = newSession(config.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boot.ask(config.Peers[0], 1, ownerSend(t, peer, old, nil), noQuote); err == nil ||
+		!strings.Contains(err.Error(), "not signed by one of the owner_keys") || boot.consumed {
+		t.Fatalf("the previous owner was not refused by the rendered key pin: %v", err)
 	}
 }
 

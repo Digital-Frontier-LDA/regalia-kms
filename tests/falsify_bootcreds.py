@@ -16,6 +16,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 GO = "cmd/regalia-unlock/bootcfg/bootcfg.go"
 PY = "deploy/baremetal/bootcreds.py"
 PARITY = ["go", "test", "-count=1", "./cmd/regalia-unlock/bootcfg"]
+CLIENT = ["go", "test", "-count=1", "./cmd/regalia-unlock", "-run",
+          "^TestSingleNodeVerifiedRenderUnlocksOnlyWithCurrentOwner$"]
 PYTHON = [sys.executable, "-Es", "-m", "unittest", "-v", "tests.test_baremetal_bootcreds.Render",
           "tests.test_baremetal_bootcreds.EspFiles.test_single_node_esp_chain_and_site_render_owner_credentials"]
 
@@ -69,6 +71,8 @@ MUTANTS = [
      '    # mutant: no render preflight',
      [sys.executable, "-Es", "-m", "unittest", "-v",
       "tests.test_baremetal_bootcreds.EspFiles.test_a_chain_that_leaves_the_host_no_peer_writes_nothing"]),
+    ("go-old-owner-accepted", "cmd/regalia-unlock/attest.go",
+     'if !known {', 'if false && !known {', CLIENT),
 ]
 
 
@@ -80,7 +84,7 @@ def run(command):
 
 
 def baseline(label):
-    for command in (PARITY, PYTHON):
+    for command in (PARITY, PYTHON, CLIENT):
         result = run(command)
         if result.returncode:
             print(result.stdout, flush=True)
@@ -106,7 +110,8 @@ def main():
                                             "SyntaxError", "ImportError", "ModuleNotFoundError", "panic:"))
         named = re.findall(r"--- FAIL: ([^\n]+)|^(FAIL|ERROR): ([^\n]+)", output, re.MULTILINE)
         if result.returncode and named and not invalid:
-            first = next(s for s in named[0] if s)
+            names = [go or python for go, _, python in named]
+            first = next((n for n in names if "/" in n), names[0])
             print(name + ": KILLED by " + first, flush=True)
         else:
             failed.append(name)
