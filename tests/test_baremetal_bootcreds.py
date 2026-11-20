@@ -95,7 +95,10 @@ class EspFiles(unittest.TestCase):
         self.cfg = sitecfg.validate(single_site())
         envelopes = chain(single5(1, ""), single5(1, "", owner_wg_pub="0d" * 32))
         self.anchor_to(envelopes)
-        files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
+        try:
+            files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
+        except m.Refused as refusal:
+            self.fail("single-node ESP rendering refused: %s" % refusal)
         site, device = bootcreds.read_site(files["loader/credentials/regalia.site.cred"])
         manifest = bootcreds.anchored(m.load(files[bootcreds.CHAIN_ON_ESP], m.MAX_CHAIN_BYTES), self.root, self.anchor)
         rendered = bootcreds.render(manifest, site, device)

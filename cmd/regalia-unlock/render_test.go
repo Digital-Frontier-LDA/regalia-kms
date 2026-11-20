@@ -450,8 +450,8 @@ func TestSingleNodeRenderRefusalsWriteNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f, v := singleRenderFixture(t)
 			change(f, v)
-			if _, err := render("/run/regalia-boot", f.env()); err == nil || len(f.writes) != 0 || f.mounts != 0 {
-				t.Fatalf("refusal: %v, writes %d, mounts %d", err, len(f.writes), f.mounts)
+			if _, err := render("/run/regalia-boot", f.env()); err == nil || f.nWrites != 0 || len(f.writes) != 0 || f.mounts != 0 {
+				t.Fatalf("refusal: %v, write attempts %d, files %d, mounts %d", err, f.nWrites, len(f.writes), f.mounts)
 			}
 		})
 	}
