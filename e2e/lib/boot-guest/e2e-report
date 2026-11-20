@@ -90,36 +90,45 @@ restarts="$(systemctl show -P NRestarts prometheus-node-exporter.service 2>/dev/
 journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | grep -m4 -E 'Failed to load environment|Failed with result|Start request|start request|limit' | tr '\n' '|' | cut -c1-300)"
 echo "REGALIA-E2E-EXPORTER unit=$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P SubState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P ConditionResult prometheus-node-exporter.service 2>/dev/null || echo none) result=$(systemctl show -P Result prometheus-node-exporter.service 2>/dev/null || echo none) restarts=${restarts:-none}" > /dev/console
 echo "REGALIA-E2E-EXPORTER journal=${journal:-none}" > /dev/console
-# its listener: 9100 on the address the per-host ARGS configure (only), nothing else (the package default,
-# the wildcard address, nothing at all when the unit skipped)
-if [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
-  listen="$(ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE ':[0-9]+$' | sort -u | tr '\n' ',')"
-else
-  listen=skipped
-fi
-echo "REGALIA-E2E-EXPORTER listen=$listen" > /dev/console
+# its listener, MEASURED (ss -ltnp, every address, not derived from the file's presence): 9100 on the address the
+# per-host ARGS configure (only) when configured; nothing at all when the unit skipped (a package-default start
+# would show the wildcard address, not 127.0.0.1). Also: the dangling /etc link (its target absent) and the settled
+# is-system-running, which an unconfigured host must report as running
+listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$' | sort -u | tr '\n' ',')"
+[ -z "$listen" ] && listen=none
+etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
+etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
+systemctl is-system-running --wait >/dev/null 2>&1
+sysrun="$(systemctl is-system-running 2>/dev/null || echo unknown)"
+echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget is-system-running=$sysrun" > /dev/console
 # THE MUTUAL-TLS PROBE (regalia-kms-r1s.17, the boot where the test's web.yml and server material are staged):
 # the metrics are served only to a client the monitoring CA authenticated. Each case is a bounded probe:
-# trusted (a certificate the guest's CA signed for the test), missing (no client certificate) and wrong (a
-# certificate from another CA). "no-verify" trusts the TEST server certificate: the assertion is the client
-# side's authentication, which a plain HTTPS GET cannot show
+# trusted (a certificate the monitoring CA signed for the test), missing (no client certificate) and wrong (a
+# certificate from another CA). The probe VERIFIES the server certificate against the monitoring CA (loaded from
+# /mnt/enrol/node-exporter.monitoring-ca.pem, staged by e2e-enrol beside the client fixtures), so a server that
+# presents no valid certificate is caught here, not hidden. The negative cases fail on the CLIENT side's
+# certificate check (the server's RequireAndVerifyClientCert), not on server verification: the server cert is
+# verified in all three cases, and only the client cert differs
 if [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
   address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' /var/lib/regalia-etc/default/prometheus-node-exporter | head -1)"
+  cafile=/mnt/enrol/monitoring-ca.pem
   probe() {  # probe <name> <client-cert-file|-> <client-key-file|->: one bounded TLS GET. The guest has no
     # curl (packages.txt), so python3's ssl does it: a 200 is "ok" with the body's node_ line count; any other
     # code is "denied" with the code; a handshake refusal (RequireAndVerifyClientCert with no, or a foreign,
-    # client certificate) is "refused" with the ssl error. No plaintext anywhere: web.yml is TLS 1.3 only, so a
-    # server answering a non-TLS connection is the regression, not the test
+    # client certificate) is "refused" with the ssl error. The server certificate is VERIFIED against the
+    # monitoring CA (check_hostname on, verify_mode CERT_REQUIRED): a server that does not present a valid
+    # certificate for this address fails here, not in the client-cert check
     name=$1; cert=$2; key=$3
-    probeout=$(python3 -I - "$address" "$cert" "$key" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
+    probeout=$(python3 -I - "$address" "$cert" "$key" "$cafile" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
 import socket, ssl, sys
-address, cert, key = sys.argv[1], sys.argv[2], sys.argv[3]
+address, cert, key, cafile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 if not address or address == "-":
     print("refused no-address"); sys.exit(0)
 host, port = address.rsplit(":", 1)
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+ctx.load_verify_locations(cafile)
+ctx.check_hostname = True
+ctx.verify_mode = ssl.CERT_REQUIRED
 if cert:
     ctx.load_cert_chain(cert, key)
 sock = socket.create_connection((host, int(port)), timeout=5)
@@ -151,6 +160,31 @@ PYEOF
   probe trusted "$trusted" /mnt/enrol/node-exporter.client.key
   probe missing - -
   probe wrong "$wrong" /mnt/enrol/node-exporter.client-wrong.key
+  # plaintext: a non-TLS connection to the TLS-only server must be refused (web.yml is TLS 1.3 only)
+  plainout=$(python3 -I - "$address" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
+import socket, sys
+address = sys.argv[1]
+if not address or address == "-":
+    print("refused no-address"); sys.exit(0)
+host, port = address.rsplit(":", 1)
+sock = socket.create_connection((host, int(port)), timeout=5)
+try:
+    sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n")
+    data = sock.recv(65536)
+finally:
+    sock.close()
+if data.startswith(b"HTTP"):
+    code = data.split(b" ", 2)[1].decode()
+    print("ok %d" % int(code))
+else:
+    print("refused non-tls")
+PYEOF
+  )
+  if printf '%s' "$plainout" | grep -q '^refused'; then
+    echo "REGALIA-E2E-PROBE plaintext http=refused reason=${plainout#refused }" > /dev/console
+  else
+    echo "REGALIA-E2E-PROBE plaintext http=$plainout" > /dev/console
+  fi
   echo "REGALIA-E2E-PROBE done" > /dev/console
 fi
 # THE PER-HOST UNITS (regalia-kms-r1s.8): what the image enables under /usr gated on a per-host file (units-enabled.txt
