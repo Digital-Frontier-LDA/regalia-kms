@@ -1007,6 +1007,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring zstd
       - name: Build the initrd three times from nothing (the second in a hostile environment, host apt configuration included); all must be identical
         run: sudo REGALIA_GO="$(command -v go)" REGALIA_HOSTILE_APT=1 bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 3
+      - name: The initrd carries and preloads the ESP modules for its kernel (r1s.19)
+        run: sudo python3 -BEs e2e/tests/image-esp-content.py "$RUNNER_TEMP/repro/build-1"
       - name: Make the builds readable
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro" || true
@@ -1079,6 +1081,8 @@ jobs:
           go-version-file: go.mod
       - name: Build the initrd three times from nothing, on Debian 13; all must be identical
         run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 3
+      - name: The initrd carries and preloads the ESP modules for its kernel (r1s.19)
+        run: python3 -BEs e2e/tests/image-esp-content.py "$RUNNER_TEMP/repro/build-1"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: initrd-debian

@@ -705,6 +705,8 @@ class OnQemu(tub.OnSwtpm):
         self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=present",
+                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the UKI initrd must preload the ESP filesystem")
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1127,7 +1129,7 @@ class OnQemu(tub.OnSwtpm):
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh (REGALIA_BOOT_CASES=verity)")
 class OnQemuVerity(OnQemu):
     """THE VERITY /usr BOOTS (#61 K61V-4): the REAL image's /usr (build-rootfs.sh's rootfs.tar, with the test's two units
-    and the UKI kernel's modules), as an erofs image under dm-verity, on a disk install-host.sh laid out (its test mode).
+    only), as an erofs image under dm-verity, on a disk install-host.sh laid out (its test mode).
     Every boot proves what it booted: /usr is /dev/mapper/usr (verified, the root hash its UKI names), / a tmpfs, /var
     the LUKS2 volume mounted by the initrd, the firmware entry the installer's. Then: a wrong usrhash, a tampered block,
     the A/B slots and the fallback, and a broken factory /etc, each beside a boot that passes."""
@@ -1247,6 +1249,9 @@ class OnQemuVerity(OnQemu):
         """What every boot that reached the system shows (the proof): /usr from dm-verity, verified, under the root hash
         of `slot`'s image; / a tmpfs; /var the LUKS2 mapping, mounted in the initrd; the firmware entry the installer's
         (`entry`); nothing enabled under /etc; one machine ID, kept on /var, boot after boot."""
+        self.assertRegex(said, r"REGALIA-E2E-ESP mount=ok type=vfat kernel=\S+ modules-tree=absent",
+                         "ESP_MOUNT_AFTER_SWITCH_ROOT: the shipped module-free /usr must mount and write the ESP")
+        self.assertIn("REGALIA-E2E-BINFMT mount=ok", said, "BINFMT_MOUNT_AFTER_SWITCH_ROOT (r1s.18)")
         proof = verity_proof(said)
         self.assertIsNotNone(proof, "no REGALIA-E2E-VERITY line: the report did not run")
         # / is the tmpfs root=tmpfs makes (findmnt names its source "rootfs")

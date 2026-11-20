@@ -183,6 +183,8 @@ echo "### the initrd the builder made, beside the guest's kernel of the same sna
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
 BUILT_KVER="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["kernel"])' "$W/initrd-build/initrd-build.json")"
 [ "$BUILT_KVER" = "$KVER" ] || { echo "unlock-boot-qemu: the initrd was built for kernel $BUILT_KVER, the guest has $KVER"; exit 2; }
+echo "### Debian kernel $KVER config at snapshot $SNAPSHOT (the UKI kernel)"
+grep -E '^CONFIG_(FAT_FS|VFAT_FS|NLS_CODEPAGE_437|NLS_ASCII|NLS_ISO8859_1|NLS_UTF8|BINFMT_MISC)=' "$ROOT/boot/config-$KVER"
 cp "$W/initrd-build/initrd.img" "$ROOT/boot/initrd.e2e"
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
 for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'cryptsetup\.target\.wants/regalia-unlock\.service' 'regalia-wg-boot\.service$' \
@@ -234,11 +236,9 @@ if [ "$CASES" = verity ]; then
   tar -x --numeric-owner -f "$REGALIA_BOOT_IMAGE/rootfs.tar" -C "$GUEST" || { echo "unlock-boot-qemu: $REGALIA_BOOT_IMAGE/rootfs.tar cannot be read"; exit 2; }
   [ -d "$GUEST/usr/share/factory/etc" ] && [ -f "$GUEST/usr/lib/systemd/system/regalia-etc-factory.service" ] \
     || { echo "unlock-boot-qemu: $REGALIA_BOOT_IMAGE is not a verity image (no factory /etc, no regalia-etc-factory.service)"; exit 2; }
-  # the image has no kernel yet (build-rootfs.sh's limitations: no kernel/UKI pairing): the test's UKI kernel's modules,
-  # from this tree at the same snapshot, go into the guest's /usr, the one thing in it that is not the image's
-  [ ! -e "$GUEST/usr/lib/modules" ] || [ -z "$(ls -A "$GUEST/usr/lib/modules")" ] \
-    || { echo "unlock-boot-qemu: the image carries kernel modules now: pair them with the UKI's kernel instead of copying the test tree's"; exit 2; }
-  mkdir -p "$GUEST/usr/lib/modules"; cp -a "$ROOT/usr/lib/modules/$KVER" "$GUEST/usr/lib/modules/"
+  # Fidelity: the verity /usr is exactly the shipped module-free tree. Drivers needed after
+  # switch-root must already have been loaded by the UKI's initrd; never inject the builder's modules.
+  [ ! -d "$GUEST/usr/lib/modules" ] || { echo "unlock-boot-qemu: shipped /usr unexpectedly carries modules"; exit 2; }
 else
   GUEST="$ROOT"
   U=deploy/baremetal/units

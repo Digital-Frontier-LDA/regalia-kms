@@ -16,6 +16,22 @@ verity="$(veritysetup status usr 2>&1)"
 vstatus="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*status:[[:space:]]*//p' | head -1)"
 vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*//p' | head -1)"
 echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
+# r1s.19: after switch-root, mount the real ESP and write/read/remove a file as enrol commit --esp does.
+# /dev/vda1 is install-host.sh's ESP on the test's virtio disk. No modprobe here: the initrd must preload it.
+esp=failed
+mkdir -p /efi
+if mount -t vfat -o umask=0077,codepage=437,iocharset=ascii /dev/vda1 /efi; then
+    mkdir -p /efi/EFI/regalia
+    if printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
+        [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then esp=ok; fi
+    rm -f /efi/EFI/regalia/e2e-mount-proof
+fi
+echo "REGALIA-E2E-ESP mount=$esp type=$(fstype /efi) kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
+# r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
+binfmt=failed
+mkdir -p /run/e2e-binfmt
+if mount -t binfmt_misc binfmt_misc /run/e2e-binfmt; then binfmt=ok; umount /run/e2e-binfmt; fi
+echo "REGALIA-E2E-BINFMT mount=$binfmt" > /dev/console
 # which firmware entry booted: BootCurrent, and that entry as efibootmgr reads it (label, then its device path)
 current="$(efibootmgr 2>/dev/null | sed -n 's/^BootCurrent: //p')"
 entry="$(efibootmgr -v 2>/dev/null | grep "^Boot${current:-none}" | tr -s ' \t' ' ' | cut -c1-300)"
