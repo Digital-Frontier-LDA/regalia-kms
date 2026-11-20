@@ -96,7 +96,7 @@ EXPECTED = {
         ESP_TEST + "test_single_node_esp_chain_and_site_render_owner_credentials",
         "AssertionError: single-node ESP rendering refused: single-node pending"),
     "go-single-profile-mismatch": (
-        PARITY_TEST + "a_/_single-node", r'Python refused, for profile .*Go: .*Class:"no-peer"'),
+        PARITY_TEST + "a_/_single-node", r"Python refused, for profile .*Go: <nil>"),
     "go-multi-profile-mismatch": (
         PARITY_TEST + "a,_single-node_/_all_active", r'Python refused, for profile .*Go: .*Class:"no-address"'),
     "go-no-ed25519-owner-guard": (
@@ -154,7 +154,7 @@ def classify(command, result, expected):
         diagnostic = "".join(e.get("Output", "") for e in events if e.get("Test") == test)
         return "KILLED" if failed and re.search(reason, diagnostic) else "INVALID"
     # Associate the reason with its FAIL block, not a traceback for another test.
-    blocks = re.finditer(r"^FAIL: [^\n]+ \(([^)]+)\)\n-+\n(.*?)(?=^={10,}\n|\Z)",
+    blocks = re.finditer(r"^FAIL: [^\n]+ \(([^)]+)\)\n(.*?)(?=^={10,}\n|\Z)",
                          output, re.MULTILINE | re.DOTALL)
     return "KILLED" if any(m[1] == test and re.search(reason, m[2]) for m in blocks) else "INVALID"
 
@@ -166,6 +166,7 @@ def verify_classifier():
     setup_error = failure.replace("FAIL:", "ERROR:").replace(reason, "PermissionError: fixture setup failed")
     cases = [
         ("python-expected-assertion", PYTHON, failure, EXPECTED["python-single-node-refusal"], "KILLED"),
+        ("python-docstring-assertion", PYTHON, failure.replace("\n" + "-" * 70, "\nTest description\n" + "-" * 70), EXPECTED["python-single-node-refusal"], "KILLED"),
         ("python-setup-error", PYTHON, setup_error, EXPECTED["python-single-node-refusal"], "INVALID"),
         ("python-error-with-expected-text", PYTHON, failure.replace("FAIL:", "ERROR:"), EXPECTED["python-single-node-refusal"], "INVALID"),
         ("python-wrong-test", PYTHON, failure.replace(test, "other.test"), EXPECTED["python-single-node-refusal"], "INVALID"),
@@ -219,7 +220,13 @@ def main():
         else:
             failed.append(name)
             print(name + ": " + verdict, flush=True)
-            print(result.stdout, flush=True)
+            if command[0] == "go":
+                test, reason = EXPECTED[name]
+                events = list(go_events(result.stdout))
+                diagnostic = "".join(e.get("Output", "") for e in events if e.get("Test") == test)
+                print("expected %s: %s\n%s" % (test, reason, diagnostic or result.stdout), flush=True)
+            else:
+                print(result.stdout, flush=True)
     baseline("after")
     if failed:
         raise SystemExit("unproven mutants: " + ", ".join(failed))
