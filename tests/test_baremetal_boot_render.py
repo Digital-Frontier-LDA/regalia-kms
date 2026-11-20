@@ -58,7 +58,8 @@ class SitePresence(unittest.TestCase):
         inventory = (ROOT / "deploy/baremetal/initrd/initrd-inventory.txt").read_text().splitlines()
         entries = [line.split() for line in inventory if " usr/lib/systemd/system/regalia-boot-render.service " in line]
         self.assertEqual(len(entries), 1)
-        self.assertEqual(entries[0][-1], hashlib.sha256(UNIT.read_bytes()).hexdigest())
+        self.assertEqual(entries[0][-1], hashlib.sha256(UNIT.read_bytes()).hexdigest(),
+                         "unit inventory digest must match the shipped bytes")
 
 
 if __name__ == "__main__":

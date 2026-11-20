@@ -70,8 +70,10 @@ if __name__ == "__main__":
                  "test_dangling_site_link_reaches_the_existing_hard_failure", "dangling site link must not masquerade")
     unit_control("missing-pre-genesis-log-explanation", "no site credential: expected pre-genesis skip", "boot configuration",
                  "test_absent_site_is_an_expected_pre_genesis_condition_skip", "must explain pre-genesis")
+    unit_control("stale-unit-inventory-pin", "# Before enrolment/genesis", "# Before genesis/enrolment",
+                 "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
     go_control("invalid-site-accepted", "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", err",
                "site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn \"\", nil", "invalid")
     go_control("unreadable-site-accepted", 'return "", fmt.Errorf("the site document %s is missing: %v", siteCredential, err)',
                'return "", nil', "unreadable")
-    print("1ym: all six named mutants killed; no skips", flush=True)
+    print("1ym: all seven named mutants killed; no skips", flush=True)
