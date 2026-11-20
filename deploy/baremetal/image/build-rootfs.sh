@@ -52,9 +52,9 @@
 # images' sizes and sha256s and the tools' versions). A refusal leaves DIR empty.
 #
 # CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
-#   * NO KERNEL IN THE IMAGE: the UKI carries the kernel, and /usr has no /usr/lib/modules yet (no kernel/UKI pairing).
-#     The QEMU boots (e2e/unlock-boot-qemu.sh REGALIA_BOOT_CASES=verity, #61 K61V-4) add the test UKI kernel's modules
-#     to the guest's /usr; a host needs the pairing (a later slice), as it needs network configuration and node.json.
+#   * NO KERNEL OR MODULE TREE IN /usr: the UKI carries the kernel and its matching initrd modules. Modules needed
+#     after switch-root must be loaded by the initrd on every boot (firewall: r1s.15; ESP and binfmt_misc: r1s.19).
+#     The QEMU boots use this shipped module-free /usr, with no module injection from the test builder.
 #   * BOOTED IN QEMU, NOT ON A DL360: this image's /usr, installed by install-host.sh (test mode) and opened by the
 #     UKI's usrhash=, boots in QEMU with /var from the initrd, /etc from the factory copy and its units started
 #     (OnQemuVerity). The node units, the audit shippers and the firewall are enabled by the image too, each gated on
