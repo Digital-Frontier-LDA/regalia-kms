@@ -227,9 +227,9 @@ jobs:
             cat "$RUNNER_TEMP/enrol.log"
             [ "$status" -eq 0 ] || exit "$status"
             # unittest prints "OK (skipped=N)" for a skipped run; only an unqualified OK is green.
-            grep -q '^OK$' "$RUNNER_TEMP/enrol.log" && \
-              grep -Eq '^Ran [1-9][0-9]* tests? in ' "$RUNNER_TEMP/enrol.log" || {
-                echo "::error::the enrolment tests skipped or ran nothing; see test names and reasons above" >&2; exit 1; }
+            if ! grep -q '^OK$' "$RUNNER_TEMP/enrol.log" || ! grep -Eq '^Ran [1-9][0-9]* tests? in ' "$RUNNER_TEMP/enrol.log"; then
+              echo "::error::the enrolment tests skipped or ran nothing; see test names and reasons above" >&2; exit 1
+            fi
           )
 
       # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
