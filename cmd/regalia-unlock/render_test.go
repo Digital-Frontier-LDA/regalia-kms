@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -480,6 +481,10 @@ func TestPresentSiteCredentialFailsClosed(t *testing.T) {
 					return read(path)
 				}
 			}
+			env.mount = func(string, string) error {
+				t.Fatal("a bad site must be refused before mounting the ESP")
+				return nil
+			}
 			env.nv = func() (membership.NV, func(), error) {
 				t.Fatal("a bad site must be refused before opening the TPM")
 				return nil, nil, nil
@@ -620,6 +625,57 @@ func TestTheMountIsUndoneAndAFailedUnmountIsReported(t *testing.T) {
 	_, err := render("/run/regalia-boot", f.env())
 	if err == nil || !strings.Contains(err.Error(), "holds no membership chain") || !strings.Contains(err.Error(), "cannot be unmounted") {
 		t.Errorf("a failed read and a failed unmount: %v", err)
+	}
+}
+
+func TestESPMountFlagsAndPrivateMountpoint(t *testing.T) {
+	const want = syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC
+	if espMountFlags != want {
+		t.Fatal("ESP mount must be ro,nosuid,nodev,noexec")
+	}
+	t.Setenv("TMPDIR", t.TempDir())
+	env := realRenderEnv("unused")
+	previous := ""
+	for range 2 {
+		dir, err := env.mkdtemp()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Remove(dir) })
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 || dir == previous {
+			t.Fatalf("ESP mountpoint must be a fresh private directory: %v, %v", info, err)
+		}
+		previous = dir
+	}
+}
+
+func TestESPUnmountsAfterInspectPanic(t *testing.T) {
+	f := newFixture(t)
+	const sentinel = "synthetic inspect panic"
+	inspected := false
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != sentinel {
+				t.Fatalf("inspect panic must propagate after cleanup: %v", recovered)
+			}
+		}()
+		_ = withESP(f.env(), "/dev/disk/by-partuuid/"+testUUID, func(dir string) error {
+			if f.mounts != 1 || f.mounted != dir {
+				t.Fatal("inspect must run inside the ESP mount")
+			}
+			inspected = true
+			panic(sentinel)
+		})
+	}()
+	if !inspected {
+		t.Fatal("inspect did not run")
+	}
+	if f.mounts != 0 || f.mounted != "" {
+		t.Fatal("ESP remained mounted after inspect panic")
+	}
+	if len(f.removed) != 1 || f.removed[0] != "/run/esp-test" {
+		t.Fatal("private ESP mountpoint was not removed after inspect panic")
 	}
 }
 

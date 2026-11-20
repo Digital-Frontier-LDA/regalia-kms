@@ -30,6 +30,7 @@ const (
 	maxChainBytes        = 64 << 20 // membership.MAX_CHAIN_BYTES
 	siteCredential       = "regalia.site"
 	espWait              = 30 * time.Second // the ESP's block device may still be appearing (udev)
+	espMountFlags        = syscall.MS_RDONLY | syscall.MS_NOSUID | syscall.MS_NODEV | syscall.MS_NOEXEC
 )
 
 // renderEnv is everything the render touches outside this process, so that each way it can fail is
@@ -68,7 +69,7 @@ func realRenderEnv(tpmPath string) renderEnv {
 		readDir: os.ReadDir,
 		exists:  func(path string) bool { _, err := os.Stat(path); return err == nil },
 		mount: func(device, dir string) error {
-			return syscall.Mount(device, dir, "vfat", syscall.MS_RDONLY|syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "")
+			return syscall.Mount(device, dir, "vfat", espMountFlags, "")
 		},
 		unmount: func(dir string) error { return syscall.Unmount(dir, 0) },
 		mkdtemp: func() (string, error) { return os.MkdirTemp("", "regalia-esp-") },

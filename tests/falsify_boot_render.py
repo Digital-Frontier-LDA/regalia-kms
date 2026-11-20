@@ -102,10 +102,24 @@ if __name__ == "__main__":
     ]:
         go_control(name, render, before, after, "TestPresentSiteCredentialFailsClosed/" + subtest,
                    "present bad site was accepted instead of failing closed")
+    before = 'site, err := bootcfg.ReadSite(siteRaw)\n\tif err != nil {\n\t\treturn "", err\n\t}'
+    after = before.replace('\t\treturn "", err',
+                           '\t\tdevice, touchErr := espDevice(env)\n'
+                           '\t\tif touchErr != nil { return "", touchErr }\n'
+                           '\t\tif _, touchErr := readChain(env, device); touchErr != nil { return "", touchErr }\n'
+                           '\t\treturn "", err')
+    go_control("balanced-esp-touch-before-refusal", render, before, after,
+               "TestPresentSiteCredentialFailsClosed/invalid", "a bad site must be refused before mounting the ESP")
+    go_control("rw-esp-mount", render, "syscall.MS_RDONLY", "0", "TestESPMountFlagsAndPrivateMountpoint",
+               "ESP mount must be ro,nosuid,nodev,noexec")
+    before = '\tdefer func() {\n\t\t// an unmount that fails'
+    after = '\tdefer func() {\n\t\tif recovered := recover(); recovered != nil { panic(recovered) }\n\t\t// an unmount that fails'
+    go_control("inspect-panic-leaves-esp-mounted", render, before, after, "TestESPUnmountsAfterInspectPanic",
+               "ESP remained mounted after inspect panic")
     unit_test = "test_the_code_checks_enrolment_before_credential_setup"
     unit_control("helper-runs-after-credential-setup", "ExecCondition=", "ExecStartPre=", unit_test, "helper must run as ExecCondition")
     unit_control("file-only-condition-bypasses-code", "DefaultDependencies=no\n",
                  "DefaultDependencies=no\nConditionPathExistsGlob=" + checks.SOURCE + "\n", unit_test, "must not bypass the enrolment/TPM decision")
     unit_control("stale-unit-inventory-pin", "Description=Render", "Description=Verify",
                  "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
-    print("1ym: all 23 named mutants killed; no skips", flush=True)
+    print("1ym: all 26 named mutants killed; no skips", flush=True)
