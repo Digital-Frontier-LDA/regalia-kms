@@ -18,38 +18,54 @@ vhash="$(printf '%s\n' "$verity" | sed -n 's/^[[:space:]]*root hash:[[:space:]]*
 echo "REGALIA-E2E-VERITY usr=$(src /usr):$(fstype /usr) root=$(src /):$(fstype /) var=$(src /var):$(fstype /var) status=${vstatus:-none} roothash=${vhash:-none}" > /dev/console
 # regalia-kms-9tv: after switch-root, the SHIPPED automount (the image's generator's efi.automount, /efi): access
 # the ESP's path (a first open pulls the backing mount in), then assert what is mounted there: the source (by-
-# partuuid, the ESP the generator named), the type (vfat), the options (rw, the root-only masks, noexec, nosuid,
-# nodev), and the absence of a competing /boot mount of the same ESP (the generator's empty boot.mount/automount).
-# No modprobe here: the initrd must preload it. No mkdir, no mount: the guest performs no ESP mount of its own.
+# partuuid, the ESP the generator named), the type (vfat), the per-mount options (rw, noexec, nosuid, nodev) AND
+# the filesystem (super-) options (the root-only FAT masks, fmask/dmask — the mountinfo fields AFTER the " - "
+# separator, NOT the per-mount ones, field 6), and the absence of a competing /boot mount of the same ESP (the
+# generator's empty boot.mount/automount). No modprobe here: the initrd must preload it. No mkdir, no mount: the
+# guest performs no ESP mount of its own.
 esp=failed
-source=""; mtype=""; mopts=""; bootcompeting=absent
+source=""; partuuid=""; mtype=""; mopts=""; msuper=""; probe=none; bootcompeting=absent
 if [ -d /efi/EFI ]; then
-    # the access above triggered the automount; now read the kernel's mount data for /efi, filtering out autofs
-    line="$(grep ' /efi ' /proc/self/mountinfo 2>/dev/null | tail -1)"
+    # the access above triggered the automount; now read the kernel's mount data for /efi, filtering out autofs:
+    # the exact /efi mount whose fstype is vfat (no ancestor match, no autofs record)
+    line="$(awk '$5 == "/efi" { for (i = 1; i <= NF; i++) if ($i == "-") { f = $((i+1)); s = $((i+2)); if (f == "vfat") { print; exit } } }' /proc/self/mountinfo 2>/dev/null)"
     if [ -n "$line" ]; then
-        # mountinfo: id parent maj:min root mountpoint options ... - fstype source super-options
-        # (the options are the field after the mountpoint; the fields after " - " are fstype, source, super-options)
+        # mountinfo: id parent maj:min root mountpoint per-mount-options ... - fstype source super-options
         after="${line##* - }"
         mtype="${after%% *}"
         source="${after#* }"; source="${source%% *}"
-        # the options are field 6 of mountinfo (after the mountpoint, before the first " - ")
+        # the partuuid: the source's, for the test's comparison with the disk's partition 1 (blkid, from the host)
+        case "$source" in
+            /dev/disk/by-partuuid/*) partuuid="${source##*/dev/disk/by-partuuid/}" ;;
+        esac
+        # the per-mount options: field 6 of mountinfo (after the mountpoint, before the first " - "): the VFS flags
         mopts="$(printf '%s\n' "$line" | awk '{ print $6 }')"
-        # the competing /boot mount, if any (the generator empties boot.mount/automount, so there is none)
-        if grep -q ' /boot ' /proc/self/mountinfo 2>/dev/null; then
-            bline="$(grep ' /boot ' /proc/self/mountinfo | tail -1)"
-            bsource="${bline##* - }"; bsource="${bsource#* }"; bsource="${bsource%% *}"
-            [ "$bsource" = "$source" ] && bootcompeting=present
-        fi
+        # the filesystem (super-) options: the mountinfo fields after the source, the vfat's (fmask, dmask, iochar):
+        # the masks are the filesystem's options, NOT the per-mount ones, so a report that only reads field 6
+        # could never show them
+        msuper="$(printf '%s\n' "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i == "-") { s = $((i+3)); break }
+            print s }' | tr '\n' ',' | sed 's/,$//')"
+        # the competing /boot mount, if any (the generator empties boot.mount/automount, so there is none): a /boot
+        # mount of the SAME device as the ESP's. The source is the device identity: a by-partuuid symlink resolves
+        # to one source string (the kernel's canonical name for the device), and the kernel names a device the same
+        # in every mount record of it, so comparing the sources is comparing the devices (an alias is the same
+        # device; two different ESPs are two different sources).
+        if grep ' /boot ' /proc/self/mountinfo 2>/dev/null | sed -n 's/.* - [a-z0-9_-]* //p' | awk '{ print $1 }' |
+            grep -qx "$source"; then bootcompeting=present; fi
     fi
-    # the write/read/remove probe: only after source and filesystem are established
+    # the write/read/remove probe: only after source and filesystem are established; ok when written, read back
+    # AND removed (a file left behind is not a clean probe)
     if [ -n "$source" ] && [ "$mtype" = vfat ]; then
-        mkdir -p /efi/EFI/regalia
-        if printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
-            [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then esp=ok; fi
-        rm -f /efi/EFI/regalia/e2e-mount-proof
+        probe=failed
+        if mkdir -p /efi/EFI/regalia && printf 'esp-write-proof\n' > /efi/EFI/regalia/e2e-mount-proof &&
+            [ "$(cat /efi/EFI/regalia/e2e-mount-proof)" = esp-write-proof ]; then
+            rm -f /efi/EFI/regalia/e2e-mount-proof
+            [ ! -e /efi/EFI/regalia/e2e-mount-proof ] && probe=ok
+        fi
+        esp="$probe"
     fi
 fi
-echo "REGALIA-E2E-ESP mount=$esp source=$source type=$mtype options=$mopts boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
+echo "REGALIA-E2E-ESP mount=$esp source=$source partuuid=$partuuid type=$mtype options=$mopts super-options=$msuper probe=$probe boot-competing=$bootcompeting kernel=$(uname -r) modules-tree=$(test -d /usr/lib/modules && echo present || echo absent)" > /dev/console
 # r1s.18 shares the same module-free rootfs: the boot must also be able to mount binfmt_misc.
 binfmt=failed
 mkdir -p /run/e2e-binfmt
