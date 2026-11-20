@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,6 +80,16 @@ func conditionFile(t *testing.T, path string) {
 	}
 }
 
+func callRenderCondition(t *testing.T, env renderEnv, diagnostics io.Writer) int {
+	t.Helper()
+	defer func() {
+		if recover() != nil {
+			t.Fatal("condition panic escaped instead of hard failure 255")
+		}
+	}()
+	return renderCondition(env, diagnostics)
+}
+
 func TestRenderCondition(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -112,6 +123,9 @@ func TestRenderCondition(t *testing.T) {
 		}, 255, "TPM cannot be opened; pre-genesis is unproven"},
 		{"tpm_inventory_error", func(t *testing.T, f *conditionFixture) { f.nv.err = os.ErrPermission }, 255, "TPM NV inventory cannot be read; pre-genesis is unproven"},
 		{"tpm_nil_inventory", func(t *testing.T, f *conditionFixture) { f.nv.defined = nil }, 255, "TPM NV inventory cannot be read; pre-genesis is unproven"},
+		{"check_panic", func(t *testing.T, f *conditionFixture) {
+			f.env.nv = func() (membership.NV, func(), error) { panic("synthetic check failure") }
+		}, 255, "pre-genesis check aborted; boot render refused"},
 		{"site_stat_error", func(t *testing.T, f *conditionFixture) {
 			f.env.present = func(string) (bool, error) { return false, os.ErrPermission }
 		}, 255, "site credential presence cannot be checked"},
@@ -159,7 +173,7 @@ func TestRenderCondition(t *testing.T) {
 			f := newConditionFixture(t)
 			c.change(t, f)
 			var diagnostics strings.Builder
-			if got := renderCondition(f.env, &diagnostics); got != c.code {
+			if got := callRenderCondition(t, f.env, &diagnostics); got != c.code {
 				t.Fatalf("condition exit = %d, want %d: %s", got, c.code, diagnostics.String())
 			}
 			if c.code == 0 {

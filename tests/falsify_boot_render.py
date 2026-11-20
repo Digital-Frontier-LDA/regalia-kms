@@ -82,6 +82,7 @@ if __name__ == "__main__":
         ("skip-log-explanation-removed", pre, "no site credential: expected pre-genesis skip", "skip", "pre_genesis", "condition must log exactly one reason"),
         ("enrolled-log-explanation-removed", pre, "missing site credential on an enrolled node: ESP membership state is present",
          "missing site", "enrolled_chain_site_deleted", "condition must log exactly one reason"),
+        ("panic-would-be-a-skip", pre, 'if recover() != nil {', 'if false {', "check_panic", "condition panic escaped instead of hard failure 255"),
     ]
     layout = "[]uint32{h.index, h.base, h.slots[0], h.slots[1]}"
     indices = ["h.index", "h.base", "h.slots[0]", "h.slots[1]"]
@@ -107,4 +108,4 @@ if __name__ == "__main__":
                  "DefaultDependencies=no\nConditionPathExistsGlob=" + checks.SOURCE + "\n", unit_test, "must not bypass the enrolment/TPM decision")
     unit_control("stale-unit-inventory-pin", "Description=Render", "Description=Verify",
                  "test_the_inventory_pins_the_changed_unit", "unit inventory digest must match")
-    print("1ym: all 22 named mutants killed; no skips", flush=True)
+    print("1ym: all 23 named mutants killed; no skips", flush=True)

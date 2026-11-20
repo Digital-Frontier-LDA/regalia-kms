@@ -27,7 +27,14 @@ func runRenderCheck(arguments []string, diagnostics io.Writer) int {
 	return renderCondition(realRenderEnv(tpmPath), diagnostics)
 }
 
-func renderCondition(env renderEnv, diagnostics io.Writer) int {
+func renderCondition(env renderEnv, diagnostics io.Writer) (status int) {
+	// An unhandled Go panic exits 2, which systemd would treat as a non-failing condition skip.
+	defer func() {
+		if recover() != nil {
+			fmt.Fprintln(diagnostics, "regalia-unlock: pre-genesis check aborted; boot render refused")
+			status = 255
+		}
+	}()
 	skip, err := preGenesis(env)
 	if err != nil {
 		fmt.Fprintf(diagnostics, "regalia-unlock: %v; boot render refused\n", err)
