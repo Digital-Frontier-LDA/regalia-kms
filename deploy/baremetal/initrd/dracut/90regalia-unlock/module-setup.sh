@@ -132,7 +132,8 @@ install() {
     # Carrying .ko files is insufficient: the module-free verity /usr cannot autoload them later.
     # vfat pulls in fat; preload its runtime codepages too. binfmt_misc has the same cause (r1s.18).
     # Exactly these bytes: uki.py FILESYSTEM_MODULES_LOAD and the initrd inventory pin them.
-    printf 'vfat\nnls_cp437\nnls_ascii\nnls_iso8859-1\nnls_utf8\nbinfmt_misc\n' \
+    # MUTANT DROP_VFAT_PRELOAD: expected inventory refusal; revert after CI proof.
+    printf 'nls_cp437\nnls_ascii\nnls_iso8859-1\nnls_utf8\nbinfmt_misc\n' \
         > "${initdir:?}/usr/lib/modules-load.d/regalia-filesystems.conf"
     # The client answers systemd-cryptsetup's request beside the console; nothing orders one after the other,
     # so a client that never starts leaves the prompt as it is (#70).
