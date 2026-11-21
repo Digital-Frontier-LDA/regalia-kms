@@ -84,12 +84,24 @@ A SERVER WITH NO ATTESTER answers pull, and refuses the two lease operations.
 NO TLS. WireGuard authenticates both ends by the pinned keys and encrypts; every payload that matters is
 signed or attested end to end. See #80.
 
+THE LOCAL LEASE LISTENER (regalia-kms-41n). A single-node host has no service tunnel and no peer: its own
+regalia-sync issues its lease (lease.issue_self, with sync's own heartbeat state, TPM signer, RevisionFloor and
+self-attest verifier, as a peer's sync issues one under multi-node), and its regalia-admission asks for it the
+way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it: the
+caller is identified by its kernel credentials (SO_PEERCRED: regalia-admission's uid, or "refused"), not by a
+tunnel key; the quote it must send over sync's nonce is the authorisation. Only lease-nonce and lease are
+answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
+DEADLINE, the rate buckets) and its trail.
+
 NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (step 3);
 convergence.recover over this transport.
 """
 import copy
+import os
 import re
 import socket
+import stat
+import struct
 import threading
 import time
 
@@ -513,8 +525,12 @@ class Server:
         require(request["node_id"] == caller, "the request names %s; the tunnel is %s's" % (request["node_id"], caller))
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
         self._spend(view.late, caller, "lease")
-        return {"lease": lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer,
-                                     self.observe_state())}
+        return {"lease": self._issued(manifest, request, evidence)}
+
+    def _issued(self, manifest, request, evidence):
+        """A peer's lease for the caller (lease.issue); LocalServer's is this node's own (lease.issue_self)."""
+        return lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer,
+                           self.observe_state())
 
     def observe_state(self):
         """This issuer's RevisionFloor after a fresh read of its own etcd watch's file (D32): every lease request, and
@@ -781,12 +797,14 @@ def _read_all(conn, limit, deadline):
     return b"".join(chunks)
 
 
-def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS, per_address=MAX_PER_ADDRESS):
+def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS, per_address=MAX_PER_ADDRESS, source_of=None):
     """Answer connections on `listener` until `stop()` is true: one request each, read until the caller
     shuts its sending side. Over the limits, or with no complete request by the deadline, a connection is
     closed unanswered and server.dropped() records it (at most once a minute per address); the caller's
     retry is its next timer tick. An accept() that fails is recorded the same way and the loop goes on:
-    it ends only when `stop()` says so. The listener's own timeout is how often `stop` is looked at."""
+    it ends only when `stop()` says so. The listener's own timeout is how often `stop` is looked at.
+    `source_of(conn, peer)`: what a connection's source is (default: its address, peer[0]); the local lease
+    listener's is its kernel credentials (peer_source)."""
     active, lock = [], threading.Lock()      # the address of every connection being answered
 
     def dropped(address, reason):
@@ -820,7 +838,12 @@ def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS
             dropped(LISTENER, "a connection could not be accepted (%s)" % type(failure).__name__)
             time.sleep(0.1)
             continue
-        address = peer[0]
+        try:
+            address = source_of(conn, peer) if source_of is not None else peer[0]
+        except OSError:
+            conn.close()
+            dropped(LISTENER, "a connection's source could not be read")
+            continue
         with lock:
             admitted = len(active) < connections and active.count(address) < per_address
             if admitted:
@@ -844,6 +867,128 @@ def tcp_transport(host, port=PORT, source=None, timeout=DEADLINE):
     def send(raw):
         deadline = time.monotonic() + timeout
         with socket.create_connection((host, port), timeout=timeout, source_address=(source, 0) if source else None) as conn:
+            conn.sendall(raw)
+            conn.shutdown(socket.SHUT_WR)
+            return _read_all(conn, MAX_ANSWER, deadline)
+    return send
+
+
+# ---- the local lease listener (regalia-kms-41n; module docstring) ----
+
+LEASE_SOCKET = "lease.sock"             # in sync's state directory (Node.path): regalia-sync's own, 0755
+SYNC_USER, ADMISSION_USER = "regalia-sync", "regalia-admission"
+LOCAL_OPS = ("lease-nonce", "lease")
+
+
+def local_source(uid):
+    """The source a local connection is recorded as: its peer's uid (peer_source)."""
+    return "uid:%d" % uid
+
+
+def peer_source(conn, peer=None):
+    """serve()'s source_of for an AF_UNIX listener: the connecting process's uid, from the kernel (SO_PEERCRED)."""
+    pid, uid, gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    return local_source(uid)
+
+
+class LocalServer(Server):
+    """This node's own lease, to this node's own admission service, on a single-node host (module docstring). Server's
+    limits, rate buckets, trail and refusals, with two differences: the caller is the uid the kernel gives (only
+    `admission_uid` is this node; anybody else is told "refused"), and the lease is this node's own (lease.issue_self).
+    `attester` is node.Node.self_attester: this node's verifier of its own quotes, by the manifest held then."""
+
+    def __init__(self, node_id, store, freshness, attester, signer, sink, admission_uid, buckets=None, clock=time.time, floor=None,
+                 applied=None):
+        super().__init__(node_id, store, freshness, attester, signer, self._no_tunnel, sink, buckets=buckets, clock=clock, floor=floor,
+                         applied=applied)
+        self.admission_uid = admission_uid
+
+    @staticmethod
+    def _no_tunnel(manifest, source):
+        raise Refused("the local lease listener has no tunnel key")
+
+    def _node_at(self, source):
+        return None             # no address table to stand in front of: every source is counted under its uid
+
+    def _decide(self, raw, source, known):
+        view = _View(self.store)
+        view.late = known["late"]
+        self._spend(view.late, convergence._printable(source), "address")     # before the disk and the TPM, for anybody
+        # access control: only this node's admission service, by the kernel's word; anybody else learns nothing
+        require(source == local_source(self.admission_uid), "%s is not %s: the local lease listener answers it only" % (
+            convergence._printable(source), ADMISSION_USER))
+        manifest = known["manifest"] = self._seen = view.load()
+        require(manifest is not None, "this node holds no manifest")
+        caller = known["caller"] = self.node_id
+        known["identified"] = True
+        self._spend(view.late, caller, "any")
+        require(membership.profile(manifest) == membership.SINGLE_NODE, "the local lease listener answers only under the %s "
+                "profile; epoch %d is %s" % (membership.SINGLE_NODE, manifest["epoch"], membership.profile(manifest)))
+        require(isinstance(raw, bytes) and len(raw) <= MAX_REQUEST, "a request is at most %d bytes" % MAX_REQUEST)
+        message = membership.load(raw, MAX_REQUEST)
+        require(isinstance(message, dict) and message.get("v") == VERSION and not isinstance(message.get("v"), bool),
+                "the request's version must be %d" % VERSION)
+        op = message.get("op")
+        require(isinstance(op, str) and op in LOCAL_OPS, "the local lease listener answers %s only" % " and ".join(LOCAL_OPS))
+        known["kind"] = "sync-" + op
+        membership.exact(message, REQUEST_FIELDS[op], op)
+        answer = getattr(self, "_" + op.replace("-", "_"))(view, manifest, caller, message)
+        encoded = membership.canonical(dict({"v": VERSION, "ok": True}, **answer))
+        require(len(encoded) <= MAX_ANSWER, "the answer would exceed %d bytes" % MAX_ANSWER)
+        return encoded
+
+    def _issued(self, manifest, request, evidence):
+        return lease.issue_self(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer,
+                                self.observe_state())
+
+
+def bind_local(path, owner_uid, create=None):
+    """The local lease listener at `path` (in sync's state directory), or Refused before anything is bound: the directory
+    must be `owner_uid`'s (regalia-sync's) and writable by nobody else, and a leftover at `path` is removed only if it is
+    a socket. Bound under umask 0177 (0600), THEN opened to 0666 explicitly: never wider than meant, at any moment.
+    Connecting is the only access the mode gives: LocalServer identifies every caller by its uid."""
+    directory = os.path.dirname(path)
+    held = os.lstat(directory)
+    require(stat.S_ISDIR(held.st_mode), "%s is not a directory: no local lease listener" % directory)
+    require(held.st_uid == owner_uid, "%s is not %s's (uid %d, not %d): no local lease listener" % (directory, SYNC_USER, held.st_uid, owner_uid))
+    require(not held.st_mode & 0o022, "%s is writable by its group or by others (%o): no local lease listener" % (
+        directory, stat.S_IMODE(held.st_mode)))
+    try:
+        left = os.lstat(path)
+    except FileNotFoundError:
+        left = None
+    if left is not None:
+        require(stat.S_ISSOCK(left.st_mode), "%s is there and is not a socket: it is not removed, no local lease listener" % path)
+        os.unlink(path)
+    listener = (create or socket.socket)(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        old = os.umask(0o177)
+        try:
+            listener.bind(path)
+        finally:
+            os.umask(old)
+        # 0666 on purpose (#761's review): connect() to an AF_UNIX socket needs WRITE on it, and the caller,
+        # regalia-admission, is not this socket's owner (regalia-sync), so 0644 would refuse it. The mode is not the
+        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's ("refused" for any other),
+        # and a lease needs a fresh TPM quote over sync's nonce. Bound under umask 0177 first (never wider than meant),
+        # only in a directory regalia-sync owns and nobody else can write (above); lease-nonce and lease only, and
+        # only under the single-node profile.
+        os.chmod(path, 0o666)
+        listener.listen(MAX_CONNECTIONS)
+        listener.settimeout(1)
+    except BaseException:
+        listener.close()
+        raise
+    return listener
+
+
+def unix_transport(path, timeout=DEADLINE):
+    """A Client transport to the local lease listener: one connection per request, with tcp_transport's limits."""
+    def send(raw):
+        deadline = time.monotonic() + timeout
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(timeout)
+            conn.connect(path)
             conn.sendall(raw)
             conn.shutdown(socket.SHUT_WR)
             return _read_all(conn, MAX_ANSWER, deadline)
