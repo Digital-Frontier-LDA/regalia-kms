@@ -22,6 +22,7 @@ on:
       - internal/audit/**
       - e2e/audit-ship-systemd.py
       - e2e/three-node-netns.py
+      - e2e/one-node.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
       - e2e/three-node-reanchor.py
@@ -51,6 +52,7 @@ on:
       - internal/audit/**
       - e2e/audit-ship-systemd.py
       - e2e/three-node-netns.py
+      - e2e/one-node.py
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
       - e2e/three-node-reanchor.py
@@ -196,6 +198,56 @@ jobs:
         uses: ./.github/actions/tpm-diagnostics
         with:
           name: three-node-netns
+
+  # regalia-kms-dx7.10 (docs/design/single-node.md 8): ONE node as a supported topology, on the three-node fixture under
+  # Cluster(topology="single-node"): the genesis with its typed acknowledgement, the owner-assisted unlock (swtpm, LUKS2, the
+  # real pre-root client, the owner's machine on SoftHSM), self-lease serving under the REAL daemon (a signature, a spend held
+  # across a restart), a refused survivor authorization, and the owner's revocation stopping the node within one lease.
+  # dx7.7 (owner-chain re-anchor) and dx7.8 (planned-outage update) extend it: until then they print as TODO, never as a pass.
+  one-node:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup, SoftHSM
+        run: |
+          sudo apt-get update -qq
+          # softhsm2, opensc and python3-pykcs11: the owner's keys and the daemon's token; libpcsclite-dev: the daemon's piv build
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon libpcsclite-dev
+      - name: Build the pre-root client, the KMS daemon, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          # the production build: with admission required, a daemon without PC/SC refuses to start (#72, G2)
+          go build -tags piv -o "$RUNNER_TEMP/regalia-kms" ./cmd/regalia-kms
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" REGALIA_KMS_BIN="$RUNNER_TEMP/regalia-kms" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN,REGALIA_KMS_BIN \
+            python3 -Es e2e/one-node.py | tee "$RUNNER_TEMP/one.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/one.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^one-node: 26 passed, 0 failed$' "$RUNNER_TEMP/one.log" || {
+            echo "::error::the one-node test did not pass all 26 checks" >&2; exit 1; }
+          # dx7.7 and dx7.8's steps are said as TODO and counted neither way: both still said, until those beads replace them
+          for step in 7 8; do
+            prefix="$(printf '  \033[33mTODO\033[0m regalia-kms-dx7.%s: ' "${step}")"
+            [ "$(awk -v prefix="$prefix" 'index($0, prefix) == 1 {count++} END {print count+0}' "$RUNNER_TEMP/one.log")" = 1 ] || {
+              echo "::error::expected exactly one regalia-kms-dx7.${step} TODO line" >&2; exit 1; }
+          done
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: one-node
 
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.

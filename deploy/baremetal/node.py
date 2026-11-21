@@ -944,8 +944,8 @@ def admission_file(run_dir):
 
 
 class QuietRefusals:
-    """The admission trail's renewal refusals, bounded (48 on #347): the FIRST refusal of each kind (a peer, and its
-    reason with the numbers and long hex taken out) is recorded whole; later ones of a kind already recorded are
+    """The admission trail's renewal refusals, bounded (48 on #347): the FIRST refusal of each kind (an epoch, a peer,
+    and its reason with the numbers and long hex taken out) is recorded whole; later ones of a kind already recorded are
     counted, and the counts written as one line at most once a PERIOD; a success first writes what is still counted,
     then itself, and makes the next failure news again. A node cut off from its peers then writes tens of lines a
     day, not thousands, and the trail still says what happened and how often. `trail(event)` raises if it cannot
@@ -960,7 +960,7 @@ class QuietRefusals:
         return re.sub(r"[0-9]+", "N", re.sub(r"[0-9a-fA-F]{8,}", "H", reason))[:160]
 
     def deny(self, event):
-        key = (event["peer"], self.kind(event["reason"]))
+        key = (event["epoch"], event["peer"], self.kind(event["reason"]))
         if key not in self.seen:
             self.trail(event)
             self.seen.add(key)
@@ -973,7 +973,8 @@ class QuietRefusals:
         if not self.pending or (not now and self.clock() - self.since < self.PERIOD):
             return
         total = sum(self.pending.values())
-        parts = "; ".join("%s x%d: %s" % (peer or "no peer gave a lease", n, kind) for (peer, kind), n in sorted(self.pending.items()))
+        parts = "; ".join("epoch %d %s x%d: %s" % (epoch, peer or "no peer gave a lease", n, kind)
+                          for (epoch, peer, kind), n in sorted(self.pending.items()))
         self.trail(dict(template, peer="", outcome="DENY", repeated=total,
                         reason=convergence._printable("%d more refused renewal attempts, each of a kind already recorded: %s" % (total, parts),
                                                       membership.REASON_LIMIT)))

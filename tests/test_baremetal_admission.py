@@ -951,6 +951,44 @@ class Renewals(unittest.TestCase):
         with self.assertRaises(OSError):
             service.renew({"nonce": "n"})
 
+    def test_a_manifest_advance_during_the_nonce_request_preserves_the_next_epoch_s_peer_denial(self):
+        from deploy.baremetal import node
+        old = {"schema": m.SCHEMA_V5, "topology": {"profile": m.SINGLE_NODE}, "epoch": 1, "nodes": []}
+        new = dict(old, epoch=2)
+        reason = "the source refused: a may not serve under epoch 2: no lease"
+        service = self.service({"a": m.Refused(reason)}, manifest=old)
+        self.fake.self_source.return_value = {"a": None}
+        quiet = next(c.cell_contents for c in service.renew.__closure__ if isinstance(c.cell_contents, node.QuietRefusals))
+        quiet.clock = lambda: 0.0
+
+        def after_admission_read(*args):
+            self.fake.manifest.return_value = new
+            return mock.Mock()
+
+        self.fake.quote.side_effect = after_admission_read
+        for _ in range(3):
+            with self.assertRaises(m.Refused):
+                service.renew({"nonce": "n"})
+        peer_denials = [e for e in self.trail if e["peer"] == "a"]
+        self.assertEqual([e["epoch"] for e in peer_denials], [1, 2],
+                         "the first epoch-2 peer refusal was suppressed by the raced epoch-1 refusal")
+        self.assertTrue(all(e["outcome"] == "DENY" and e["reason"] == reason for e in peer_denials))
+        self.assertEqual([e["epoch"] for e in self.trail if not e["peer"]], [1, 2])
+        self.assertEqual(sum(quiet.pending.values()), 2, "only the repeated same-epoch peer and aggregate denials are counted")
+
+    def test_refusal_summaries_keep_the_epoch_of_each_counted_attempt(self):
+        from deploy.baremetal import node
+        written = []
+        quiet = node.QuietRefusals(written.append, clock=lambda: 0.0)
+        event = dict(event="admission-renew", epoch=1, peer="a", outcome="DENY", reason="no lease")
+        for epoch in (1, 1, 2, 2):
+            quiet.deny(dict(event, epoch=epoch))
+        quiet.flush(dict(event, epoch=2), now=True)
+        self.assertEqual([e["epoch"] for e in written if "repeated" not in e], [1, 2])
+        self.assertEqual(written[-1]["repeated"], 2)
+        self.assertIn("epoch 1 a x1", written[-1]["reason"])
+        self.assertIn("epoch 2 a x1", written[-1]["reason"])
+
     def test_under_single_node_its_own_sync_issues_the_lease_and_no_peer_is_asked(self):
         """dx7.3, corrected by regalia-kms-41n: under a single-node manifest the lease is asked of this node's own sync
         (Node.self_source, the local lease listener), which issues it (lease.issue_self with sync's own verifier,
