@@ -17,7 +17,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
-from deploy.baremetal import evidence, host_probe
+from cryptography.hazmat.primitives.asymmetric import ec
+
+from deploy.baremetal import attest, evidence, host_probe, importkey
 
 SB_ON = b"\x06\x00\x00\x00\x01"
 
@@ -36,7 +38,27 @@ EFI_CERT_SHA256 = bytes.fromhex("2616c4c14c509240aca941f936934328")
 DB_FACTORY = b"".join(siglist(host_probe.EFI_CERT_X509, [c]) for c in FACTORY_CERTS)
 DB_ATTRS = b"\x27\x00\x00\x00"    # NV, BS, RT, time-based authenticated write
 DB = DB_ATTRS + DB_FACTORY + siglist(host_probe.EFI_CERT_X509, [SB_CERT])
-DER = b"stand-in DER public key of the import key"
+# a REAL P-256 point (a fixed scalar): #702's evidence ties the certification's key to this fingerprint
+_IMPORT_POINT = ec.derive_private_key(0x7EC0DE, ec.SECP256R1()).public_key().public_numbers()
+_IMPORT_X, _IMPORT_Y = _IMPORT_POINT.x.to_bytes(32, "big"), _IMPORT_POINT.y.to_bytes(32, "big")
+DER = attest.P256_SPKI_PREFIX + b"\x04" + _IMPORT_X + _IMPORT_Y
+
+
+def import_key_public(x=_IMPORT_X, y=_IMPORT_Y, attributes=importkey.ATTRIBUTES):
+    """A TPM2B_PUBLIC with the import key's template (seal-hsm-pin.sh --init-import-key, #671) and this point."""
+    area = (struct.pack(">HHI", attest.ALG_ECC, attest.ALG_SHA256, attributes) + b"\x00\x00"
+            + struct.pack(">HHHHHH", importkey.ALG_AES, importkey.AES_BITS, importkey.ALG_CFB, attest.ALG_NULL, attest.CURVE_P256,
+                          attest.ALG_NULL) + b"\x00\x20" + x + b"\x00\x20" + y)
+    return struct.pack(">H", len(area)) + area
+
+
+def import_key_certification(public=None):
+    """The evidence's record of #702 in its SHAPE (the cryptography is importkey.verify's, tested in
+    test_baremetal_importkey): the certification document and the verifier's keep."""
+    certification = {"schema": importkey.SCHEMA, "import_public": (public or import_key_public()).hex(), "ek_public": "00" * 60,
+                     "ak_public": "00" * 60, "certify": "00" * 100, "signature": "00" * 70, "answer": "11" * 32}
+    keep = {"schema": importkey.CHALLENGE_SCHEMA, "ek_name": "000b" + "22" * 32, "ak_name": "000b" + "33" * 32, "secret_sha256": "44" * 32}
+    return {"certification": certification, "challenge": keep}
 FP = hashlib.sha256(DER).hexdigest()
 PEM = "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % base64.b64encode(DER).decode()
 # tpm2_readpublic's YAML for the template seal-hsm-pin.sh --init-import-key creates (#671: an ECC P-256
@@ -2030,7 +2052,7 @@ class SignedEvidence(unittest.TestCase):
     def doc(self, **host_overrides):
         host = {n: True for n in host_probe.MEASURED}
         host.update({n: True for n in evidence.ATTESTED})
-        host.update(pin_import_key_sha256=FP, secure_boot_cert_sha256=SB_SHA, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
+        host.update(pin_import_key_sha256=FP, pin_import_key_certification=import_key_certification(), secure_boot_cert_sha256=SB_SHA, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
                     credential_tpm2_signed_pcrs="", credential_tpm2_pcr_key_pkfp="",
                     system_rom_version="P89 v3.40 (2024-03-22)", ilo_firmware_version="2.82",
                     tpm_ek_certificate_present=True, node_id="a", unlock_peers=["b", "c"])
@@ -2143,6 +2165,18 @@ class SignedEvidence(unittest.TestCase):
             "a missing firmware setting": (dict(full, host={k: v for k, v in full["host"].items()
                                                            if k != "ilo_isolated_or_disabled"}), "missing"),
             "a bad import key record": (self.doc(pin_import_key_sha256="abc"), "64 lowercase hex"),
+            # #702: the AK's certification of the import key is on record, for exactly the key copied by hand
+            "no import key certification (#702)": (dict(full, host={k: v for k, v in full["host"].items()
+                                                                  if k != "pin_import_key_certification"}), "missing"),
+            "a certification without the verifier's challenge": (self.doc(pin_import_key_certification={
+                "certification": import_key_certification()["certification"]}), "must hold the certification and the challenge"),
+            "a certification of another key": (self.doc(pin_import_key_certification=import_key_certification(
+                import_key_public(*[v.to_bytes(32, "big") for v in (lambda n: (n.x, n.y))(
+                    ec.derive_private_key(0xBAD, ec.SECP256R1()).public_key().public_numbers())]))), "not the recorded"),
+            "a certification of a key that is not fixedTPM": (self.doc(pin_import_key_certification=import_key_certification(
+                import_key_public(attributes=importkey.ATTRIBUTES & ~importkey.FIXED_TPM))), "is not fixedTPM"),
+            "a certification with a field missing": (self.doc(pin_import_key_certification=dict(import_key_certification(), certification={
+                k: v for k, v in import_key_certification()["certification"].items() if k != "certify"})), "fields mismatch"),
             "a Secure Boot certificate record cut to a prefix": (self.doc(secure_boot_cert_sha256=SB_SHA[:16]), "secure_boot_cert_sha256 must be 64"),
             "no Secure Boot certificate record": (dict(full, host={k: v for k, v in full["host"].items()
                                                                  if k != "secure_boot_cert_sha256"}), "missing"),

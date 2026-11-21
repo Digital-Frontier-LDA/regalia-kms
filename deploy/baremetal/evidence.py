@@ -13,6 +13,9 @@ evidence.
       "host": {
         "<every control host_probe measures>": true,
         "pin_import_key_sha256": "<64 hex>",           # written by hand at --init-import-key (ECC P-256 since #671)
+        "pin_import_key_certification": {             # #702: the AK's TPM2_Certify of that key, and the AK's
+          "certification": {...},                     #   binding to the EK (importkey.py: the document
+          "challenge": {...}},                        #   --init-import-key writes, and the verifier's keep)
         "secure_boot_cert_sha256": "<64 hex>",         # the signed image record's (uki.py sign), in db (kms#543)
         "hsm_usb_path": "<sysfs USB path>",             # the INTERNAL port
         "credential_tpm2_pcrs": "7",                    # bound directly; never 10 or 11
@@ -48,7 +51,7 @@ import tempfile
 SCHEMA = "regalia-kms/baremetal-evidence/v1"
 ATTESTED = ("ilo_isolated_or_disabled", "ac_power_recovery", "redundant_power_supplies", "chassis_intrusion_armed",
             "used_hardware_intake", "runtime_credentials_excluded_from_backup")
-RECORDS = ("pin_import_key_sha256", "secure_boot_cert_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "credential_tpm2_signed_pcrs",
+RECORDS = ("pin_import_key_sha256", "pin_import_key_certification", "secure_boot_cert_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "credential_tpm2_signed_pcrs",
            "credential_tpm2_pcr_key_pkfp", "system_rom_version", "ilo_firmware_version", "tpm_ek_certificate_present",
            "node_id", "unlock_peers")
 NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")   # membership.py's form of a node ID
@@ -134,6 +137,7 @@ def validate(doc, measured_names, now=None):
         require(host[k] is True, "host.%s must be true: the evidence records a commissioned host" % k)
     require(isinstance(host["pin_import_key_sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", host["pin_import_key_sha256"]),
             "host.pin_import_key_sha256 must be 64 lowercase hex")
+    import_key_certification(host["pin_import_key_certification"], host["pin_import_key_sha256"])
     require(isinstance(host["secure_boot_cert_sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", host["secure_boot_cert_sha256"]),
             "host.secure_boot_cert_sha256 must be 64 lowercase hex")
     require(isinstance(host["hsm_usb_path"], str) and re.fullmatch(r"\d+-\d+(\.\d+)*", host["hsm_usb_path"]),
@@ -144,6 +148,24 @@ def validate(doc, measured_names, now=None):
     require(isinstance(host["tpm_ek_certificate_present"], bool), "host.tpm_ek_certificate_present must be true or false")
     unlock_record(host["node_id"], host["unlock_peers"])
     return host
+
+
+def import_key_certification(record, fingerprint, label="host."):
+    """#702: the import key's certification as the evidence records it: the document seal-hsm-pin.sh --init-import-key
+    wrote and the challenge the verifier kept, in their shapes, for exactly the key whose fingerprint was copied by hand.
+    Their cryptography (the signature, the AK's binding to the EK, the certified Name) is importkey.verify's, against
+    the EK Name recorded at intake, which this document does not hold: the evidence records, the verifier decides."""
+    from deploy.baremetal import attest, importkey
+    require(isinstance(record, dict) and set(record) == {"certification", "challenge"},
+            "%spin_import_key_certification must hold the certification and the challenge (#702)" % label)
+    try:
+        parts = importkey.check_document(record["certification"])
+        importkey.check_challenge(record["challenge"])
+        certified = importkey.fingerprint(parts["import_public"])
+    except attest.Refused as refusal:
+        raise InvalidEvidence("%spin_import_key_certification: %s" % (label, refusal)) from None
+    require(certified == fingerprint, "%spin_import_key_certification certifies the key %s, not the recorded %s"
+            % (label, certified, fingerprint))
 
 
 def unlock_record(node_id, peers, label="host."):
