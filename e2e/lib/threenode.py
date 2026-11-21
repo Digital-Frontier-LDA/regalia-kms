@@ -174,6 +174,71 @@ AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission_
 COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
 COLLECTOR_PORT = 18443
 
+# regalia-kms-dx7.10 (docs/design/single-node.md 4.1, 8): the fixture by TOPOLOGY. MULTI_NODE is every three-node scenario's,
+# unchanged: a v4 chain with its literal two-of-three rules. SINGLE_NODE is one node under a v5 genesis made by the real
+# `manifest propose --genesis --topology single-node` path (manifest.propose_genesis, the signer rules from the topology,
+# the typed acknowledgement of the shipped limits text), whose one boot-unlock peer is the OWNER's machine: a namespace of
+# its own on the switch, the owner's WireGuard key pinned in the genesis (owner_wg_pub), answering with owner.py unlock's
+# own serve_unlock and the owner key on the SoftHSM token.
+TOPOLOGIES = (membership.MULTI_NODE, membership.SINGLE_NODE)
+OWNER_INDEX = 20                                  # the owner's machine on the switch: 192.0.2.200, its boot tunnel 10.89.0.20
+# the two owner cards' serials as the card record names them at genesis; both keys sit on ONE SoftHSM token here (owner_signer)
+OWNER_CARDS = ("E2E3OWNERA", "E2E3OWNERB")
+CARD_FINGERPRINTS = ("A" * 40, "B" * 40)          # the owner cards' OpenPGP keys, for owner.py contribute's envelope (a stand-in)
+
+
+def topology_names(topology, names=None):
+    """The fixture's node names for `topology`: three (a, b, c) for multi-node unless given, one (a) for single-node. A
+    single-node cluster of any other size is refused, never shrunk or grown to fit."""
+    if topology not in TOPOLOGIES:
+        raise ValueError("topology is %s or %s, not %r" % (membership.MULTI_NODE, membership.SINGLE_NODE, topology))
+    if names is None:
+        return ("a",) if topology == membership.SINGLE_NODE else NAMES
+    names = tuple(names)
+    if topology == membership.SINGLE_NODE and len(names) != 1:
+        raise ValueError("a %s cluster is one node, not %d (%s)" % (membership.SINGLE_NODE, len(names), ", ".join(names)))
+    return names
+
+
+def heartbeat_need(manifest):
+    """How many counting nodes must run for the NODES to sign an epoch's heartbeat themselves (beat.py collects threshold -
+    1 co-signatures, dx7.4): the heartbeat rule's threshold. v4's {2 of a, b, c, owner}: 2, as the fixture always waited for;
+    single-node's {1 of a}: 1. The owner's share is never counted here: it is owner_beat's, by hand."""
+    return manifest["heartbeat_signers"]["threshold"]
+
+
+def refuse_replacement(manifest, old, new):
+    """#76's replacement is a multi-node step: a running node takes the root's epoch and the new node catches up from it.
+    Under the single-node profile there is no other node to seed it (docs/design/single-node.md 4.7: a replacement is a
+    restore from the owner's chain, dx7.7), so the fixture refuses it by name rather than build an epoch nobody can take."""
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        raise RuntimeError("replacing %s by %s is refused under the %s profile (epoch %d): no running peer can take the epoch; "
+                           "a single-node replacement is a restore from the owner's chain (regalia-kms-dx7.7)"
+                           % (old, new, membership.SINGLE_NODE, manifest["epoch"]))
+
+
+def in_netns(ns, fn):
+    """`fn()` run in a thread moved into network namespace `ns` (setns(2): per thread for CLONE_NEWNET), its result returned.
+    A socket made there stays in `ns` after the thread ends: how the owner's listener is bound on the owner's machine."""
+    out = {}
+
+    def run():
+        try:
+            fd = os.open("/run/netns/" + ns, os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                os.setns(fd, os.CLONE_NEWNET)
+            finally:
+                os.close(fd)
+            out["value"] = fn()
+        except BaseException as failure:              # noqa: BLE001 - handed to the caller as it is
+            out["error"] = failure
+    thread = threading.Thread(target=run)
+    thread.start()
+    thread.join()
+    if "error" in out:
+        raise out["error"]
+    return out["value"]
+
 
 def sh(*argv, check=True, **kw):
     done = subprocess.run(list(argv), capture_output=True, text=True, **kw)
@@ -406,6 +471,16 @@ class NodeHere:
         return sh("ip", "netns", "exec", self.ns, *argv, check=check, **kw)
 
 
+class OwnerHere(NodeHere):
+    """dx7.10: the owner's machine beside a single-node host (docs/design/single-node.md 4.5): a namespace on the switch at
+    its own underlay address, its boot tunnel's address, and a directory of its own (the cards' envelope, owner.py's state).
+    No TPM, no services, no node configuration: it is not a member, and no node sees its directory."""
+
+    def __init__(self, work):
+        super().__init__(work, "owner", OWNER_INDEX)
+        self.owner_state = self.dir / "state"            # owner.py contribute / unlock --state-dir: its issued paths and verifier
+
+
 # The image the fixture boots (v4, #199): PCR 11 extended with this after every TPM start, as a booted UKI extends it, so
 # that the system-phase PCR key's signature over it lets the node's TPM signing key sign
 BOOTED = b"e2e3: an approved image, booted"
@@ -476,8 +551,22 @@ def moving_line(events, epoch):
     return None
 
 class Cluster:
-    def __init__(self, work, names=NAMES, audit=False, site_pcr=False):
+    # dx7.10: the topology a Cluster is, unless __init__ says otherwise: multi-node, no owner's machine (what every three-node
+    # scenario was before; a Cluster made without __init__, as the unit tests make one, is that too)
+    topology, single, owner = membership.MULTI_NODE, False, None
+
+    def __init__(self, work, names=None, audit=False, site_pcr=False, topology=membership.MULTI_NODE, hsm_serials=None):
         refuse_retired_switch()                       # #592: one tpm2-abrmd per node, the only route; before anything runs
+        # dx7.10: the topology first, before anything is made (topology_names refuses a single-node cluster of another size)
+        names = topology_names(topology, names)
+        self.topology = topology
+        self.single = topology == membership.SINGLE_NODE
+        self.owner = OwnerHere(pathlib.Path(work)) if self.single else None    # the single-node host's one unlock peer
+        self.owner_cards = {}                         # the owner cards' envelope (owner.py contribute's gpg), stood in for
+        self.genesis_said = []                        # single-node: what the genesis printed (the limits text, the prompt)
+        # each node's token serials in the manifest (hsm_serials), "E2E3<NODE>" unless given: a scenario that runs the KMS
+        # daemon names its SoftHSM token's, as the daemon serves only from a token the manifest lists for it (#72 G1)
+        self.hsm_serials = dict(hsm_serials or {})
         self.work = pathlib.Path(work)
         # regalia-zga: what a TPM failure is diagnosed from, kept in this run (e2e/lib/tpmdiag.py): which stack it ran on;
         # each node's swtpm logs at level 20 (_tpm)
@@ -547,6 +636,11 @@ class Cluster:
         self._pcr_key()
         self._owner_token()
         self._network()
+        if self.single:                               # the owner's machine: its directory (root's, 0700: no node reads it), its WG key
+            self.owner.owner_state.mkdir(parents=True)
+            os.chmod(self.owner.dir, 0o700)
+            private = sh("wg", "genkey").stdout.strip()
+            self.owner_wg = (private, wgsvc.hex_key(sh("wg", "pubkey", input=private + "\n").stdout.strip()))
         for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run, n.admission_log):
                 d.mkdir(parents=True)
@@ -581,6 +675,8 @@ class Cluster:
         sh("ip", "netns", "exec", SWITCH, "ip", "link", "set", "br0", "up")
         for n in self.members():
             self._wire(n)
+        if self.single:                               # dx7.10: the owner's machine on the same switch, as its laptop on the site's LAN
+            self._wire(self.owner)
 
     def _wire(self, n):
         """The member's namespace, on the switch at its underlay address."""
@@ -1012,6 +1108,10 @@ class Cluster:
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         names = [n.name for n in self.nodes.values()]
+        if self.single:
+            self.manifest = self._single_node_genesis()
+            self.chain = [self.signed(self.manifest)]
+            return
         self.manifest = {"schema": membership.SCHEMA_V4, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
                          "issued_at": "2026-10-01T00:00:00Z", "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600,
                          "owner_keys": self.owner_keys,
@@ -1025,11 +1125,46 @@ class Cluster:
                          "card_record": {"sequence": 1, "digest": "ca" * 32},
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
                                     "wg_boot_pub": self.keys[n.name]["boot"][1], "wg_service_pub": self.keys[n.name]["service"][1],
-                                    "hsm_serials": ["E2E3%s" % n.name.upper()]} for n in self.nodes.values()]}
+                                    "hsm_serials": self._hsm_serials(n.name)} for n in self.nodes.values()]}
         for entry in self.manifest["nodes"]:
             ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
             entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[entry["node_id"]])
         self.chain = [self.signed(self.manifest)]
+
+    def _hsm_serials(self, name):
+        return list(self.hsm_serials.get(name, ["E2E3%s" % name.upper()]))
+
+    def _single_node_genesis(self):
+        """dx7.10: epoch 1 of a single-node cluster as `manifest propose --genesis --topology single-node` makes it
+        (manifest.propose_genesis, regalia-kms-dx7.2): the node's `enrol entry` fields, the two owner keys by their cards'
+        serials, the owner's WireGuard key (dx7.6), K_A and the card record; the signer rules from the topology
+        (genesis_signers: the node alone heartbeats and activates, the owner alone revokes). Then, as the tool does before
+        it writes anything, the shipped limits text printed verbatim and the acknowledgement typed (acknowledge_single_node,
+        the console played by self.acknowledge). Everything printed is kept in genesis_said."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from deploy.baremetal import manifest as manifest_tool
+
+        def raw(key):
+            return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+        entries = [{"node_id": n.name, "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1], "wg_service_pub": self.keys[n.name]["service"][1],
+                    "wg_boot_pub": self.keys[n.name]["boot"][1], "signing_key": self.signing[n.name], "hsm_serials": self._hsm_serials(n.name),
+                    "ssh_host_pub": raw(Ed25519PrivateKey.generate())} for n in self.nodes.values()]
+        owners = {serial: entry["key"] for serial, entry in zip(OWNER_CARDS, self.owner_keys)}
+        anchor = {"alg": "ecdsa-p256", "key": ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+            serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()}
+        candidate = manifest_tool.propose_genesis(entries, self.document, owners, raw(Ed25519PrivateKey.generate()), hbt.pub(hbt.ROOT),
+                                                  "2026-10-01T00:00:00Z", anchor_policy=anchor, card_record={"sequence": 1, "digest": "ca" * 32},
+                                                  topology=membership.SINGLE_NODE, owner_wg_pub=self.owner_wg[1])
+        manifest_tool.acknowledge_single_node(self.acknowledge, self.genesis_said.append)
+        return candidate
+
+    def acknowledge(self, prompt):
+        """The operator at the genesis console (keyfd.tty_line's place): reads the prompt, and types the phrase it names
+        (what follows "type, to accept these limits: " on its first line)."""
+        self.genesis_said.append(prompt)
+        return prompt.split("\n", 1)[0].split(": ", 1)[1]
 
     @staticmethod
     def signed(manifest, key=None):
@@ -1101,6 +1236,11 @@ class Cluster:
                               "nic_mac": "52:54:00:12:34:%02x" % (0x50 + n.index), "prefix": 24, "gateway": None,
                               "peers": [{"node_id": o.name, "underlay": o.underlay, "address": o.boot_address} for o in others]},
                 "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444}}
+        if self.single:
+            # dx7.6's single-node shape (sitecfg): the boot mesh lists no node peer, its one peer is the owner's machine at its
+            # underlay and tunnel addresses (its key is the manifest's owner_wg_pub), and there is no service mesh
+            site["boot_mesh"].update(peers=[], owner={"underlay": self.owner.underlay, "address": self.owner.boot_address})
+            site["service_mesh"] = None
         return site
 
     def _configure(self, n):
@@ -1446,7 +1586,9 @@ class Cluster:
     def replacement(self, old, new, reuse=None, same_policy=False):
         """The manifest replacing `old` by `new` (one root-signed step, replacement.py), and the measurements
         document it binds: `new` enrolled ACTIVE with its own identities (or, for a refusal test, `reuse` of them
-        taken from another node), `old` kept as RETIRED. Returns (candidate, document)."""
+        taken from another node), `old` kept as RETIRED. Returns (candidate, document). Refused under the single-node
+        profile (refuse_replacement): no running peer can take the epoch."""
+        refuse_replacement(self.manifest, old, new)
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         n = self.nodes[new]
         document = self.document if same_policy else \
@@ -1521,7 +1663,7 @@ class Cluster:
     REVOKE_IMPORT = ("import json, sys\nfrom deploy.baremetal import membership, node, revoke\nd = json.load(sys.stdin)\n"
                      "n = node.Node(node.load(d['cfg']))\nm = n.store().load()\n"
                      "membership.require(revoke.met(m, d['full'])[0], 'the signatures meet no revocation rule')\n"
-                     "revoke.commit(n, d['full'], node.Trail(n.path('sync-audit.jsonl'), 'sync'))\nprint('{}')\n")
+                     "revoke.commit(n, d['full'], node.Trail(n.path('sync-audit.jsonl'), 'sync'), shutdown=d.get('shutdown'))\nprint('{}')\n")
 
     @staticmethod
     def typed(manifest):
@@ -1540,15 +1682,20 @@ class Cluster:
                                                                        "typed": self.typed(half["manifest"])}).strip().splitlines()[-1])
         return self._spread(cosigner, full, owner_recovery, pull, beat)
 
-    def revoke_by_owner(self, importer, target, state, reason, owner_recovery=False, pull=None, beat=True):
+    def revoke_by_owner(self, importer, target, state, reason, owner_recovery=False, pull=None, beat=True, shutdown=None):
         """`target` made `state` by the owner alone, off the nodes (revoke.py export, owner.py sign-manifest against the chain
-        this machine holds, revoke.py import on `importer`, as its sync unit). Returns the envelope, as revoke_by_nodes."""
+        this machine holds, revoke.py import on `importer`, as its sync unit). Returns the envelope, as revoke_by_nodes.
+        `shutdown`: what the owner typed at import for a revocation of a single-node cluster's only node (revoke.shutdown_of:
+        committed only with revoke.shutdown_phrase typed, dx7.4); None types nothing, as every multi-node revocation."""
         from deploy.baremetal import owner, revoke
         nxt = revoke.candidate(self.manifest, target, state, int(time.time()))
         proposal = {"manifest": nxt, "signatures": [], "reason": reason}
         signed = owner.sign_manifest(self.manifest, proposal, lambda: self.owner_signer(0), lambda text: self.typed(nxt), say=lambda text: None)
         full = {"manifest": nxt, "signatures": signed["signatures"]}
-        self._as_sync(importer, self.REVOKE_IMPORT, {"cfg": str(self.nodes[importer].cfg_path), "full": full})
+        handed = {"cfg": str(self.nodes[importer].cfg_path), "full": full}
+        if shutdown is not None:
+            handed["shutdown"] = shutdown
+        self._as_sync(importer, self.REVOKE_IMPORT, handed)
         return self._spread(importer, full, owner_recovery, pull, beat)
 
     def _spread(self, committer, full, owner_recovery, pull=None, beat=True):
@@ -1644,7 +1791,12 @@ class Cluster:
         share, when it has some); each peer mints a contribution in its real contributions file and wraps it to the
         node's one-time key; a keyslot and token per peer. And the node's AK enrolled in each peer's verifier (the
         credential challenge, activated by the node's TPM). Run while neither the node's nor the peers' services
-        run (the fixture writes the peers' stores)."""
+        run (the fixture writes the peers' stores). Under the single-node profile there is no peer path: the one path is
+        the owner's (enrol_owner), and `peers` is refused."""
+        if self.single:
+            if peers:
+                raise RuntimeError("a %s host has no peer path (%s): its one path is the owner's" % (membership.SINGLE_NODE, ", ".join(peers)))
+            return self.enrol_owner(name)
         n, loop = self.nodes[name], self.loops[name]
         self._initrd_only(name, "enrol")
         held = [t for _, t in unlock.path_tokens(unlock.luks_meta(loop))]
@@ -1715,6 +1867,78 @@ class Cluster:
                 return token["peer"]
         return None
 
+    # ---- dx7.10: the owner as a single-node host's unlock peer (regalia-kms-dx7.5) ----
+
+    def enrol_owner(self, name):
+        """The single-node host's one LUKS path, from the owner (enrolpeer.request_owner_path, as `enrol paths` runs it at the
+        node's console): the local half sealed to the node's TPM under PCR 7; the request carried to the owner's machine,
+        where owner.py contribute (owner.contribute_path) mints the contribution, writes the cards' envelope first (gpg,
+        stood in: its plaintext kept in owner_cards, as the cards would decrypt it) and wraps it to the node's one-time key;
+        the keyslot made beside the recovery one. No AK step at the node, and the contribution is written nowhere on it.
+        Returns request_owner_path's result."""
+        from deploy.baremetal import enrolpeer, owner
+        n, loop = self.nodes[name], self.loops[name]
+        self._initrd_only(name, "enrol")
+        with self.tpm_of(name):
+            local = os.urandom(32)
+            sealed = unlock.seal_local(local, pcrs="7", tpm2_device=n.tcti)
+        ak = (n.dir / "ids" / "ak.pub").read_bytes()
+
+        def gpg(argv, input=None, **kw):
+            out = argv[argv.index("--output") + 1]
+            self.owner_cards[out] = input
+            with open(out, "w") as f:
+                f.write("-----BEGIN PGP MESSAGE-----\n(a stand-in: the e2e fixture has no card)\n")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        def exchange(request, fingerprint):
+            made = len(self.owner_cards)
+            envelope, wrapped = self.owner.dir / ("owner-env-%d.asc" % made), self.owner.dir / ("owner-wrapped-%d.json" % made)
+            owner.contribute_path(self.manifest, self.document, json.loads(json.dumps(request)), fingerprint, str(self.owner.owner_state),
+                                  list(CARD_FINGERPRINTS), str(envelope), str(wrapped), run=gpg, say=lambda *a: None)
+            self.owner_envelope = str(envelope)
+            return json.loads(wrapped.read_text())
+        try:
+            return enrolpeer.request_owner_path(self.manifest, name, exchange, ak, local, sealed, loop, RECOVERY)
+        finally:
+            del local
+            self.abrmd_answers(name)
+
+    @contextlib.contextmanager
+    def owner_answering(self, name, which=0, serve_for=600):
+        """The owner's machine answering `name`'s boot (owner.py unlock): its WG-BOOT up in its namespace (bootnet.owner_wg_conf,
+        from the node's site and the chain this machine holds, with the owner's own key), and owner.serve_unlock on its tunnel
+        address at the unlock port, signing with owner key `which` on the SoftHSM token, until the block ends. Yields the list
+        of what it says (LISTENING, the audit lines, SENT); a refusal of serve_unlock's own is said as "REFUSED: ..."."""
+        from deploy.baremetal import owner
+        o = self.owner
+        site = sitecfg.load(str(self.nodes[name].dir / "etc" / "site.json"))
+        tip, said, stopping = self.manifest, [], threading.Event()
+        o.in_ns("ip", "link", "add", "wg-boot", "type", "wireguard")
+        listener = server = None
+        try:
+            o.in_ns("wg", "setconf", "wg-boot", "/dev/stdin", input=bootnet.with_key(bootnet.owner_wg_conf(site, tip), self.owner_wg[0]))
+            o.in_ns("ip", "address", "add", "%s/%d" % (o.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
+            o.in_ns("ip", "link", "set", "wg-boot", "up")
+            listener = in_netns(o.ns, lambda: socket.create_server((o.boot_address, site["boot_mesh"]["unlock_port"])))
+
+            def answer():
+                try:
+                    owner.serve_unlock(tip, self.document, str(o.owner_state), self.owner_cards[self.owner_envelope], self.owner_signer(which),
+                                       listener, say=said.append, serve_for=serve_for, stop=stopping.is_set)
+                except (membership.Refused, attest.Refused, OSError) as refused:
+                    said.append("REFUSED: %s" % refused)
+            server = threading.Thread(target=answer, daemon=True)
+            server.start()
+            yield said
+        finally:
+            stopping.set()
+            if server is not None:
+                server.join(15)                       # serve_unlock looks at stop() at least once a second
+            if listener is not None:
+                listener.close()
+            o.in_ns("ip", "link", "del", "wg-boot", check=False)
+
     def unlock(self, name, timeout=180, rounds=5):
         """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
         configuration, from the chain it holds), then the pre-root client (cmd/regalia-unlock, the real binary)
@@ -1757,7 +1981,8 @@ class Cluster:
                                      % (os.getpid(), asks / "sck.1", request))
         volume = "/dev/mapper/" + mapped                                # there once opened: then the client stands down
         # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the units)
-        blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in self.nodes.values() if o is not n)
+        hidden = [o for o in self.nodes.values() if o is not n] + ([self.owner] if self.single else [])     # and the owner's machine
+        blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in hidden)
         script = blind + 'exec "$@"'
         result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
         mnt, mounted = n.dir / "mnt", False
@@ -1881,13 +2106,14 @@ class Cluster:
         return envelope
 
     def _beaten(self, manifest, owner_recovery=False, timeout=300):
-        """#199: with two counting nodes running, each holds the heartbeat their own proposers sign for the new epoch
-        (beat.Proposer goes at once when it holds none for it). With one, nobody can co-sign it: the node stays without a
+        """#199: with as many counting nodes running as the heartbeat rule's threshold (heartbeat_need: two of three under v4,
+        the one node under single-node), each holds the heartbeat their own proposers sign for the new epoch (beat.Proposer
+        goes at once when it holds none for it). With fewer, nobody can co-sign it: the node stays without a
         heartbeat for the epoch, as a host does until a human acts, and nothing is done here unless the scenario asked
         for the hand recovery (`owner_recovery`: owner_beat for that node). Never implicit (regalia-kms-3e's read)."""
         from deploy.baremetal import beat
         counting = [n for n in beat.counting_nodes(manifest) if self.running(n)]
-        if len(counting) >= 2:
+        if counting and len(counting) >= heartbeat_need(manifest):     # dx7.10: the rule's threshold (2 under v4, 1 single-node)
             missing = [n for n, held in self.fresh(counting, manifest["epoch"], timeout).items() if not held]
             if missing:
                 raise RuntimeError("%s signed no heartbeat for epoch %d; their last beat events: %s" % (", ".join(missing), manifest["epoch"],
@@ -2394,6 +2620,9 @@ class Cluster:
         # regalia-zga: the scripts remove the work directory after this; in CI each node's swtpm log is kept first
         tpmdiag.keep({"%s/%s" % (n.name, log): str(n.dir / log) for n in self.members() for log in KEPT_LOGS},
                      self.work.name)
+        if self.single:
+            self.owner.in_ns("ip", "link", "del", "wg-boot", check=False)
+            sh("ip", "netns", "del", self.owner.ns, check=False)
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)
