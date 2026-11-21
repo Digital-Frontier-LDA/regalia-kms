@@ -1815,7 +1815,20 @@ class OnQemuVerity(OnQemu):
         # disk has no chrony.conf (the test's guest's chronyd never starts: main's boot 1 shows it), so its
         # units run as main's v2 showed them
         self.var_rename([(self.EXPORTER_VAR + ".aside", self.EXPORTER_VAR + ".enrol")])
-        self.var_write(self.EXPORTER_VAR, self.exporter_materials_ready()["node-exporter.default"])
+        materials = self.exporter_materials_ready()
+        self.var_write(self.EXPORTER_VAR, materials["node-exporter.default"])
+        # the web configuration and server material (the v2c exporter's --web.config.file and its TLS
+        # certificates) must be on /var: the enrolment disk is only attached on v1, and e2e-enrol writes
+        # them to /var only if they are on the disk. The v1 disk carries the plain ARGS (configured=False),
+        # so the web material was never written. Without it the exporter crashes on v2c (web.yml missing)
+        self.var_write("regalia/node-exporter/web.yml", materials["node-exporter.web.yml"])
+        self.var_write("regalia/node-exporter/server.pem", materials["node-exporter.server.pem"])
+        self.var_write("regalia/node-exporter/server.key", materials["node-exporter.server.key"])
+        # the probe inputs (the monitoring CA and the client certificates) must also be on /var: the
+        # probes read from /var/lib/regalia-etc/regalia/node-exporter/ on v2c, where the disk is gone
+        for name in ("monitoring-ca.pem", "node-exporter.client.crt", "node-exporter.client.key",
+                     "node-exporter.client-wrong.crt", "node-exporter.client-wrong.key"):
+            self.var_write("regalia/node-exporter/" + name, materials[name])
         since = len(self.events)
         said = self.boot("v2c-control", credentials, nvram="host")
         unattended(self, said)
