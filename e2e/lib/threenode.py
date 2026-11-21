@@ -394,6 +394,44 @@ def blind_mount_script(paths):
 
 
 
+def drain_unlock_reply(reply):
+    """Read already-queued datagrams without waiting, or fail on an unbounded stream."""
+    reply.setblocking(False)
+    for _ in range(64):
+        try:
+            datagram = reply.recv(4096, socket.MSG_DONTWAIT)
+        except BlockingIOError:
+            return b""
+        if datagram.startswith(b"+") and len(datagram) > 1:
+            return datagram[1:]
+    raise RuntimeError("too many queued unlock datagrams to prove no key was delivered")
+
+
+def wait_unlock_reply(reply, client, deadline):
+    while client.poll() is None and (remaining := deadline - time.monotonic()) > 0:
+        reply.settimeout(min(0.2, remaining))
+        try:
+            datagram = reply.recv(4096)
+        except socket.timeout:
+            continue
+        if datagram.startswith(b"+") and len(datagram) > 1:
+            return datagram[1:]
+    return drain_unlock_reply(reply)
+
+
+def finish_unlock_client(client, reply, key, timeout):
+    try:
+        _, err = client.communicate(timeout=timeout)
+        rc = client.returncode
+    except subprocess.TimeoutExpired:
+        client.kill()
+        _, err = client.communicate(timeout=5)
+        rc = "timeout"
+    # A last reply can arrive after the running poll stops but before the process exits.
+    return rc, (err or "")[-1500:], key or drain_unlock_reply(reply)
+
+
+
 def until(what, seconds, interval=1.0):
     """`what()` until it is true or the time is up; its last value (or the exception it raised)."""
     deadline, last = time.monotonic() + seconds, None
@@ -1926,6 +1964,21 @@ class Cluster:
         finally:
             o.in_ns("ip", "link", "del", "wg-boot", check=False)
 
+    def owner_boot_traffic(self, name):
+        """Read the handshake timestamp and byte counters for the manifest-pinned node peer."""
+        peer = wgsvc.wg_key(membership.validate(self.manifest)[name]["wg_boot_pub"])
+
+        def counters(field, width):
+            rows = [line.split() for line in self.owner.in_ns("wg", "show", "wg-boot", field).stdout.splitlines()]
+            matches = [row[1:] for row in rows if row and row[0] == peer]
+            if len(matches) != 1 or len(matches[0]) != width or not all(v.isascii() and v.isdecimal() for v in matches[0]):
+                return None
+            return tuple(map(int, matches[0]))
+
+        handshake = counters("latest-handshakes", 1)
+        transfer = counters("transfer", 2)
+        return handshake + transfer if handshake is not None and transfer is not None else None
+
     @contextlib.contextmanager
     def owner_answering(self, name, which=0, serve_for=600):
         """Run the responder on the already configured owner boot tunnel."""
@@ -2006,32 +2059,27 @@ class Cluster:
                     "ip", "netns", "exec", n.ns, self.client, "-config", str(config), "-tpm", "unix:" + str(n.tpm_sock),
                     "-session-dir", str(n.run), "-ask-dir", str(asks), "-request", request, "-volume", volume, "-attempts", str(rounds)]
             client = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
-            key, deadline = b"", time.monotonic() + timeout
-            reply.settimeout(0.2)
-            while time.monotonic() < deadline and client.poll() is None and not key:
-                try:
-                    datagram = reply.recv(4096)
-                except socket.timeout:
-                    continue
-                if datagram.startswith(b"+"):
-                    key = datagram[1:]
-            result["key_delivered"] = bool(key)
-            if key:
+            deadline = time.monotonic() + timeout
+            key = wait_unlock_reply(reply, client, deadline)
+
+            def open_reply(key):
+                nonlocal mounted
                 opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
-                (asks / "ask.1").unlink()                               # answered: systemd-cryptsetup removes its request
+                (asks / "ask.1").unlink()                       # answered: systemd-cryptsetup removes its request
                 if opened.returncode == 0 and found:
                     result["peer"] = self.keyslot_peer(name, int(found.group(1)))
                     sh("mount", "-o", "ro", volume, str(mnt))
                     mounted = True
                     result["marker"] = (mnt / "marker").read_bytes() == MARKER
-            try:
-                _, err = client.communicate(timeout=max(5.0, deadline - time.monotonic()) if not key else 30)
-                result["rc"], result["stderr"] = client.returncode, err[-1500:]
-            except subprocess.TimeoutExpired:                         # still asking when the time ran out: no key
-                client.kill()
-                _, err = client.communicate()
-                result["rc"], result["stderr"] = "timeout", (err or "")[-1500:]
+
+            if key:
+                open_reply(key)
+            result["rc"], result["stderr"], final_key = finish_unlock_client(
+                client, reply, key, 30 if key else max(5.0, deadline - time.monotonic()))
+            result["key_delivered"] = bool(final_key)
+            if final_key and not key:
+                open_reply(final_key)
         finally:
             if client is not None and client.poll() is None:
                 client.kill()

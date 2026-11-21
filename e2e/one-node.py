@@ -297,11 +297,13 @@ class Daemon:
             return ""
 
 
-def owner_connection_refused(result):
+def owner_connection_refused(result, before, after):
     """The real client made its owner attempt, received no key, and exhausted one round."""
     lines = result["stderr"].splitlines()
     expected = "regalia-unlock: attempt 1: %s (path epoch 1): hello: the transport failed (no connection);" % unlock.OWNER
-    return (result["rc"] == 1 and result["peer"] is None and not result["marker"] and result["key_delivered"] is False
+    exchanged = (before is not None and after is not None and after[0] > 0 and after[0] >= before[0]
+                 and after[1] > before[1] and after[2] > before[2])
+    return (exchanged and result["rc"] == 1 and result["peer"] is None and not result["marker"] and result["key_delivered"] is False
             and any(line.startswith(expected) for line in lines)
             and bool(lines) and lines[-1] == "regalia-unlock: no peer helped in 1 attempts")
 
@@ -469,9 +471,12 @@ def scenario(cluster, kms):
             tail = window[-keep:]
     ok(not found, "the owner's contribution is written nowhere on the node's volume (raw, hex or base64)", found)
     with cluster.owner_tunnel("a"):
+        before = cluster.owner_boot_traffic("a")
         alone = cluster.unlock("a", timeout=90, rounds=1)
-        ok(owner_connection_refused(alone),
-           "with the owner tunnel up and no responder, the owner connection fails and no key is delivered", alone)
+        after = cluster.owner_boot_traffic("a")
+        ok(owner_connection_refused(alone, before, after),
+           "the pinned owner tunnel exchanges traffic, but without its responder no key is delivered",
+           {"unlock": alone, "owner_tunnel_before": before, "owner_tunnel_after": after})
         cluster.stop("a")                             # fresh TPM session for the positive attempt
         with cluster.owner_answering("a") as owner_said:
             opened = cluster.unlock("a", timeout=90, rounds=1)
