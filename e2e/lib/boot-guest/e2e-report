@@ -118,7 +118,10 @@ echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget 
 exporter_active="$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)"
 if [ "$exporter_active" = active ] && [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
   address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' /var/lib/regalia-etc/default/prometheus-node-exporter | head -1)"
-  cafile=/mnt/enrol/monitoring-ca.pem
+  # the probe's inputs are on /var (e2e-enrol copied them there: the enrolment disk is only attached on v1,
+  # the probes run on v2c, where the disk is gone)
+  probe_dir=/var/lib/regalia-etc/regalia/node-exporter
+  cafile=$probe_dir/monitoring-ca.pem
   probe() {  # probe <name> <client-cert-file|-> <client-key-file|->: one bounded TLS GET. The guest has no
     # curl (packages.txt), so python3's ssl does it: a 200 is "ok" with the body's node_ line count; any other
     # code is "denied" with the code; a handshake refusal (RequireAndVerifyClientCert with no, or a foreign,
@@ -162,11 +165,11 @@ PYEOF
     echo "REGALIA-E2E-PROBE $name http=$probeout" > /dev/console
   fi
   }
-  trusted=/mnt/enrol/node-exporter.client.crt
-  wrong=/mnt/enrol/node-exporter.client-wrong.crt
-  probe trusted "$trusted" /mnt/enrol/node-exporter.client.key
+  trusted=$probe_dir/node-exporter.client.crt
+  wrong=$probe_dir/node-exporter.client-wrong.crt
+  probe trusted "$trusted" $probe_dir/node-exporter.client.key
   probe missing - -
-  probe wrong "$wrong" /mnt/enrol/node-exporter.client-wrong.key
+  probe wrong "$wrong" $probe_dir/node-exporter.client-wrong.key
   # plaintext: a non-TLS connection to the TLS-only server must be refused (web.yml is TLS 1.3 only)
   plainout=$(python3 -I - "$address" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
 import socket, sys

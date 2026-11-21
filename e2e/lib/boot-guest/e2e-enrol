@@ -71,6 +71,15 @@ fi
 if [ -s /mnt/enrol/node-exporter.server.key ]; then
   install -D -m 0640 -o root -g prometheus /mnt/enrol/node-exporter.server.key /var/lib/regalia-etc/regalia/node-exporter/server.key
 fi
+# the probe's inputs (the client fixtures and the monitoring CA): copied to /var so they persist across boots.
+# The enrolment disk is only attached on the v1 boot; the probes run on v2c (the next boot), where the disk is
+# gone. /var's names, because /etc is a tmpfs copy made at every boot
+for f in monitoring-ca.pem node-exporter.client.crt node-exporter.client.key \
+         node-exporter.client-wrong.crt node-exporter.client-wrong.key; do
+  if [ -s "/mnt/enrol/$f" ]; then
+    install -D -m 0644 "/mnt/enrol/$f" "/var/lib/regalia-etc/regalia/node-exporter/$f"
+  fi
+done
 # THIS HOST'S FIREWALL, its audit collector configuration and a PIN credential (regalia-kms-r1s.8), when the enrolment disk
 # carries them, each written at its /var name as the operator writes it (README.md): the image enables nftables.service,
 # the audit shippers and their prune timers under /usr, each gated on its per-host file, and its generator names the

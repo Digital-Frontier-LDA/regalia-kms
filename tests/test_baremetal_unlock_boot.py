@@ -1500,11 +1500,13 @@ class OnQemuVerity(OnQemu):
         args = b"ARGS=\"" + metrics.node_exporter_args(cfg).encode() + b"\"\n"
         with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
             web_yml = f.read()
-        self.exporter_materials = {"default": args, "web.yml": web_yml,
-                                   "server.pem": server, "server.key": key(server_key),
+        # the file names on the enrolment disk are what e2e-enrol and e2e-report expect (node-exporter.* for the
+        # /var staging, monitoring-ca.pem and client.* for the probes' inputs, read from /mnt/enrol directly)
+        self.exporter_materials = {"node-exporter.default": args, "node-exporter.web.yml": web_yml,
+                                   "node-exporter.server.pem": server, "node-exporter.server.key": key(server_key),
                                    "monitoring-ca.pem": monitoring_ca,
-                                   "client.crt": trusted_client, "client.key": key(client_key),
-                                   "client-wrong.crt": wrong_client, "client-wrong.key": key(foreign_key)}
+                                   "node-exporter.client.crt": trusted_client, "node-exporter.client.key": key(client_key),
+                                   "node-exporter.client-wrong.crt": wrong_client, "node-exporter.client-wrong.key": key(foreign_key)}
         return self.exporter_materials
 
     def proven(self, said, slot, entry=True):
