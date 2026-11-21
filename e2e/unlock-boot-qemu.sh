@@ -394,7 +394,10 @@ if [ "$CASES" = unlock ]; then
 else
   # the verity boots' images (#61 K61V-4), each the same build with another /usr record: B (the A/B update's next
   # image), C (the broken factory /etc), and A's record with one digit of its root hash changed (WRONG USRHASH)
-  uki_image e2e-b /tmp/uki/cmdline "/boot/vmlinuz-$KVER" /tmp/uki/usr-b.json
+  # Slot B's TEST UKI forwards journal diagnostics before switch-root. Keep INFO: this console cap also filters
+  # regalia-unlock's explicit journal+console stream, including the required "gave the key" positive boot proof.
+  printf '%s systemd.journald.forward_to_console=1 systemd.journald.max_level_console=info\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-b"
+  uki_image e2e-b /tmp/uki/cmdline-b "/boot/vmlinuz-$KVER" /tmp/uki/usr-b.json
   uki_image e2e-c /tmp/uki/cmdline "/boot/vmlinuz-$KVER" /tmp/uki/usr-c.json
   # WRONG USRHASH's console also carries the journal (systemd.journald.forward_to_console=1, this test image only): its
   # initrd fails behind the passphrase prompt, which holds systemd's status lines back, so its console said only "Boot has
