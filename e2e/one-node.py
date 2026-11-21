@@ -50,7 +50,7 @@ import uuid
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import sh, until                      # noqa: E402
-from deploy.baremetal import lease, membership, node, ownerunlock, revoke, survivor, unlock   # noqa: E402
+from deploy.baremetal import admission, lease, membership, node, ownerunlock, revoke, survivor, unlock   # noqa: E402
 from deploy.baremetal import manifest as manifest_tool   # noqa: E402
 
 passed, failed = 0, 0
@@ -216,9 +216,9 @@ class Daemon:
                     process.kill()
                     process.wait()
 
-    def call(self, method, path, body=None, nonce=None):
-        connection = http.client.HTTPSConnection("127.0.0.1", PORT, context=self.context, timeout=60)
-        headers = {"X-Request-ID": str(uuid.uuid4())}
+    def call(self, method, path, body=None, nonce=None, *, request_id=None, timeout=60):
+        connection = http.client.HTTPSConnection("127.0.0.1", PORT, context=self.context, timeout=timeout)
+        headers = {"X-Request-ID": request_id or str(uuid.uuid4())}
         if body is not None:
             headers.update({"Content-Type": "application/json", "Idempotency-Key": nonce})
         try:
@@ -248,12 +248,12 @@ class Daemon:
             time.sleep(0.5)
         return self.ready()
 
-    def sign(self, message, nonce=None):
+    def sign(self, message, nonce=None, **request_options):
         nonce = nonce or "e2e1-nonce-" + os.urandom(12).hex()
         expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=240)).strftime("%Y-%m-%dT%H:%M:%SZ")
         status, answer = self.call("POST", "/v1/operations/sign", {
             "object_id": OBJECT, "context": {"environment": "staging", "purpose": "e2e-signing", "expires_at": expires, "nonce": nonce},
-            "content_type": "application/vnd.regalia.digest", "payload_base64": base64.b64encode(hashlib.sha256(message).digest()).decode()}, nonce)
+            "content_type": "application/vnd.regalia.digest", "payload_base64": base64.b64encode(hashlib.sha256(message).digest()).decode()}, nonce, **request_options)
         return status, answer, nonce
 
     def verifies(self, message, answer):
@@ -272,11 +272,84 @@ class Daemon:
         return len(raw) == 64 and subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(self.d / "pub.pem"), "-signature",
                                                   str(self.d / "sig.der"), str(self.d / "message")], capture_output=True).returncode == 0
 
+    def denied_not_admitted(self, request_id):
+        try:
+            with (self.state / "audit.jsonl").open("rb") as journal:
+                for line in journal:
+                    if not line.endswith(b"\n"):
+                        continue
+                    event = json.loads(line)
+                    if (isinstance(event, dict) and event.get("request_id") == request_id
+                            and event.get("operation") == "sign" and event.get("decision") == "deny"
+                            and event.get("outcome") == "not-admitted"):
+                        return True
+        except (OSError, ValueError):
+            pass
+        return False
+
     def log(self, limit=1500):
         try:
             return (self.d / "daemon.log").read_text()[-limit:]
         except OSError:
             return ""
+
+
+def non_serving_admission(path, manifest, previous):
+    """Read an explicit zero admission from the expected boot, session and manifest."""
+    with path.open("rb") as source:
+        doc = membership.load(source.read(4097), 4096)
+    expected = dict(schema=admission.SCHEMA, node_id="a", session_id=previous["session_id"], boot_id=previous["boot_id"],
+                    epoch=manifest["epoch"], manifest_digest=membership.digest(manifest),
+                    hsm_serials=" ".join(membership.validate(manifest)["a"]["hsm_serials"]),
+                    lease_issued_at=admission.NEVER, requested_boottime_ms=0, **admission.NO_STATE,
+                    serve_until_boottime_ms=0, mode="lease")
+    reason = doc.get("reason") if isinstance(doc, dict) else None
+    if (not isinstance(reason, str) or not reason.strip() or not reason.isprintable()
+            or set(doc) != set(admission.FIELDS)
+            or any(type(doc[k]) is not type(value) or doc[k] != value for k, value in expected.items())):
+        return None
+    return doc
+
+
+def observe_shutdown(kms, read_admission, started, lifetime):
+    """Capture responses and the zero admission before one deadline. Correlate the journal separately."""
+    deadline = started + lifetime
+    candidates = {}
+    stopped = denied = None
+
+    def audited_denial():
+        for request_id, observed in candidates.items():
+            if kms.denied_not_admitted(request_id) is True:
+                return observed
+        return None
+
+    while (remaining := deadline - time.monotonic()) > 0:
+        if stopped is None:
+            try:
+                document = read_admission()
+                observed = time.monotonic()
+                if isinstance(document, dict) and observed <= deadline:
+                    stopped = observed - started
+            except (OSError, ValueError, membership.Refused):
+                pass
+        if denied is None and (remaining := deadline - time.monotonic()) > 0:
+            request_id = str(uuid.uuid4())
+            try:
+                status, response, _ = kms.sign(b"after the shutdown", request_id=request_id, timeout=min(remaining, 2))
+                observed = time.monotonic()
+                if status == 503 and isinstance(response, dict) and response.get("request_id") == request_id and observed <= deadline:
+                    candidates[request_id] = observed - started
+            except (OSError, http.client.HTTPException):
+                pass
+            denied = audited_denial()
+        if stopped is not None and denied is not None:
+            break
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
+    if denied is None and candidates:
+        evidence = until(lambda: (observed,) if (observed := audited_denial()) is not None else None, 60, 1)
+        if isinstance(evidence, tuple):
+            denied = evidence[0]
+    return denied, stopped
 
 
 def scenario(cluster, kms):
@@ -404,21 +477,24 @@ def scenario(cluster, kms):
     ok(unphrased is not None and cluster.held_epoch("a") == 1 and any("shutdown phrase" in e.get("reason", "") for e in denied),
        "without the typed shutdown phrase the import is refused, and a stays at epoch 1", {"denied": denied[-1:], "said": (unphrased or "")[-300:]})
     phrase = revoke.shutdown_phrase("a")
-    committed_at = time.time()
+    previous = cluster.lease("a")
+    if not previous:
+        raise RuntimeError("a has no serving admission before revocation")
+    admission_path = cluster.nodes["a"].run / "admission" / "admission.json"
+    committed_at = time.time()                  # whole-second collector filters only
+    started = time.monotonic()                 # conservatively before the commit operation
     cluster.revoke_by_owner("a", "a", "REVOKED_STOLEN", reason, shutdown=phrase)
     commits = [e for e in cluster.trail("a") if e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW"]
     ok(cluster.held_epoch("a") == 2 and commits and commits[-1].get("shutdown") == phrase and commits[-1].get("signers") == [membership.OWNER],
        "with \"%s\" typed, the owner's revocation is committed on a (epoch 2), the phrase in a's sync trail" % phrase, commits[-1:])
-    refused = until(lambda: kms.sign(b"after the shutdown")[0] == 503, lease.MAX_LIFETIME, 1)
-    took = time.time() - committed_at
-    ok(bool(refused) and took <= lease.MAX_LIFETIME, "the daemon refuses to sign (503) within one lease of the commit (%.0f s; "
-       "MAX_LIFETIME %d s)" % (took, lease.MAX_LIFETIME), kms.log())
-    stopped = until(lambda: cluster.lease("a") is None, lease.MAX_LIFETIME + 5, 1)
-    stop_took = time.time() - committed_at
-    ok(bool(stopped) and stop_took <= lease.MAX_LIFETIME + 5, "a's admission stops serving within one lease of the commit (%.0f s)" % stop_took,
+    took, stop_took = observe_shutdown(
+        kms, lambda: non_serving_admission(admission_path, cluster.manifest, previous), started, lease.MAX_LIFETIME)
+    ok(took is not None, "the daemon refuses signing with a correlated deny/not-admitted audit within one lease", kms.log())
+    ok(stop_took is not None, "a publishes an epoch-2 non-serving admission within one lease",
        cluster.journal("a", "admission")[-600:])
-    print("  MEASURED: the owner's revocation of the only node -> the daemon refuses after %.0f s, admission stops after %.0f s "
-          "(MAX_LIFETIME %d s)" % (took, stop_took, lease.MAX_LIFETIME), flush=True)
+    if took is not None and stop_took is not None:
+        print("  MEASURED: the owner's revocation of the only node -> the daemon refuses after %.0f s, admission stops after %.0f s "
+              "(MAX_LIFETIME %d s)" % (took, stop_took, lease.MAX_LIFETIME), flush=True)
     # sync's local lease-nonce rejects a revoked node before building its verifier. Require a's own refusal under the
     # committed epoch, not an aggregate denial or a different peer's failure.
     first_refusal = "the source refused: a may not serve under epoch 2: no lease"

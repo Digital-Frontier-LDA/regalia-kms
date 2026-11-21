@@ -10,7 +10,10 @@ import importlib.util
 import json
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from deploy.baremetal import admission, membership
+from tests.test_baremetal_membership_v5 import single5
 from pathlib import Path
 import unittest
 
@@ -118,6 +121,101 @@ class RevocationDenial(unittest.TestCase):
         other = denial()
         other["peer"] = "b"
         self.assertTrue(self.accepted([{}, other, denial()]))
+
+
+class Shutdown(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "admission.json"
+        self.journal = self.path.with_name("audit.jsonl")
+        first = single5(1, "")
+        self.tip = single5(2, membership.digest(first))
+        self.previous = {"session_id": "ab" * 32, "boot_id": "2462ce77-2a3f-4774-b553-47399e233251"}
+        self.document = dict(schema=admission.SCHEMA, node_id="a", **self.previous, epoch=2,
+                             manifest_digest=membership.digest(self.tip),
+                             hsm_serials=" ".join(self.tip["nodes"][0]["hsm_serials"]), lease_issued_at=admission.NEVER,
+                             requested_boottime_ms=0, **admission.NO_STATE, serve_until_boottime_ms=0, mode="lease",
+                             reason="revoked")
+        self.now = 0
+        self.kms = SimpleNamespace(state=self.path.parent, sign=Mock(side_effect=self.sign))
+        self.kms.denied_not_admitted = lambda request_id: one_node.Daemon.denied_not_admitted(self.kms, request_id)
+        self.outcome = "not-admitted"
+        clock = SimpleNamespace(monotonic=lambda: self.now, sleep=self.advance)
+        for module in (one_node, threenode):
+            patcher = patch.object(module, "time", clock)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def sign(self, message, *, request_id, timeout):
+        self.record(request_id, self.outcome)
+        return 503, {"request_id": request_id}, None
+
+    def record(self, request_id, outcome):
+        with self.journal.open("a") as audit:
+            audit.write(json.dumps(dict(request_id=request_id, decision="deny", operation="sign", outcome=outcome)) + "\n")
+
+    def read(self):
+        return one_node.non_serving_admission(self.path, self.tip, self.previous)
+
+    def observe(self, read=None):
+        return one_node.observe_shutdown(self.kms, read or self.read, 0, 3)
+
+    def test_correlated_gate_denial_and_current_zero_admission_pass(self):
+        self.path.write_text(json.dumps(self.document))
+        self.assertEqual(self.observe(), (0, 0))
+
+    def test_unrelated_503_and_unrelated_audit_do_not_pass(self):
+        self.path.write_text(json.dumps(self.document))
+        self.record("different-request", "not-admitted")
+        self.outcome = "backend-unavailable"
+        self.assertEqual(self.observe(), (None, 0))
+
+    def test_missing_malformed_stale_or_expired_file_cannot_prove_a_stop(self):
+        for raw in (None, "{", "[]", json.dumps(dict(self.document, epoch=1)),
+                    json.dumps(dict(self.document, session_id="12" * 32)),
+                    json.dumps(dict(self.document, serve_until_boottime_ms=1)),
+                    json.dumps(dict(self.document, serve_until_boottime_ms=False))):
+            with self.subTest(raw=raw):
+                self.now = 0
+                if raw is not None:
+                    self.path.write_text(raw)
+                self.assertEqual(self.observe(), (0, None))
+
+    def test_exceptions_are_not_observations(self):
+        self.kms.sign.side_effect = OSError("broken socket")
+        self.assertEqual(self.observe(Mock(side_effect=OSError("broken admission read"))), (None, None))
+
+    def test_a_read_completing_after_the_shared_deadline_does_not_pass(self):
+        self.path.write_text(json.dumps(self.document))
+
+        def late_read():
+            self.advance(4)
+            return self.read()
+
+        self.assertEqual(self.observe(late_read), (None, None))
+        self.kms.sign.assert_not_called()
+
+    def test_a_response_after_the_shared_deadline_does_not_pass(self):
+        self.path.write_text(json.dumps(self.document))
+
+        def late_sign(*args, **kw):
+            self.advance(4)
+            return self.sign(*args, **kw)
+
+        self.kms.sign.side_effect = late_sign
+        self.assertEqual(self.observe(), (None, 0))
+
+    def test_delayed_audit_confirms_only_the_original_in_budget_response(self):
+        self.path.write_text(json.dumps(self.document))
+        audit = self.kms.denied_not_admitted
+        self.kms.denied_not_admitted = lambda request_id: self.now >= 5 and audit(request_id)
+        self.assertEqual(self.observe(), (0, 0))
+        self.assertEqual(self.now, 5)
+        self.assertEqual(self.kms.sign.call_count, 3)
 
 
 if __name__ == "__main__":
