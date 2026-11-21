@@ -951,33 +951,26 @@ class Renewals(unittest.TestCase):
         with self.assertRaises(OSError):
             service.renew({"nonce": "n"})
 
-    def test_under_single_node_the_node_issues_its_own_lease_and_asks_no_peer(self):
-        """dx7.3: the renewal under a single-node manifest is lease.issue_self, with this node's own verifier, quote,
-        heartbeat, signer and RevisionFloor (fed at the attempt); no peer is asked. Each attempt is on the trail, naming
-        the node itself."""
+    def test_under_single_node_its_own_sync_issues_the_lease_and_no_peer_is_asked(self):
+        """dx7.3, corrected by regalia-kms-41n: under a single-node manifest the lease is asked of this node's own sync
+        (Node.self_source, the local lease listener), which issues it (lease.issue_self with sync's own verifier,
+        heartbeat, signer and RevisionFloor: tests/test_baremetal_local_lease.py). Admission asks as it asks a peer and
+        makes no issuer part of its own; no peer is asked. Each attempt is on the trail, naming the node itself."""
         from deploy.baremetal import node
         single = {"schema": m.SCHEMA_V5, "topology": {"profile": m.SINGLE_NODE}, "epoch": 3, "nodes": []}
-        issued, fed = [], []
-
-        def issue_self(manifest, node_id, request, attester, evidence, freshness, signer, floor):
-            issued.append((manifest["epoch"], node_id, request["nonce"], evidence))
-            if isinstance(answer[0], Exception):
-                raise answer[0]
-            return answer[0]
-        answer = [{"lease": "its own"}]
-        service = self.service({"b": AssertionError("a peer was asked")}, manifest=single)
-        self.fake.self_attester.return_value.nonce.return_value = b"\x11" * 32
-        self.fake.quote.return_value = lambda nonce, manifest, binding: {"answers": nonce}
-        floor = unittest.mock.Mock(applied=lambda *a: fed.append(a))
-        with mock.patch.object(node.lease, "issue_self", issue_self), mock.patch.object(node.lease, "read_applied", return_value=("c1" * 8, 1, 7)), \
-                mock.patch.object(node.lease, "request_binding", return_value=b"binding"), mock.patch.object(node.lease, "TpmSigner"), \
-                mock.patch.object(node.lease, "RevisionFloor", return_value=floor):
+        answers = {"a": {"lease": "its own"}, "b": AssertionError("a peer was asked")}
+        service = self.service(answers, manifest=single)
+        self.fake.self_source.return_value = {"a": None}
+        never = unittest.mock.Mock(side_effect=AssertionError("admission made an issuer part"))
+        with mock.patch.object(node.lease, "issue_self", never), mock.patch.object(node.lease, "TpmSigner", never), \
+                mock.patch.object(node.lease, "RevisionFloor", never):
             self.assertEqual(service.renew({"nonce": "n"}), {"lease": "its own"})
-            answer[0] = m.Refused("STALE STATE: below the floor")
+            answers["a"] = m.Refused("STALE STATE: below the floor")
             with self.assertRaises(m.Refused):
                 service.renew({"nonce": "n2"})
-        self.assertEqual(issued, [(3, "a", "n", {"answers": "11" * 32}), (3, "a", "n2", {"answers": "11" * 32})])
-        self.assertEqual(fed, [("c1" * 8, 1, 7)] * 2)
         self.fake.sources.assert_not_called()
-        self.assertEqual([(e["peer"], e["outcome"]) for e in self.trail], [("a", "ALLOW"), ("a", "DENY")])
-        self.assertIn("STALE STATE", self.trail[-1]["reason"])
+        self.fake.self_source.assert_called_with(timeout=admission.RENEW_TIMEOUT)
+        self.fake.freshness.assert_not_called()
+        self.fake.self_attester.assert_not_called()
+        self.assertEqual([(e["peer"], e["outcome"]) for e in self.trail], [("a", "ALLOW"), ("a", "DENY"), ("", "DENY")])
+        self.assertIn("STALE STATE", self.trail[1]["reason"])
