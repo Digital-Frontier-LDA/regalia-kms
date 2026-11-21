@@ -87,11 +87,12 @@ done
 # the configured address when it is. NRestarts and the boot-scoped journal say a failure would not be hidden: a
 # unit in failed/activating, or one that has retried, cannot read as the line a skipped unit leaves
 restarts="$(systemctl show -P NRestarts prometheus-node-exporter.service 2>/dev/null || echo none)"
-# the exporter's own words: the last 6 lines of its boot-scoped journal. systemd's wrapper lines
-# ("Failed with result", "Start request repeated") are interspersed with the exporter's own stdout/stderr
-# (the actual error: cannot read key, TLS config error, port in use). Six lines catches the error among
-# the wrapper. A successful start shows its startup lines; a skip shows the condition message
-journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | tail -6 | tr '\n' '|' | cut -c1-500)"
+# the exporter's own words: the lines that are NOT systemd's wrapper (not starting with the unit name +
+# colon). systemd's lines ("Failed with result", "Start request repeated", "Main process exited")
+# interleave with the exporter's own stdout/stderr (the actual error: cannot read key, TLS config error,
+# port in use) and push it back on each restart. Filter to the exporter's own output; a skip shows the
+# condition message, a start shows its startup lines, a failure shows the cause
+journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | grep -v '^prometheus-node-exporter\.service:' | tail -4 | tr '\n' '|' | cut -c1-400)"
 echo "REGALIA-E2E-EXPORTER unit=$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P SubState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P ConditionResult prometheus-node-exporter.service 2>/dev/null || echo none) result=$(systemctl show -P Result prometheus-node-exporter.service 2>/dev/null || echo none) restarts=${restarts:-none}" > /dev/console
 echo "REGALIA-E2E-EXPORTER journal=${journal:-none}" > /dev/console
 # its listener, MEASURED (ss -ltnp, every address, not derived from the file's presence): 9100 on the address the
