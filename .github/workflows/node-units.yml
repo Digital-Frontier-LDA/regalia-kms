@@ -238,8 +238,11 @@ jobs:
           grep -q '^one-node: 26 passed, 0 failed$' "$RUNNER_TEMP/one.log" || {
             echo "::error::the one-node test did not pass all 26 checks" >&2; exit 1; }
           # dx7.7 and dx7.8's steps are said as TODO and counted neither way: both still said, until those beads replace them
-          [ "$(grep -cE 'TODO.* regalia-kms-dx7\.(7|8): ' "$RUNNER_TEMP/one.log")" = 2 ] || {
-            echo "::error::the dx7.7/dx7.8 TODO lines changed: a step that runs now is pinned in the pass count instead" >&2; exit 1; }
+          for step in 7 8; do
+            prefix="$(printf '  \033[33mTODO\033[0m regalia-kms-dx7.%s: ' "${step}")"
+            [ "$(awk -v prefix="$prefix" 'index($0, prefix) == 1 {count++} END {print count+0}' "$RUNNER_TEMP/one.log")" = 1 ] || {
+              echo "::error::expected exactly one regalia-kms-dx7.${step} TODO line" >&2; exit 1; }
+          done
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
         uses: ./.github/actions/tpm-diagnostics
