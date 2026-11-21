@@ -967,6 +967,12 @@ def bind_local(path, owner_uid, create=None):
             listener.bind(path)
         finally:
             os.umask(old)
+        # 0666 on purpose (#761's review): connect() to an AF_UNIX socket needs WRITE on it, and the caller,
+        # regalia-admission, is not this socket's owner (regalia-sync), so 0644 would refuse it. The mode is not the
+        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's ("refused" for any other),
+        # and a lease needs a fresh TPM quote over sync's nonce. Bound under umask 0177 first (never wider than meant),
+        # only in a directory regalia-sync owns and nobody else can write (above); lease-nonce and lease only, and
+        # only under the single-node profile.
         os.chmod(path, 0o666)
         listener.listen(MAX_CONNECTIONS)
         listener.settimeout(1)
