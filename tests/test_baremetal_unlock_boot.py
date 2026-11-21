@@ -126,8 +126,8 @@ def no_shell(test, said):
     test.assertNotRegex(said, r"Emergency Shell|Rescue Shell|Give root password|emergency mode")
 
 
-# a line systemd forwarded from the journal to the console (systemd.journald.forward_to_console=1, the wrong-usrhash
-# image's only): its unit descriptions, "Emergency Shell" among them, are the journal's, not something the console offers
+# a line systemd forwarded from the journal to the console (the wrong-usrhash image and slot B): its unit descriptions,
+# "Emergency Shell" among them, are the journal's, not something the console offers
 JOURNAL_LINE = re.compile(r"(?m)^.*\bsystemd\[1\]: .*$")
 
 
@@ -1726,12 +1726,35 @@ class OnQemuVerity(OnQemu):
         set to its root hash's halves, as the updater must (systemd-veritysetup-generator finds them by those)."""
         for number, name in ((4, "usr.erofs"), (5, "usr.verity")):
             loop, part = self.partition(number)
-            done = run(["dd", "if=%s/usr-%s/%s" % (BOOT, slot, name), "of=" + part, "bs=4M", "conv=fsync", "status=none"], capture_output=True)
-            run(["losetup", "-d", loop], capture_output=True)
-            self.assertEqual(done.returncode, 0, done.stderr)
+            try:
+                done = run(["dd", "if=%s/usr-%s/%s" % (BOOT, slot, name), "of=" + part, "bs=4M", "conv=fsync", "status=none"], capture_output=True)
+            finally:
+                run(["losetup", "-d", loop], capture_output=True)
+            self.assertEqual(done.returncode, 0, "HOST SLOT B WRITE FAILED: slot %s partition %d (%s): %r" % (slot, number, name, done.stderr))
         for number, key in ((4, "usr_partuuid"), (5, "usr_verity_partuuid")):
             done = run(["sfdisk", "--part-uuid", self.image, str(number), self.usr[slot][key]], capture_output=True)
             self.assertEqual(done.returncode, 0, done.stderr)
+        # Reattach after the GPT writes so blkid reads the new partition table. Diagnose the fixture's on-disk pair
+        # before QEMU starts, without activating dm-verity, formatting a tree, or repairing anything.
+        record = self.usr[slot]
+        loop, data = self.partition(4)
+        try:
+            hashes, appeared = wait_for_partition(loop, 5)
+            self.assertIsNotNone(appeared, "HOST SLOT B HASH PARTITION NOT READY: %s after %.1f s" % (hashes, PARTITION_WAIT))
+            for number, part, key in ((4, data, "usr_partuuid"), (5, hashes, "usr_verity_partuuid")):
+                probe = run(["blkid", "-p", "-s", "PART_ENTRY_UUID", "-o", "value", part], capture_output=True, text=True)
+                self.assertEqual(probe.returncode, 0, "HOST SLOT B PARTUUID READ FAILED: slot %s partition %d (%s), rc=%d: %s" % (
+                    slot, number, part, probe.returncode, probe.stderr))
+                observed = probe.stdout.strip().lower()
+                self.assertEqual(observed, record[key], "HOST SLOT B PARTUUID MISMATCH: slot %s partition %d (%s), expected %s, got %s" % (
+                    slot, number, part, record[key], observed))
+            verified = run(["veritysetup", "verify", data, hashes, record["roothash"]], capture_output=True, text=True)
+            self.assertEqual(verified.returncode, 0, "HOST SLOT B VERITY VERIFY FAILED: slot %s data=%s hashes=%s roothash=%s rc=%d: %s" % (
+                slot, data, hashes, record["roothash"], verified.returncode, verified.stderr))
+            print("HOST SLOT B VERIFIED: slot %s data=%s hashes=%s roothash=%s PARTUUIDs=%s/%s" % (
+                slot, data, hashes, record["roothash"], record["usr_partuuid"], record["usr_verity_partuuid"]), file=sys.stderr)
+        finally:
+            run(["losetup", "-d", loop], capture_output=True)
 
     def flip(self, number, offset):
         """One byte of partition `number` at `offset` inverted (run twice: put back)."""
