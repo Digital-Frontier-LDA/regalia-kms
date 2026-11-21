@@ -98,12 +98,13 @@ listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$
 [ -z "$listen" ] && listen=none
 etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
 etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
-# the settled state: the report runs after multi-user.target, but the system may still be in "starting"
-# (units transitioning). Wait up to 10 s for the system to settle to "running" or "degraded". A unit that
-# never settles (a timer, a retrying service) would block --wait indefinitely, so bound it with timeout.
-# On a healthy unconfigured boot the system settles to "running" within a few seconds of multi-user.target
-sysrun="$(timeout 10 systemctl is-system-running --wait 2>/dev/null || systemctl is-system-running 2>/dev/null || echo unknown)"
-echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget is-system-running=$sysrun" > /dev/console
+# the system's health, without deadlocking: the report is a oneshot in multi-user.target, so is-system-running
+# --wait would wait for itself to finish. Instead, count the failed units: a unit in failed state (the exporter's
+# build-8 failure shape: start limit, result resources) holds the system in "degraded". Zero failed units means
+# the system settles to "running" once the transitions complete. The test asserts failed-units=0 on an
+# unconfigured boot (AC1: the skipped exporter does not degrade the host)
+failed="$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l)"
+echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget failed-units=$failed" > /dev/console
 # THE MUTUAL-TLS PROBE (regalia-kms-r1s.17, the boot where the test's web.yml and server material are staged):
 # the metrics are served only to a client the monitoring CA authenticated. Each case is a bounded probe:
 # trusted (a certificate the monitoring CA signed for the test), missing (no client certificate) and wrong (a

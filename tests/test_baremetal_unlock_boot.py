@@ -225,17 +225,17 @@ def exporter_state(said):
     if not unit:
         return None
     found = re.search(r"REGALIA-E2E-EXPORTER journal=(.*)", said)
-    listen_line = re.search(r"REGALIA-E2E-EXPORTER listen=(\S+) etclink=(\S+) etctarget=(\S+) is-system-running=(\S+)", said)
+    listen_line = re.search(r"REGALIA-E2E-EXPORTER listen=(\S+) etclink=(\S+) etctarget=(\S+) failed-units=(\S+)", said)
     if listen_line:
-        listen, etclink, etctarget, sysrun = listen_line.group(1), listen_line.group(2), listen_line.group(3), listen_line.group(4)
+        listen, etclink, etctarget, failed = listen_line.group(1), listen_line.group(2), listen_line.group(3), listen_line.group(4)
     else:
-        # the pre-r1s.17.1 format: listen only, no etclink/etctarget/system_running
+        # the pre-r1s.17.1 format: listen only, no etclink/etctarget/failed-units
         listen_only = re.search(r"REGALIA-E2E-EXPORTER listen=(.*)", said)
         listen = listen_only.group(1) if listen_only else ""
-        etclink = etctarget = sysrun = ""
+        etclink = etctarget = failed = ""
     return {"state": unit.group(1), "result": unit.group(2), "restarts": unit.group(3),
             "journal": found.group(1) if found else "", "listen": listen,
-            "etclink": etclink, "etctarget": etctarget, "system_running": sysrun}
+            "etclink": etclink, "etctarget": etctarget, "failed_units": failed}
 
 
 def exporter_probes(said):
@@ -324,21 +324,21 @@ class VerityReport(unittest.TestCase):
         fail on the line, not on a later PCR or the boot's outcome."""
         skipped = ("REGALIA-E2E-EXPORTER unit=inactive/dead/no result=success restarts=0\n"
                    "REGALIA-E2E-EXPORTER journal=none\n"
-                   "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent is-system-running=running\n")
+                   "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=0\n")
         self.assertEqual(exporter_state(skipped), {"state": "inactive/dead/no", "result": "success", "restarts": "0",
                                                    "journal": "none", "listen": "none",
                                                    "etclink": "/var/lib/regalia-etc/default/prometheus-node-exporter",
-                                                   "etctarget": "absent", "system_running": "running"})
+                                                   "etctarget": "absent", "failed_units": "0"})
         # the build 8 shape (the failure this guard removes): resources, a restart, the environment file's name
         failed = ("REGALIA-E2E-EXPORTER unit=activating/start-limit/no result=resources restarts=4\n"
                   "REGALIA-E2E-EXPORTER journal=Failed to load environment files: No such file or directory|\n"
-                  "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent is-system-running=degraded\n")
+                  "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=1\n")
         self.assertEqual(exporter_state(failed)["state"], "activating/start-limit/no")
         self.assertIn("Failed to load environment", exporter_state(failed)["journal"])
-        self.assertEqual(exporter_state(failed)["system_running"], "degraded")
+        self.assertEqual(exporter_state(failed)["failed_units"], "1")
         started = ("REGALIA-E2E-EXPORTER unit=active/running/yes result=success restarts=0\n"
                    "REGALIA-E2E-EXPORTER journal=none\n"
-                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present is-system-running=running\n")
+                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present failed-units=0\n")
         self.assertEqual(exporter_state(started)["listen"], "192.0.2.10:9100")
         self.assertEqual(exporter_state(started)["etctarget"], "present")
         self.assertIsNone(exporter_state("nothing"))
@@ -1595,11 +1595,12 @@ class OnQemuVerity(OnQemu):
         self.assertNotEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
         self.assertEqual(units["prometheus-node-exporter.service"]["result"], "success",
                          "the exporter is failed (the package's environment file is gone): %r" % units["prometheus-node-exporter.service"])
-        # an unconfigured host settles to running: the skipped exporter does not hold the system in degraded
-        self.assertEqual(state["system_running"], "running",
-                         "the unconfigured host is not running (the exporter's skip should not degrade it): %r" % state)
-        print("boot proof: the unconfigured exporter is skipped, no listener, etctarget=%s, is-system-running=%s" % (
-            state["etctarget"], state["system_running"]), file=sys.stderr)
+        # an unconfigured host has no failed units: the skipped exporter does not degrade it. A failed unit
+        # (the build-8 shape: start limit, result resources) would show up here
+        self.assertEqual(state["failed_units"], "0",
+                         "the unconfigured host has failed units (the exporter's skip should not degrade it): %r" % state)
+        print("boot proof: the unconfigured exporter is skipped, no listener, etctarget=%s, failed-units=%s" % (
+            state["etctarget"], state["failed_units"]), file=sys.stderr)
 
     def exporter_configured(self, said):
         """regalia-kms-r1s.17, AC2: with the per-host ARGS and the mutual-TLS web.yml staged, the exporter is active,
