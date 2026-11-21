@@ -108,8 +108,9 @@ etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=pres
 # resources) holds the system in "degraded", zero means it settles to "running" once the jobs finish
 failed="$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l)"
 # AC1 as written (systemctl is-system-running reports running) is read once every job has really ended: the
-# test's own regalia-e2e-probe runs AFTER multi-user.target (its last job) and writes its own settled line,
-# REGALIA-E2E-PROBE settled, which the test asserts. This count is the in-report diagnostic beside it
+# probe (regalia-e2e-settled, e2e-report's own systemd-run) runs AFTER multi-user.target (its last job) and
+# writes its own settled line, REGALIA-E2E-PROBE settled, which the test asserts. This count is the
+# in-report diagnostic beside it
 # the server key's mode and owner (0640 root:prometheus, as e2e-enrol and MONITORING.md give it): a world-readable
 # key would pass the test even if the exporter's group access to it were broken
 keymode="$(stat -c '%U:%G:%a' /etc/regalia/node-exporter/server.key 2>/dev/null || echo none)"
@@ -301,9 +302,9 @@ echo "REGALIA-E2E-CLIENT processes=$clients" > /dev/console
 echo "REGALIA-E2E-MEMINIT $(dmesg 2>/dev/null | grep -o 'mem auto-init:.*' | head -1)" > /dev/console
 # AC1 as written (systemctl is-system-running reports running) is read OUTSIDE the boot transaction:
 # this report is a oneshot of multi-user.target, so its own is-system-running reads "starting" while
-# it runs. The probe (regalia-e2e-probe.service, started by systemd-run --on-active=5s after the
+# it runs. A transient unit (regalia-e2e-settled, started by systemd-run --on-active=5s after the
 # report finishes) runs after the target's last job, where is-system-running settles to "running" on
-# a healthy host. The poweroff is in the probe's command line (after the settled read), so the probe
-# ends the boot. The QEMU boot timeout is the fallback for a guest whose probe never fires.
+# a healthy host. The poweroff is in its command line (after the settled read), so it ends the boot.
+# The QEMU boot timeout is the fallback for a guest whose probe never fires.
 systemd-run --on-active=5s --unit=regalia-e2e-settled \
   /bin/sh -c "/usr/lib/regalia/e2e-probe; systemctl --no-block poweroff" 2>/dev/null || true

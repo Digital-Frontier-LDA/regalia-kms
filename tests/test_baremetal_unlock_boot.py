@@ -1768,8 +1768,10 @@ class OnQemuVerity(OnQemu):
         # the exporter is SKIPPED, by name — its per-host file is the package's own plain ARGS (main's fixture,
         # --web.listen-address=127.0.0.1:9100, no --web.config.file), and the guard's ConditionPathExists
         # keeps the unit held (inactive/dead/no, no restarts, no listener, failed-units=0, the journal the
-        # condition line, UNFILTERED). (AC1's own boot is v2-unconfigured: the same disk with the file moved
-        # aside, so the guard holds for its absence too.)
+        # condition line, UNFILTERED). The order is declared, not luck: regalia-e2e-enrol.service is
+        # After=prometheus-node-exporter.service, so the guard is evaluated before e2e-enrol writes the
+        # per-host file. (AC1's own boot is v2-unconfigured: the same disk with the file moved aside, so the
+        # guard holds for its absence too.)
         self.exporter_skipped(said, unit_states(said))
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
