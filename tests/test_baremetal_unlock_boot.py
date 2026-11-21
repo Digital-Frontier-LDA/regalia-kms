@@ -1459,8 +1459,10 @@ class OnQemuVerity(OnQemu):
 
     def _guest_gid(self, name):
         """The gid of `name` in the image's factory /etc/group (the guest's, not the runner's): the image's
-        accounts are in the factory copy, and the guest's /etc/group is a copy of it at every boot."""
-        factory = "%s/usr/share/factory/etc/group" % BOOT
+        accounts are in the factory copy, and the guest's /etc/group is a copy of it at every boot. In the verity
+        case the guest's tree is REGALIA_BOOT_DIR's guest/ (unlock-boot-qemu.sh extracts rootfs.tar there), not
+        REGALIA_BOOT_DIR itself."""
+        factory = "%s/guest/usr/share/factory/etc/group" % BOOT
         with open(factory) as f:
             for line in f:
                 if line.startswith(name + ":"):
