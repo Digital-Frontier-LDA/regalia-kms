@@ -97,7 +97,8 @@ echo "REGALIA-E2E-EXPORTER journal=${journal:-none}" > /dev/console
 # per-host ARGS configure (only) when configured; nothing at all when the unit skipped (a package-default start
 # would show the wildcard address, not 127.0.0.1). Also: the dangling /etc link (its target absent) and the
 # unconfigured host's health (the settled is-system-running comes from the probe's line, after the report)
-listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$' | sort -u | tr '\n' ',')"
+listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$' | sort -u)"
+listen="$(printf '%s' "$listen" | tr '\n' ' ' | sed 's/ $//')"
 [ -z "$listen" ] && listen=none
 etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
 etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
@@ -148,7 +149,10 @@ ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 ctx.load_verify_locations(cafile)
 ctx.check_hostname = True
 ctx.verify_mode = ssl.CERT_REQUIRED
-if cert:
+# "-" is the NO-certificate case: a real client with no certificate would simply not present one, and
+# the server's RequireAndVerifyClientCert refuses the handshake (a client-certificate error). It must NOT
+# be opened as a file named "-", which is a fixture error, not a missing certificate
+if cert and cert != "-":
     ctx.load_cert_chain(cert, key)
 sock = socket.create_connection((host, int(port)), timeout=5)
 try:
@@ -193,8 +197,13 @@ try:
 finally:
     sock.close()
 if data.startswith(b"HTTP"):
-    code = data.split(b" ", 2)[1].decode()
-    print("ok %d" % int(code))
+    # a TLS server answers a non-TLS handshake with a 400 error page (a plaintext server answers the
+    # request: its body is metrics). "ok" is the metrics body only — a plaintext-serving regression shows
+    # "ok", and the TLS-only server, however it encodes its refusal, does not
+    if b"node_" in data:
+        print("ok %d" % int(data.split(b" ", 2)[1]))
+    else:
+        print("refused tls-error-page")
 else:
     print("refused non-tls")
 PYEOF
