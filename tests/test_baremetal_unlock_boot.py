@@ -126,8 +126,8 @@ def no_shell(test, said):
     test.assertNotRegex(said, r"Emergency Shell|Rescue Shell|Give root password|emergency mode")
 
 
-# a line systemd forwarded from the journal to the console (the wrong-usrhash image, and warning/error messages from
-# slot B): its unit descriptions, "Emergency Shell" among them, are the journal's, not something the console offers
+# a line systemd forwarded from the journal to the console (the wrong-usrhash image and slot B): its unit descriptions,
+# "Emergency Shell" among them, are the journal's, not something the console offers
 JOURNAL_LINE = re.compile(r"(?m)^.*\bsystemd\[1\]: .*$")
 
 

@@ -151,9 +151,9 @@ class SlotBJournalCommandLine(unittest.TestCase):
             lines = {name: (root / args[name][1].lstrip("/")).read_text().split() for name in args}
             return (root / "tmp/uki/cmdline").read_text().split(), lines, args
 
-    def test_only_b_gets_documented_warning_console_options_and_all_boot_restrictions_stay(self):
+    def test_only_b_gets_console_options_that_preserve_info_boot_proof_and_all_boot_restrictions(self):
         base, lines, args = self.command_lines()
-        diagnostics = ["systemd.journald.forward_to_console=1", "systemd.journald.max_level_console=warning"]
+        diagnostics = ["systemd.journald.forward_to_console=1", "systemd.journald.max_level_console=info"]
         self.assertEqual(lines["e2e-b"], base + diagnostics)
         self.assertEqual(lines["e2e-c"], base)
         self.assertEqual(args["e2e-b"], ["e2e-b", "/tmp/uki/cmdline-b", "/boot/vmlinuz-test-kernel", "/tmp/uki/usr-b.json"])
@@ -164,7 +164,7 @@ class SlotBJournalCommandLine(unittest.TestCase):
         override = "console=ttyS0,115200 rd.shell=0 rd.emergency=reboot systemd.import_credentials=no custom=kept"
         base, lines, _ = self.command_lines(override)
         self.assertEqual(base, override.split())
-        self.assertEqual(lines["e2e-b"], base + ["systemd.journald.forward_to_console=1", "systemd.journald.max_level_console=warning"])
+        self.assertEqual(lines["e2e-b"], base + ["systemd.journald.forward_to_console=1", "systemd.journald.max_level_console=info"])
         self.assertEqual(lines["e2e-c"], base)
 
 
