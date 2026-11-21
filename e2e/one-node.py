@@ -422,10 +422,11 @@ def scenario(cluster, kms):
     # sync's local lease-nonce rejects a revoked node before building its verifier. Require a's own refusal under the
     # committed epoch, not an aggregate denial or a different peer's failure.
     first_refusal = "the source refused: a may not serve under epoch 2: no lease"
-    named = until(lambda: [e for e in admission_trail(cluster, "a") if e.get("event") == "admission-renew" and e.get("outcome") == "DENY"
-                           and e.get("peer") == "a" and e.get("epoch") == 2 and e.get("reason") == first_refusal], 60, 2)
-    ok(bool(named), "a's own lease is refused under epoch 2 (admission-renew DENY, peer a: %s)" % first_refusal,
-       admission_trail(cluster, "a")[-3:])
+    named = until(lambda: cluster.audit_has("a", "admission", since=committed_at, event="admission-renew",
+                                            outcome="DENY", peer="a", epoch=2, reason=first_refusal), 60, 2)
+    ok(isinstance(named, list) and bool(named),
+       "the collector holds a's own lease refusal under epoch 2 (admission-renew DENY, peer a: %s)" % first_refusal,
+       named if isinstance(named, list) else str(named))
 
     header("6  not here yet: dx7.7 and dx7.8 extend this scenario")
     # TODO(regalia-kms-dx7.7): the owner-chain re-anchor and recovery (recount floor) on this one node, once that bead lands
