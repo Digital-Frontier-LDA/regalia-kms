@@ -264,9 +264,9 @@ else
 fi
 # the test's own: the enrolment step and the report, enabled under /usr
 mkdir -p "$GUEST/usr/lib/regalia" "$GUEST/usr/lib/systemd/system/multi-user.target.wants"
-install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report e2e/lib/boot-guest/e2e-probe "$GUEST/usr/lib/regalia/"
-install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service e2e/lib/boot-guest/regalia-e2e-probe.service "$GUEST/usr/lib/systemd/system/"
-for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sfn "../$u" "$GUEST/usr/lib/systemd/system/multi-user.target.wants/$u"; done
+install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report e2e/lib/boot-guest/e2e-probe e2e/lib/boot-guest/e2e-addr "$GUEST/usr/lib/regalia/"
+install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service e2e/lib/boot-guest/regalia-e2e-probe.service e2e/lib/boot-guest/regalia-e2e-addr.service "$GUEST/usr/lib/systemd/system/"
+for u in regalia-e2e-enrol.service regalia-e2e-report.service regalia-e2e-addr.service; do ln -sfn "../$u" "$GUEST/usr/lib/systemd/system/multi-user.target.wants/$u"; done
 # regalia-e2e-probe.service is NOT WantedBy multi-user.target: it is started by e2e-report via
 # systemd-run --on-active=5s (outside the boot transaction, where is-system-running settles to "running")
 if [ "$CASES" = unlock ]; then

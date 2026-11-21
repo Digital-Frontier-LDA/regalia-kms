@@ -219,28 +219,30 @@ def boot_entry(said):
 
 def exporter_state(said):
     """The REGALIA-E2E-EXPORTER lines (regalia-kms-r1s.17) as {"state", "result", "restarts", "journal", "listen",
-    "etclink", "etctarget", "failed_units", "settled"}, or None: the enabled unit's condition-skip, by name. The
-    journal is UNFILTERED (a negative check on it greps systemd's own lines for the failure's words). `settled`
-    is the REGALIA-E2E-PROBE settled line: the report is a job of multi-user.target and its own is-system-running
-    would read "starting", so the settled state comes from the test's probe that runs after the target's last job.
+    "etclink", "etctarget", "failed_units", "key", "settled"}, or None: the enabled unit's condition-skip, by
+    name. The journal is UNFILTERED (a negative check on it greps systemd's own lines for the failure's words).
+    `settled` is the REGALIA-E2E-PROBE settled line: the report is a job of multi-user.target and its own
+    is-system-running would read "starting", so the settled state comes from the test's probe that runs after
+    the target's last job. `key` is the server key's mode:owner (0640:root:prometheus on the configured boot).
     A boot whose report predates the lines has None or "" (an assertion on a verity boot is the test's own, not
     the report's)."""
     unit = re.search(r"REGALIA-E2E-EXPORTER unit=(\S+) result=(\S+) restarts=(\S+)", said)
     if not unit:
         return None
     found = re.search(r"REGALIA-E2E-EXPORTER journal=(.*)", said)
-    listen_line = re.search(r"REGALIA-E2E-EXPORTER listen=(\S+) etclink=(\S+) etctarget=(\S+) failed-units=(\S+)", said)
+    listen_line = re.search(r"REGALIA-E2E-EXPORTER listen=(\S+) etclink=(\S+) etctarget=(\S+) failed-units=(\S+)(?: key=(\S+))?", said)
     if listen_line:
         listen, etclink, etctarget, failed = listen_line.group(1), listen_line.group(2), listen_line.group(3), listen_line.group(4)
+        key = listen_line.group(5) or ""
     else:
         # the pre-r1s.17.1 format: listen only, no etclink/etctarget/failed-units
         listen_only = re.search(r"REGALIA-E2E-EXPORTER listen=(.*)", said)
         listen = listen_only.group(1) if listen_only else ""
-        etclink = etctarget = failed = ""
+        etclink = etctarget = failed = key = ""
     settled = re.search(r"REGALIA-E2E-PROBE settled is-system-running=(\S+)", said)
     return {"state": unit.group(1), "result": unit.group(2), "restarts": unit.group(3),
             "journal": found.group(1) if found else "", "listen": listen,
-            "etclink": etclink, "etctarget": etctarget, "failed_units": failed,
+            "etclink": etclink, "etctarget": etctarget, "failed_units": failed, "key": key,
             "settled": settled.group(1) if settled else ""}
 
 
@@ -335,7 +337,8 @@ class VerityReport(unittest.TestCase):
         self.assertEqual(exporter_state(skipped), {"state": "inactive/dead/no", "result": "success", "restarts": "0",
                                                    "journal": "none", "listen": "none",
                                                    "etclink": "/var/lib/regalia-etc/default/prometheus-node-exporter",
-                                                   "etctarget": "absent", "failed_units": "0", "settled": "running"})
+                                                   "etctarget": "absent", "failed_units": "0", "key": "",
+                                                   "settled": "running"})
         # the build 8 shape (the failure this guard removes): resources, a restart, the environment file's name,
         # and systemd's own line for the failure in the UNFILTERED journal (a filtered capture would not hold it)
         failed = ("REGALIA-E2E-EXPORTER unit=activating/start-limit/no result=resources restarts=4\n"
@@ -349,10 +352,11 @@ class VerityReport(unittest.TestCase):
         self.assertEqual(exporter_state(failed)["settled"], "degraded")
         started = ("REGALIA-E2E-EXPORTER unit=active/running/yes result=success restarts=0\n"
                    "REGALIA-E2E-EXPORTER journal=none\n"
-                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present failed-units=0\n"
+                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present failed-units=0 key=root:prometheus:640\n"
                    "REGALIA-E2E-PROBE settled is-system-running=running\n")
         self.assertEqual(exporter_state(started)["listen"], "192.0.2.10:9100")
         self.assertEqual(exporter_state(started)["etctarget"], "present")
+        self.assertEqual(exporter_state(started)["key"], "root:prometheus:640")
         self.assertEqual(exporter_state(started)["settled"], "running")
         self.assertIsNone(exporter_state("nothing"))
         # the probes: the configured boot's four cases, by name, with the report's own end marker dropped
@@ -1424,9 +1428,11 @@ class OnQemuVerity(OnQemu):
             run(["cryptsetup", "close", name], capture_output=True)
             run(["losetup", "-d", loop], capture_output=True)
 
-    def var_write(self, name, content):
+    def var_write(self, name, content, mode=None, group=None):
         """Writes `content` to `name` on the guest's /var (the LUKS2 volume, partition 6) while it is off, the
-        var_rename's write half (same key, same mount)."""
+        var_rename's write half (same key, same mount). `mode` and `group` (a name, resolved to the guest's
+        gid from the image's factory /etc/group) are applied to the file when given: the server key's
+        0640 root:prometheus, as e2e-enrol and MONITORING.md give it to the node."""
         loop, part = self.partition(6)
         mnt = self.d + "/var"
         os.makedirs(mnt, exist_ok=True)
@@ -1440,11 +1446,26 @@ class OnQemuVerity(OnQemu):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "wb") as f:
                     f.write(content)
+                if mode is not None:
+                    os.chmod(path, mode)
+                if group is not None:
+                    gid = self._guest_gid(group)
+                    os.chown(path, 0, gid)
             finally:
                 self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
         finally:
             run(["cryptsetup", "close", "regalia-e2e-var"], capture_output=True)
             run(["losetup", "-d", loop], capture_output=True)
+
+    def _guest_gid(self, name):
+        """The gid of `name` in the image's factory /etc/group (the guest's, not the runner's): the image's
+        accounts are in the factory copy, and the guest's /etc/group is a copy of it at every boot."""
+        factory = "%s/usr/share/factory/etc/group" % BOOT
+        with open(factory) as f:
+            for line in f:
+                if line.startswith(name + ":"):
+                    return int(line.split(":")[2])
+        self.fail("no group %r in the image's factory /etc/group" % name)
 
     def per_host_started(self, said):
         """The per-host units (regalia-kms-r1s.8), with this host's files on /var: enabled by the image under /usr, gated on
@@ -1526,32 +1547,19 @@ class OnQemuVerity(OnQemu):
             return builder.sign(signer, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
         def key(key_):
             return key_.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-        # the exporter listens on loopback (the guest's eth0 has no IP assigned: the test's network
-        # setup gives the peers their underlay IPs, not the guest). The server certificate's SAN is
-        # loopback too, so the mTLS probes (which run from inside the guest) verify it
-        host_ip = ipaddress.IPv4Address("127.0.0.1")
+        host_ip = ipaddress.IPv4Address(UNDERLAY["a"])
         monitoring_ca_key, server_key, client_key, foreign_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(4))
         monitoring_ca = certificate("e2e monitoring CA", monitoring_ca_key, "e2e monitoring CA", monitoring_ca_key, True)
-        server = certificate("localhost", server_key, "e2e monitoring CA", monitoring_ca_key, False, san=host_ip)
+        server = certificate(UNDERLAY["a"], server_key, "e2e monitoring CA", monitoring_ca_key, False, san=host_ip)
         trusted_client = certificate("e2e scraper", client_key, "e2e monitoring CA", monitoring_ca_key, False)
         # the wrong-CA case: a CA of its own, whose certificate the production web.yml's client_ca_file does not hold
         foreign_ca_key = ec.generate_private_key(ec.SECP256R1())
         foreign_ca = certificate("e2e foreign CA", foreign_ca_key, "e2e foreign CA", foreign_ca_key, True)
         wrong_client = certificate("e2e foreign scraper", foreign_key, "e2e foreign CA", foreign_ca_key, False)
         cfg = self.site("a")   # node_exporter_args reads only host_ipv4, and this host's is the guest's own
-        # the guest's eth0 has no IP assigned (the test's network setup gives the peers their underlay
-        # IPs, not the guest), so the exporter listens on loopback. The rest of the args (the web
-        # configuration, the writers' directories) come from the production rendering
-        base_args = metrics.node_exporter_args(cfg)
-        args = b"ARGS=\"" + base_args.replace(
-            "--web.listen-address=%s:9100" % cfg["host_ipv4"],
-            "--web.listen-address=127.0.0.1:9100").encode() + b"\"\n"
+        args = b"ARGS=\"" + metrics.node_exporter_args(cfg).encode() + b"\"\n"
         with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
             web_yml = f.read()
-        # the web.yml's /etc/regalia paths resolve to /var/lib/regalia-etc/regalia via the image's symlink,
-        # but the test's guest may not have the symlink set up (or the directory may not exist). Use the
-        # /var paths directly: the test writes the files there (var_write), so the exporter finds them
-        web_yml = web_yml.replace(b"/etc/regalia/node-exporter/", b"/var/lib/regalia-etc/regalia/node-exporter/")
         # the file names on the enrolment disk are what e2e-enrol and e2e-report expect (node-exporter.* for the
         # /var staging, monitoring-ca.pem and client.* for the probes' inputs, read from /mnt/enrol directly)
         self.exporter_materials = {"node-exporter.default": args, "node-exporter.web.yml": web_yml,
@@ -1665,12 +1673,18 @@ class OnQemuVerity(OnQemu):
         self.assertEqual(state["state"], "active/running/yes", "the exporter did not start on its own configuration: %r" % state)
         self.assertEqual(state["restarts"], "0", state)
         self.assertNotRegex(state["journal"], r"Failed to load environment|Failed with result|limit", state)
-        # the bind address is kept: loopback (127.0.0.1) on 9100 only, not the wildcard (the guest's eth0
-        # has no IP assigned; a package-default regression would show *:9100 or 0.0.0.0:9100, and no TLS)
-        listen_address = "127.0.0.1:9100"
+        # the bind address is kept: the host's underlay IP (192.0.2.10 in the test) on 9100 only, not the wildcard
+        # (a package-default regression would show *:9100 or 0.0.0.0:9100, and no TLS)
+        listen_address = "%s:9100" % UNDERLAY["a"]
         self.assertEqual(state["listen"], listen_address,
                          "the exporter does not listen on exactly %s (the package default, every address, "
                          "would show more): %r" % (listen_address, state))
+        # the server key's mode and owner: 0640 root:prometheus (the image's gid), as e2e-enrol and
+        # MONITORING.md give it to the node. A world-readable key (0644 root:root, the runner's default
+        # umask) would pass the test even if the exporter's group access to its key were broken
+        self.assertEqual(state["key"], "root:prometheus:640",
+                         "the server key is not 0640 root:prometheus (a looser mode would hide a broken "
+                         "group access): %r" % state)
         probes = exporter_probes(said)
         self.assertIn("trusted", probes, "no trusted probe: the web material was not staged")
         # the trusted client (signed by the monitoring CA) gets 200 with positive node_ metrics
@@ -1693,7 +1707,7 @@ class OnQemuVerity(OnQemu):
         self.assertIn("plaintext", probes, "no plaintext probe")
         self.assertTrue(probes["plaintext"].startswith("refused"),
                         "plaintext was accepted (the server is not TLS-only): %r" % probes)
-        print("boot proof: the configured exporter on 127.0.0.1:9100, mTLS only: %r" % probes, file=sys.stderr)
+        print("boot proof: the configured exporter on %s:9100, mTLS only: %r" % (UNDERLAY["a"], probes), file=sys.stderr)
 
     def write_slot_b(self, slot):
         """The updater's step, by hand: `slot`'s image into usr-b and usr-b-verity (partitions 4 and 5), their PARTUUIDs
@@ -1812,11 +1826,13 @@ class OnQemuVerity(OnQemu):
         self.assertEqual(exporter_state(said)["etctarget"], "absent",
                          "the /etc link resolves: the per-host file is on /var (the unit should have started): %r"
                          % exporter_state(said))
-        # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
-        # Cannot be read from inside the guest during the boot (the report is a oneshot of multi-user.target, so
-        # its own is-system-running reads "starting"; a probe started after it is killed by the poweroff). The
-        # failed-units count (asserted in exporter_skipped) stands in for AC1: zero failed units means the host
-        # settles to "running" once the boot jobs finish (PA 01:15Z note allows this stand-in).
+        # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports
+        # running. The report is a oneshot of multi-user.target, so its own is-system-running reads "starting";
+        # the settled state comes from the test's probe that runs after the target's last job (the report's
+        # systemd-run --on-active=5s, outside the boot transaction)
+        self.assertEqual(exporter_state(said)["settled"], "running",
+                         "the unconfigured host did not settle to running (a failed unit would hold it degraded): %r"
+                         % exporter_state(said))
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
         # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v2-unconfigured moved the
@@ -1831,17 +1847,23 @@ class OnQemuVerity(OnQemu):
         materials = self.exporter_materials_ready()
         self.var_write(self.EXPORTER_VAR, materials["node-exporter.default"])
         # the web configuration and server material (the v2c exporter's --web.config.file and its TLS
-        # certificates) must be on /var: the enrolment disk is only attached on v1, and e2e-enrol writes
-        # them to /var only if they are on the disk. The v1 disk carries the plain ARGS (configured=False),
-        # so the web material was never written. Without it the exporter crashes on v2c (web.yml missing)
-        self.var_write("regalia/node-exporter/web.yml", materials["node-exporter.web.yml"])
-        self.var_write("regalia/node-exporter/server.pem", materials["node-exporter.server.pem"])
-        self.var_write("regalia/node-exporter/server.key", materials["node-exporter.server.key"])
+        # certificates) must be on /var, under the image's /var name (/var/lib/regalia-etc/regalia/
+        # node-exporter/, linked by /etc/regalia): the enrolment disk is only attached on v1, and
+        # e2e-enrol writes them to /var only if they are on the disk. The v1 disk carries the plain
+        # ARGS (configured=False), so the web material was never written. Without it the exporter
+        # crashes on v2c (web.yml missing). The web.yml's /etc/regalia/node-exporter/ paths resolve
+        # through the image's /etc/regalia link to these /var paths
+        for name in ("web.yml", "server.pem"):
+            self.var_write("lib/regalia-etc/regalia/node-exporter/" + name,
+                           materials["node-exporter." + name])
+        # the server key, 0640 root:prometheus (the image's gid), as e2e-enrol and MONITORING.md
+        self.var_write("lib/regalia-etc/regalia/node-exporter/server.key",
+                       materials["node-exporter.server.key"], mode=0o640, group="prometheus")
         # the probe inputs (the monitoring CA and the client certificates) must also be on /var: the
         # probes read from /var/lib/regalia-etc/regalia/node-exporter/ on v2c, where the disk is gone
         for name in ("monitoring-ca.pem", "node-exporter.client.crt", "node-exporter.client.key",
                      "node-exporter.client-wrong.crt", "node-exporter.client-wrong.key"):
-            self.var_write("regalia/node-exporter/" + name, materials[name])
+            self.var_write("lib/regalia-etc/regalia/node-exporter/" + name, materials[name])
         since = len(self.events)
         said = self.boot("v2c-control", credentials, nvram="host")
         unattended(self, said)
