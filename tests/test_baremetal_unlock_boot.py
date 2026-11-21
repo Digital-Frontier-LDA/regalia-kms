@@ -1526,17 +1526,26 @@ class OnQemuVerity(OnQemu):
             return builder.sign(signer, hashes.SHA256()).public_bytes(serialization.Encoding.PEM)
         def key(key_):
             return key_.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-        host_ip = ipaddress.IPv4Address(UNDERLAY["a"])
+        # the exporter listens on loopback (the guest's eth0 has no IP assigned: the test's network
+        # setup gives the peers their underlay IPs, not the guest). The server certificate's SAN is
+        # loopback too, so the mTLS probes (which run from inside the guest) verify it
+        host_ip = ipaddress.IPv4Address("127.0.0.1")
         monitoring_ca_key, server_key, client_key, foreign_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(4))
         monitoring_ca = certificate("e2e monitoring CA", monitoring_ca_key, "e2e monitoring CA", monitoring_ca_key, True)
-        server = certificate(UNDERLAY["a"], server_key, "e2e monitoring CA", monitoring_ca_key, False, san=host_ip)
+        server = certificate("localhost", server_key, "e2e monitoring CA", monitoring_ca_key, False, san=host_ip)
         trusted_client = certificate("e2e scraper", client_key, "e2e monitoring CA", monitoring_ca_key, False)
         # the wrong-CA case: a CA of its own, whose certificate the production web.yml's client_ca_file does not hold
         foreign_ca_key = ec.generate_private_key(ec.SECP256R1())
         foreign_ca = certificate("e2e foreign CA", foreign_ca_key, "e2e foreign CA", foreign_ca_key, True)
         wrong_client = certificate("e2e foreign scraper", foreign_key, "e2e foreign CA", foreign_ca_key, False)
         cfg = self.site("a")   # node_exporter_args reads only host_ipv4, and this host's is the guest's own
-        args = b"ARGS=\"" + metrics.node_exporter_args(cfg).encode() + b"\"\n"
+        # the guest's eth0 has no IP assigned (the test's network setup gives the peers their underlay
+        # IPs, not the guest), so the exporter listens on loopback. The rest of the args (the web
+        # configuration, the writers' directories) come from the production rendering
+        base_args = metrics.node_exporter_args(cfg)
+        args = b"ARGS=\"" + base_args.replace(
+            ("--web.listen-address=%s:9100" % cfg["host_ipv4"]).encode(),
+            b"--web.listen-address=127.0.0.1:9100") + b"\"\n"
         with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
             web_yml = f.read()
         # the file names on the enrolment disk are what e2e-enrol and e2e-report expect (node-exporter.* for the
@@ -1652,9 +1661,9 @@ class OnQemuVerity(OnQemu):
         self.assertEqual(state["state"], "active/running/yes", "the exporter did not start on its own configuration: %r" % state)
         self.assertEqual(state["restarts"], "0", state)
         self.assertNotRegex(state["journal"], r"Failed to load environment|Failed with result|limit", state)
-        # the bind address is kept: the host's underlay IP (192.0.2.10 in the test) on 9100 only, not the wildcard
-        # (a package-default regression would show *:9100 or 0.0.0.0:9100, and no TLS)
-        listen_address = "%s:9100" % UNDERLAY["a"]
+        # the bind address is kept: loopback (127.0.0.1) on 9100 only, not the wildcard (the guest's eth0
+        # has no IP assigned; a package-default regression would show *:9100 or 0.0.0.0:9100, and no TLS)
+        listen_address = "127.0.0.1:9100"
         self.assertEqual(state["listen"], listen_address,
                          "the exporter does not listen on exactly %s (the package default, every address, "
                          "would show more): %r" % (listen_address, state))
@@ -1680,7 +1689,7 @@ class OnQemuVerity(OnQemu):
         self.assertIn("plaintext", probes, "no plaintext probe")
         self.assertTrue(probes["plaintext"].startswith("refused"),
                         "plaintext was accepted (the server is not TLS-only): %r" % probes)
-        print("boot proof: the configured exporter on %s:9100, mTLS only: %r" % (UNDERLAY["a"], probes), file=sys.stderr)
+        print("boot proof: the configured exporter on 127.0.0.1:9100, mTLS only: %r" % probes, file=sys.stderr)
 
     def write_slot_b(self, slot):
         """The updater's step, by hand: `slot`'s image into usr-b and usr-b-verity (partitions 4 and 5), their PARTUUIDs
