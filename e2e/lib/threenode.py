@@ -240,6 +240,30 @@ def in_netns(ns, fn):
     return out["value"]
 
 
+def owner_tcp_probe(ns, source, boot):
+    """Observe a TCP connect result for the configured owner inside the node's live boot tunnel."""
+    endpoint = next(peer["endpoint"] for peer in boot["peers"] if peer["node_id"] == unlock.OWNER)
+    host, _, port = endpoint.rpartition(":")
+    socket.inet_pton(socket.AF_INET, host)  # boot-mesh endpoint is numeric IPv4. No resolver wait.
+
+    def connect():
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(3)
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"wg-boot\0")
+            probe.bind((source, 0))
+            try:
+                probe.connect((host, int(port)))
+            except OSError as failure:
+                return failure.errno
+            return 0
+
+    try:
+        return in_netns(ns, connect)
+    except OSError:
+        return None  # Namespace, interface and source setup failures are not connect results.
+
+
+
 def sh(*argv, check=True, **kw):
     done = subprocess.run(list(argv), capture_output=True, text=True, **kw)
     if check and done.returncode != 0:
@@ -2006,7 +2030,7 @@ class Cluster:
             if listener is not None:
                 listener.close()
 
-    def unlock(self, name, timeout=180, rounds=5):
+    def unlock(self, name, timeout=180, rounds=5, *, probe_owner_off=False):
         """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
         configuration, from the chain it holds), then the pre-root client (cmd/regalia-unlock, the real binary)
         with this fixture in systemd's two roles: the local half unsealed from the node's TPM and given as a
@@ -2015,7 +2039,8 @@ class Cluster:
         The volume is opened with the answer (cryptsetup open -v), and the client, seeing it open, stands down.
         `rounds` is the client's -attempts. Returns {rc, peer, marker, stderr}: `peer` the one whose keyslot
         opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking. rc 0 with
-        no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody."""
+        no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody.
+        `probe_owner_off` adds the TCP result from this same negative boot before deleting its tunnel."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
         self._initrd_only(name, "unlock")
         with self.tpm_of(name):
@@ -2027,7 +2052,8 @@ class Cluster:
         n.in_ns("ip", "address", "add", "%s/%d" % (n.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
         n.in_ns("ip", "link", "set", "wg-boot", "up")
         config = n.dir / "unlock.json"
-        config.write_text(json.dumps(unlock.boot_config(manifest, name, loop, self.attested([7, 11]), bootnet.unlock_endpoints(site, manifest))))
+        boot = unlock.boot_config(manifest, name, loop, self.attested([7, 11]), bootnet.unlock_endpoints(site, manifest))
+        config.write_text(json.dumps(boot))
         creds = n.dir / "creds"
         shutil.rmtree(creds, True)
         creds.mkdir(mode=0o700)
@@ -2080,6 +2106,8 @@ class Cluster:
             result["key_delivered"] = bool(final_key)
             if final_key and not key:
                 open_reply(final_key)
+            if probe_owner_off:
+                result["owner_tcp_errno"] = owner_tcp_probe(n.ns, n.boot_address, boot)
         finally:
             if client is not None and client.poll() is None:
                 client.kill()
