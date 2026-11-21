@@ -154,8 +154,8 @@ ctx.verify_mode = ssl.CERT_REQUIRED
 # be opened as a file named "-", which is a fixture error, not a missing certificate
 if cert and cert != "-":
     ctx.load_cert_chain(cert, key)
-sock = socket.create_connection((host, int(port)), timeout=5)
 try:
+    sock = socket.create_connection((host, int(port)), timeout=5)
     tls = ctx.wrap_socket(sock, server_hostname=host)
     request = ("GET /metrics HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n").encode()
     tls.sendall(request)
@@ -165,11 +165,16 @@ try:
         if not chunk:
             break
         data += chunk
+except (ssl.SSLError, OSError) as e:
+    # a refusal, not a probe crash: the server's RequireAndVerifyClientCert (no, or a foreign, client
+    # certificate) ends the handshake with a TLS alert, and an unreachable listener with a connection
+    # error. Either way the probe says "refused" with the cause, and the assertions read it by name
+    print("refused %s: %s" % (type(e).__name__, e)); sys.exit(0)
 finally:
     sock.close()
 head, _, body = data.partition(b"\r\n\r\n")
 code = head.split(b" ", 2)[1].decode()
-print("ok %d %d" % (int(code), body.count(b"\nnode_")))
+sys.stdout.write("ok %d %d\n" % (int(code), body.count(b"\nnode_")))
 PYEOF
     )
   if printf '%s' "$probeout" | grep -q '^refused'; then
@@ -201,11 +206,11 @@ if data.startswith(b"HTTP"):
     # request: its body is metrics). "ok" is the metrics body only — a plaintext-serving regression shows
     # "ok", and the TLS-only server, however it encodes its refusal, does not
     if b"node_" in data:
-        print("ok %d" % int(data.split(b" ", 2)[1]))
+        sys.stdout.write("ok %d\n" % int(data.split(b" ", 2)[1]))
     else:
-        print("refused tls-error-page")
+        sys.stdout.write("refused tls-error-page\n")
 else:
-    print("refused non-tls")
+    sys.stdout.write("refused non-tls\n")
 PYEOF
   )
   if printf '%s' "$plainout" | grep -q '^refused'; then
