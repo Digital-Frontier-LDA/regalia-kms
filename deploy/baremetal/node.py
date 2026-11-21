@@ -820,9 +820,11 @@ class Node:
         """dx7.3: this node's verifier of its OWN quotes, under the single-node profile only (lease.issue_self): the policy
         names this node (measurements.self_attest_policy, from the document the manifest commits to), and its AK is
         enrolled by the same credential activation a peer runs (enrolpeer.challenge, then this TPM's activation), so only
-        the manifest's AK in the manifest's EK's TPM is taken. Its state is its own file, apart from a peer's verifier."""
+        the manifest's AK in the manifest's EK's TPM is taken. Its state is its own file, apart from a peer's verifier, in
+        admission's own directory (held): admission makes it, and as regalia-admission under ProtectSystem=strict it cannot
+        write sync's state directory (the one-node scenario's first run, dx7.10: EACCES on its lock there)."""
         document = measurements.held(self.documents(), manifest)
-        attester = attest.Verifier(measurements.self_attest_policy(manifest, document, self.node_id), self.path("attest-self.json"),
+        attester = attest.Verifier(measurements.self_attest_policy(manifest, document, self.node_id), self.held("attest-self.json"),
                                    run=self.run)
         credential = enrolpeer.challenge(attester, manifest, self.node_id, *enrolpeer.tpm_identity(self.tcti, self.run)())
         if credential is not None:
