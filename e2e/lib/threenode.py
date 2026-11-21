@@ -387,6 +387,13 @@ def stop_tpm_process(pid, orderly_ok, report, kill=os.kill, gone=None, wait=None
     return evidence
 
 
+def blind_mount_script(paths):
+    """Do not launch the root client unless every other machine is hidden."""
+    mounts = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s\n" % shlex.quote(str(path)) for path in paths)
+    return 'set -e\n' + mounts + 'exec "$@"'
+
+
+
 def until(what, seconds, interval=1.0):
     """`what()` until it is true or the time is up; its last value (or the exception it raised)."""
     deadline, last = time.monotonic() + seconds, None
@@ -1905,21 +1912,29 @@ class Cluster:
             self.abrmd_answers(name)
 
     @contextlib.contextmanager
+    def owner_tunnel(self, name):
+        """Keep the owner's boot tunnel up independently of its unlock responder."""
+        o = self.owner
+        site = sitecfg.load(str(self.nodes[name].dir / "etc" / "site.json"))
+        o.in_ns("ip", "link", "add", "wg-boot", "type", "wireguard")
+        try:
+            o.in_ns("wg", "setconf", "wg-boot", "/dev/stdin",
+                    input=bootnet.with_key(bootnet.owner_wg_conf(site, self.manifest), self.owner_wg[0]))
+            o.in_ns("ip", "address", "add", "%s/%d" % (o.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
+            o.in_ns("ip", "link", "set", "wg-boot", "up")
+            yield
+        finally:
+            o.in_ns("ip", "link", "del", "wg-boot", check=False)
+
+    @contextlib.contextmanager
     def owner_answering(self, name, which=0, serve_for=600):
-        """The owner's machine answering `name`'s boot (owner.py unlock): its WG-BOOT up in its namespace (bootnet.owner_wg_conf,
-        from the node's site and the chain this machine holds, with the owner's own key), and owner.serve_unlock on its tunnel
-        address at the unlock port, signing with owner key `which` on the SoftHSM token, until the block ends. Yields the list
-        of what it says (LISTENING, the audit lines, SENT); a refusal of serve_unlock's own is said as "REFUSED: ..."."""
+        """Run the responder on the already configured owner boot tunnel."""
         from deploy.baremetal import owner
         o = self.owner
         site = sitecfg.load(str(self.nodes[name].dir / "etc" / "site.json"))
         tip, said, stopping = self.manifest, [], threading.Event()
-        o.in_ns("ip", "link", "add", "wg-boot", "type", "wireguard")
         listener = server = None
         try:
-            o.in_ns("wg", "setconf", "wg-boot", "/dev/stdin", input=bootnet.with_key(bootnet.owner_wg_conf(site, tip), self.owner_wg[0]))
-            o.in_ns("ip", "address", "add", "%s/%d" % (o.boot_address, site["boot_mesh"]["prefix"]), "dev", "wg-boot")
-            o.in_ns("ip", "link", "set", "wg-boot", "up")
             listener = in_netns(o.ns, lambda: socket.create_server((o.boot_address, site["boot_mesh"]["unlock_port"])))
 
             def answer():
@@ -1937,7 +1952,6 @@ class Cluster:
                 server.join(15)                       # serve_unlock looks at stop() at least once a second
             if listener is not None:
                 listener.close()
-            o.in_ns("ip", "link", "del", "wg-boot", check=False)
 
     def unlock(self, name, timeout=180, rounds=5):
         """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
@@ -1982,9 +1996,8 @@ class Cluster:
         volume = "/dev/mapper/" + mapped                                # there once opened: then the client stands down
         # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the units)
         hidden = [o for o in self.nodes.values() if o is not n] + ([self.owner] if self.single else [])     # and the owner's machine
-        blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in hidden)
-        script = blind + 'exec "$@"'
-        result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
+        script = blind_mount_script(o.dir for o in hidden)
+        result = {"rc": None, "peer": None, "marker": False, "stderr": "", "key_delivered": False}
         mnt, mounted = n.dir / "mnt", False
         client = None
         try:
@@ -2002,6 +2015,7 @@ class Cluster:
                     continue
                 if datagram.startswith(b"+"):
                     key = datagram[1:]
+            result["key_delivered"] = bool(key)
             if key:
                 opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)

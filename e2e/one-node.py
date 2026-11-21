@@ -294,6 +294,15 @@ class Daemon:
             return ""
 
 
+def owner_connection_refused(result):
+    """The real client made its owner attempt, received no key, and exhausted one round."""
+    lines = result["stderr"].splitlines()
+    expected = "regalia-unlock: attempt 1: %s (path epoch 1): hello: the transport failed (no connection);" % unlock.OWNER
+    return (result["rc"] == 1 and result["peer"] is None and not result["marker"] and result["key_delivered"] is False
+            and any(line.startswith(expected) for line in lines)
+            and bool(lines) and lines[-1] == "regalia-unlock: no peer helped in 1 attempts")
+
+
 def non_serving_admission(path, manifest, previous):
     """Read an explicit zero admission from the expected boot, session and manifest."""
     with path.open("rb") as source:
@@ -394,17 +403,18 @@ def scenario(cluster, kms):
             found += [i for i, form in enumerate(forms) if form in window]
             tail = window[-keep:]
     ok(not found, "the owner's contribution is written nowhere on the node's volume (raw, hex or base64)", found)
-    alone = cluster.unlock("a", timeout=90, rounds=1)          # the owner's machine is not answering
-    ok(alone["rc"] not in (0, None) and alone["peer"] is None and not alone["marker"],
-       "with no owner answering, the disk stays locked although the TPM releases its half", alone)
-    cluster.stop("a")                                 # a new boot: the next initrd asks again, in a new TPM session
-    with cluster.owner_answering("a") as owner_said:
-        opened = cluster.unlock("a")
-        ok(opened["rc"] == 0 and opened["peer"] == unlock.OWNER and opened["marker"],
-           "with the owner's machine answering over the boot tunnel, the real pre-root client opens the volume through the "
-           "owner's keyslot and its filesystem reads back", opened)
-        sent = until(lambda: any(line.startswith("SENT: signed response") for line in owner_said), 15, 0.5)
-    ok(bool(sent), "the owner's machine says it SENT a signed response to a (owner.py unlock)", owner_said[-6:])
+    with cluster.owner_tunnel("a"):
+        alone = cluster.unlock("a", timeout=90, rounds=1)
+        ok(owner_connection_refused(alone),
+           "with the owner tunnel up and no responder, the owner connection fails and no key is delivered", alone)
+        cluster.stop("a")                             # fresh TPM session for the positive attempt
+        with cluster.owner_answering("a") as owner_said:
+            opened = cluster.unlock("a", timeout=90, rounds=1)
+            ok(opened["rc"] == 0 and opened["peer"] == unlock.OWNER and opened["marker"],
+               "with the owner's machine answering over the boot tunnel, the real pre-root client opens the volume through the "
+               "owner's keyslot and its filesystem reads back", opened)
+            sent = until(lambda: any(line.startswith("SENT: signed response") for line in owner_said), 15, 0.5)
+    ok(sent is True, "the owner's machine says it SENT a signed response to a (owner.py unlock)", owner_said[-6:])
 
     header("3  self-lease serving: mode single, a signature, a stateful spend")
     cluster.start("a", SERVICES)
