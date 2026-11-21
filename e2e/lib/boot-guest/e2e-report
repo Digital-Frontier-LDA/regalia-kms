@@ -118,9 +118,9 @@ echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget 
 # presents no valid certificate is caught here, not hidden. The negative cases fail on the CLIENT side's
 # certificate check (the server's RequireAndVerifyClientCert), not on server verification: the server cert is
 # verified in all three cases, and only the client cert differs
-# the probes run only when the exporter is ACTIVE (not just when its files are on /var: on the enrolment boot,
-# e2e-enrol writes the files after multi-user.target was reached, so the exporter is skipped and nothing is
-# listening — the probes would just fail with "connection refused" and waste the boot's time budget)
+# the probes run only when the exporter is ACTIVE (not just when its files are on /var: on a boot where the unit
+# skipped, nothing is listening — the probes would just fail with "connection refused" and waste the boot's time
+# budget)
 exporter_active="$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)"
 if [ "$exporter_active" = active ] && [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
   address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' /var/lib/regalia-etc/default/prometheus-node-exporter | head -1)"

@@ -1356,7 +1356,7 @@ class OnQemuVerity(OnQemu):
     # node_exporter's EnvironmentFile, a link to /var that enrolment writes (00-regalia-etc.conf). The test's is
     # the production rendering (metrics.node_exporter_args): its host's address in the guest, the web configuration
     # (mutual TLS, regalia-kms-r1s.17) and the writers' textfile directories
-    NODE_EXPORTER = None
+    NODE_EXPORTER = b"# the test's (MONITORING.md: metrics node-exporter-args renders a host's)\nARGS=\"--web.listen-address=127.0.0.1:9100\"\n"
     # the test's monitoring CA, server certificate and client fixtures, made per boot of the test (ephemeral, this
     # machine only): the production web.yml's RequireAndVerifyClientCert, as the test's scraper would meet it
     NODE_EXPORTER_TLS = None
@@ -1424,6 +1424,28 @@ class OnQemuVerity(OnQemu):
             run(["cryptsetup", "close", name], capture_output=True)
             run(["losetup", "-d", loop], capture_output=True)
 
+    def var_write(self, name, content):
+        """Writes `content` to `name` on the guest's /var (the LUKS2 volume, partition 6) while it is off, the
+        var_rename's write half (same key, same mount)."""
+        loop, part = self.partition(6)
+        mnt = self.d + "/var"
+        os.makedirs(mnt, exist_ok=True)
+        opened = run(["cryptsetup", "open", "--key-slot", "0", "--key-file", "-", part, "regalia-e2e-var"], input=tub.RECOVERY, capture_output=True)
+        try:
+            self.assertEqual(opened.returncode, 0, opened.stderr)
+            mounted = run(["mount", "/dev/mapper/regalia-e2e-var", mnt], capture_output=True)
+            self.assertEqual(mounted.returncode, 0, mounted.stderr)
+            try:
+                path = os.path.join(mnt, name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as f:
+                    f.write(content)
+            finally:
+                self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
+        finally:
+            run(["cryptsetup", "close", "regalia-e2e-var"], capture_output=True)
+            run(["losetup", "-d", loop], capture_output=True)
+
     def per_host_started(self, said):
         """The per-host units (regalia-kms-r1s.8), with this host's files on /var: enabled by the image under /usr, gated on
         them, started at this boot with nothing under /etc/systemd/system (proven(): etc-links=0). The firewall loaded
@@ -1470,15 +1492,19 @@ class OnQemuVerity(OnQemu):
         self.machine_id = None
         self.exporter_materials = None
 
-    def exporter_materials_ready(self):
-        """regalia-kms-r1s.17: the exporter's per-host inputs, made once for the test's boots. The ARGS is the
-        production rendering (metrics.node_exporter_args, this guest's site: the loopback address, the web
-        configuration, the writers' directories). The web.yml is the repository's own (mutual TLS 1.3,
-        RequireAndVerifyClientCert), and the server and client material is the test's: a monitoring CA, this
-        node's server certificate (the name its SAN carries, 127.0.0.1), a trusted client certificate, and a
-        client certificate of ANOTHER CA (the wrong-CA case). All of it ephemeral, this machine only: the
-        production image and its artifacts never carry it (the enrolment disk is the test's, and is the guest's
-        only channel)."""
+    def exporter_materials_ready(self, configured=True):
+        """regalia-kms-r1s.17: the exporter's per-host inputs on the enrolment disk. `configured`: the production
+        rendering (metrics.node_exporter_args, this guest's site: the host's underlay address, the web
+        configuration, the writers' directories) and the repository's own web.yml (mutual TLS 1.3,
+        RequireAndVerifyClientCert), the server and client material the test's: a monitoring CA, this node's server
+        certificate (the name its SAN carries, the host's underlay IP), a trusted client certificate, and a client
+        certificate of ANOTHER CA (the wrong-CA case). Without it (the enrolment boot, which must show the unit
+        SKIPPED, its journal the condition line) the disk carries only the package's own plain ARGS (main's fixture:
+        --web.listen-address=127.0.0.1:9100, no web configuration): the file is the package's, and the guard's job
+        is to keep it from starting. All of it ephemeral, this machine only: the production image and its artifacts
+        never carry it (the enrolment disk is the test's, and is the guest's only channel)."""
+        if not configured:
+            return {"node-exporter.default": self.NODE_EXPORTER}
         if self.exporter_materials is not None:
             return self.exporter_materials
         import datetime
@@ -1571,18 +1597,33 @@ class OnQemuVerity(OnQemu):
         self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
         for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
             self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
-        self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
-        self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
+        if exporter == "enrol":
+            # the enrolment boot: chrony is not active (its per-host configuration is not on this host's enrolment
+            # disk — the test's carries only the exporter's), so its process check is what main's boot 1 shows.
+            # Every other unit in this check still runs (the GA ruling names the exporter alone, and its state is
+            # the exporter_skipped lines, not an exclusion from the unit table)
+            self.assertEqual((units["chrony.service"]["active"], units["chrony.service"]["result"]), ("inactive", "success"),
+                             units["chrony.service"])
+        else:
+            self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
+            self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
         if exporter == "configured":
             self.assertEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
             self.assertGreater(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
         elif exporter == "skipped":
             self.exporter_skipped(said, units)
+        elif exporter == "enrol":
+            # the enrolment boot (AC1's own): the per-host EnvironmentFile is the package's own plain ARGS (main's
+            # fixture: no --web.config.file), and the guard keeps the unit SKIPPED with it: skipped by name (the
+            # exporter_skipped lines), not failed, and the journal is systemd's own condition line, UNFILTERED. A
+            # mutant that removes the guard starts the unit here, on the package default
+            self.exporter_skipped(said, units)
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.per_host_started(said)
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
-        # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
-        self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
+        if exporter != "enrol":
+            # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
+            self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
 
     def exporter_skipped(self, said, units=None):
         """regalia-kms-r1s.17, AC1: the enabled exporter, with its per-host EnvironmentFile absent (the L+ link to
@@ -1698,20 +1739,22 @@ class OnQemuVerity(OnQemu):
         # through bootnext; its test mode makes none). First an entry carrying LOAD OPTIONS: refused, and deleted again
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
-                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY,
-                                                **self.exporter_materials_ready(), **self.per_host_files()})
+                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(),
+                                                **self.exporter_materials_ready(configured=False), **self.per_host_files()})
         said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
-        # the image's units started on this boot, with the exporter EXCLUDED (GA ruling 2026-11-20: its per-host file
-        # is the only one of them that is not active on the enrolment boot — e2e-enrol writes it after multi-user.target
-        # was reached, so its ConditionPathExists was already evaluated (absent); it starts on the next boot,
-        # v2c-control, where it is CONFIGURED: its per-host ARGS and the production web.yml's mutual TLS, active on its
-        # configured listener only, and the metrics go out to the monitoring CA's client and to no other (the report's
-        # probe cases, by name). The enrolment disk stays attached for v2c's probes. Every OTHER unit is asserted here:
-        # factory, sysusers, apparmor, chrony, the KMS, per-host, AppArmor enforce, confined chronyd)
-        self.started(said)
+        # the image's units on this boot: factory, sysusers, apparmor, the KMS, per-host, AppArmor enforce all
+        # asserted here (the GA ruling 2026-11-20: only the exporter is not active on the enrolment boot, and it is
+        # asserted, not excluded — by the exporter_skipped lines, AC1's own: its per-host file is the package's own
+        # plain ARGS (no --web.config.file), and the guard keeps it SKIPPED with it, its journal the condition line.
+        # chrony is absent too: the test's enrolment disk carries no chrony.conf (main's boot 1 shows it inactive),
+        # so chronyd's process checks (active, started, confined) are main's boot 1's and are not on this boot.
+        # v2c-control carries the configured exporter: its per-host ARGS and the production web.yml's mutual TLS,
+        # active on its configured listener only, and the metrics go out to the monitoring CA's client and to no
+        # other (the report's probe cases, by name))
+        self.started(said, exporter="enrol")
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1768,6 +1811,7 @@ class OnQemuVerity(OnQemu):
         # its file is the ruleset's, not the exporter's)
         self.reference = reference(expected["pcr12"])
         self.var_rename([(self.EXPORTER_VAR, self.EXPORTER_VAR + ".aside")])
+        self.var_rename([(self.EXPORTER_VAR + ".enrol", self.EXPORTER_VAR)])
         since = len(self.events)
         said = self.boot("v2-unconfigured", credentials, nvram="host")
         unattended(self, said)
@@ -1775,12 +1819,14 @@ class OnQemuVerity(OnQemu):
         self.started(said, exporter="skipped")
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
-        # boot v2c, THE CONTROL (AC2): the per-host file back, unattended through a peer, from the installer's firmware
-        # entry; the proof, and the image's units started from their enablement under /usr. The exporter is now ACTIVE:
-        # its ConditionPathExists holds (the file e2e-enrol wrote on v1 is on /var), it listens on the host's underlay
-        # address on 9100 only, and serves metrics only to the client the monitoring CA authenticated (the report's
-        # probe cases, by name)
-        self.var_rename([(self.EXPORTER_VAR + ".aside", self.EXPORTER_VAR)])
+        # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v1's enrolment kept its package
+        # file aside as .enrol), unattended through a peer, from the installer's firmware entry; the proof, and the
+        # image's units started from their enablement under /usr. The exporter is now ACTIVE: its ConditionPathExists
+        # holds, it listens on the host's underlay address on 9100 only, and serves metrics only to the client the
+        # monitoring CA authenticated (the report's probe cases, by name). The disk has no chrony.conf (the test's
+        # guest's chronyd never starts: main's boot 1 shows it), so its units run as main's v2 showed them
+        self.var_rename([(self.EXPORTER_VAR + ".aside", self.EXPORTER_VAR + ".enrol")])
+        self.var_write(self.EXPORTER_VAR, self.exporter_materials_ready()["node-exporter.default"])
         since = len(self.events)
         said = self.boot("v2c-control", credentials, nvram="host")
         unattended(self, said)
