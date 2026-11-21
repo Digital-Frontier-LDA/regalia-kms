@@ -39,8 +39,10 @@ import http.client
 import json
 import os
 import pathlib
+import pwd
 import signal
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -58,6 +60,7 @@ SERVICES = ("sync", "wg-apply", "admission")
 OBJECT, SITE, DEVICE, PRINCIPAL = "e2e1-signing-key", "e2e1-site", "softhsm-e2e1", "spiffe://regalia/workload/e2e1"
 PORT, SINK = 18463, 18464                           # the daemon, and its own audit collector (the nodes' is COLLECTOR_PORT)
 SOFTHSM = threenode.SOFTHSM
+ADMISSION_USER = "regalia-admission"
 
 
 def ok(condition, text, detail=""):
@@ -173,7 +176,7 @@ class Daemon:
                 "audit_journal_path": str(self.state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % SINK,
                 # what this scenario is about: a's admission, written by a's regalia-admission, judged against a's chain
                 "runtime_admission": "required", "runtime_admission_path": str(n.run / "admission" / "admission.json"),
-                "runtime_admission_owner": "regalia-admission", "node_id": name, "boot_session_path": str(n.run / "boot-session"),
+                "runtime_admission_owner": ADMISSION_USER, "node_id": name, "boot_session_path": str(n.run / "boot-session"),
                 "membership_chain_path": str(n.state / node.PUBLISHED), "membership_chain_owner": "regalia-sync",
                 "membership_root_key_path": str(etc / "root-key.json")},
         }
@@ -303,10 +306,42 @@ def owner_connection_refused(result):
             and bool(lines) and lines[-1] == "regalia-unlock: no peer helped in 1 attempts")
 
 
+def read_trusted_admission(path, owner_uid):
+    """Mirror readTrustedStat and ancestorsTrusted in the daemon's admission reader."""
+    path = pathlib.Path(os.path.abspath(path))
+    trusted = {0, owner_uid}
+    directory = path.parent
+    entry = directory.lstat()
+    membership.require(stat.S_ISDIR(entry.st_mode) and entry.st_uid in trusted and not entry.st_mode & 0o022,
+                       "admission directory must be writable only by its owner or root")
+    child_uid = entry.st_uid
+    for ancestor in directory.parents:
+        entry = ancestor.lstat()
+        membership.require(stat.S_ISDIR(entry.st_mode) and entry.st_uid in trusted,
+                           "admission ancestor is not a directory of its owner or root")
+        membership.require(not entry.st_mode & 0o022 or
+                           (entry.st_mode & stat.S_ISVTX and child_uid in trusted),
+                           "admission ancestor lets someone else replace what is below it")
+        child_uid = entry.st_uid
+
+    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        entry = os.fstat(descriptor)
+        membership.require(stat.S_ISREG(entry.st_mode), "admission is not a regular file")
+        membership.require(entry.st_uid in trusted and not entry.st_mode & 0o022,
+                           "admission file must be writable only by its owner or root")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            contents = source.read(4097)
+        membership.require(len(contents) <= 4096, "admission file is oversized")
+        return contents
+    finally:
+        os.close(descriptor)
+
+
 def non_serving_admission(path, manifest, previous):
     """Read an explicit zero admission from the expected boot, session and manifest."""
-    with path.open("rb") as source:
-        doc = membership.load(source.read(4097), 4096)
+    owner_uid = pwd.getpwnam(ADMISSION_USER).pw_uid
+    doc = membership.load(read_trusted_admission(path, owner_uid), 4096)
     expected = dict(schema=admission.SCHEMA, node_id="a", session_id=previous["session_id"], boot_id=previous["boot_id"],
                     epoch=manifest["epoch"], manifest_digest=membership.digest(manifest),
                     hsm_serials=" ".join(membership.validate(manifest)["a"]["hsm_serials"]),

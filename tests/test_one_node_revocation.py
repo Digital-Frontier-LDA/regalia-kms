@@ -8,6 +8,9 @@ import ast
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -127,7 +130,16 @@ class Shutdown(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.path = Path(directory.name) / "admission.json"
+        self.directory = Path(directory.name)
+        self.parent = self.directory / "run" / "admission"
+        self.parent.mkdir(parents=True)
+        self.path = self.parent / "admission.json"
+        self.owner_uid = os.getuid()
+        identity = Mock(side_effect=lambda name: SimpleNamespace(pw_uid=self.owner_uid))
+        identity_patch = patch.object(one_node, "pwd", SimpleNamespace(getpwnam=identity), create=True)
+        identity_patch.start()
+        self.addCleanup(identity_patch.stop)
+        self.identity = identity
         self.journal = self.path.with_name("audit.jsonl")
         first = single5(1, "")
         self.tip = single5(2, membership.digest(first))
@@ -163,6 +175,85 @@ class Shutdown(unittest.TestCase):
 
     def observe(self, read=None):
         return one_node.observe_shutdown(self.kms, read or self.read, 0, 3)
+
+    def test_valid_admission_uses_configured_owner(self):
+        self.path.write_text(json.dumps(self.document))
+        self.assertEqual(self.read(), self.document)
+        self.identity.assert_called_once_with("regalia-admission")
+
+    def test_symlinks_at_file_parent_or_higher_ancestor_are_refused(self):
+        self.path.write_text(json.dumps(self.document))
+        target = self.parent / "real.json"
+        self.path.rename(target)
+        self.path.symlink_to(target)
+        with self.assertRaisesRegex((OSError, membership.Refused), ".*"):
+            self.read()
+        self.path.unlink()
+        target.rename(self.path)
+        for real in (self.parent, self.parent.parent):
+            with self.subTest(real=real):
+                moved = real.with_name(real.name + "-real")
+                real.rename(moved)
+                real.symlink_to(moved, target_is_directory=True)
+                try:
+                    with self.assertRaisesRegex(membership.Refused, "directory"):
+                        self.read()
+                finally:
+                    real.unlink()
+                    moved.rename(real)
+
+    def test_writable_file_and_immediate_parent_are_refused(self):
+        self.path.write_text(json.dumps(self.document))
+        for path in (self.path, self.parent):
+            with self.subTest(path=path):
+                mode = path.stat().st_mode & 0o777
+                path.chmod(mode | 0o020)
+                try:
+                    with self.assertRaisesRegex(membership.Refused, "owner or root"):
+                        self.read()
+                finally:
+                    path.chmod(mode)
+
+    @unittest.skipIf(os.getuid() == 0, "requires a nonroot-owned fixture")
+    def test_untrusted_owner_is_refused(self):
+        self.path.write_text(json.dumps(self.document))
+        self.owner_uid += 1
+        with self.assertRaisesRegex(membership.Refused, "owner or root"):
+            self.read()
+
+    def test_sticky_ancestor_is_allowed_but_writable_nonsticky_ancestor_is_refused(self):
+        self.path.write_text(json.dumps(self.document))
+        self.parent.parent.chmod(0o1777)
+        self.assertEqual(self.read(), self.document)
+        self.parent.parent.chmod(0o777)
+        with self.assertRaisesRegex(membership.Refused, "replace"):
+            self.read()
+
+    def test_oversized_file_is_refused(self):
+        self.path.write_bytes(json.dumps(self.document).encode().ljust(4097, b" "))
+        with self.assertRaises(membership.Refused):
+            self.read()
+
+    def test_fifo_returns_a_regular_file_refusal_without_waiting_for_a_writer(self):
+        os.mkfifo(self.path)
+        script = """
+import sys
+import unittest
+from pathlib import Path
+from tests.test_one_node_revocation import Shutdown
+case = Shutdown()
+case.setUp()
+case.path = Path(sys.argv[1])
+with unittest.TestCase().assertRaisesRegex(Exception, "not a regular file"):
+    case.read()
+print("FIFO rejected as nonregular")
+"""
+        try:
+            result = subprocess.run([sys.executable, "-c", script, str(self.path)], capture_output=True,
+                                    text=True, timeout=6)
+        except subprocess.TimeoutExpired:
+            self.fail("FIFO blocked instead of returning a nonregular-file refusal")
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "FIFO rejected as nonregular"), result.stderr)
 
     def test_correlated_gate_denial_and_current_zero_admission_pass(self):
         self.path.write_text(json.dumps(self.document))
