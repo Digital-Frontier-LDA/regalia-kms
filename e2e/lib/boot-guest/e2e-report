@@ -98,7 +98,10 @@ listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$
 [ -z "$listen" ] && listen=none
 etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
 etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
-systemctl is-system-running --wait >/dev/null 2>&1
+# the settled state: the report runs after multi-user.target, so the units it reports on have already been
+# evaluated. is-system-running (without --wait) returns the current state immediately: "running" on a healthy
+# boot, "degraded" if any unit is failed. A --wait here would block on a unit that never settles (a timer, a
+# retrying service), and the 600 s boot timeout would kill the guest before the report finished
 sysrun="$(systemctl is-system-running 2>/dev/null || echo unknown)"
 echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget is-system-running=$sysrun" > /dev/console
 # THE MUTUAL-TLS PROBE (regalia-kms-r1s.17, the boot where the test's web.yml and server material are staged):
@@ -109,7 +112,11 @@ echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget 
 # presents no valid certificate is caught here, not hidden. The negative cases fail on the CLIENT side's
 # certificate check (the server's RequireAndVerifyClientCert), not on server verification: the server cert is
 # verified in all three cases, and only the client cert differs
-if [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
+# the probes run only when the exporter is ACTIVE (not just when its files are on /var: on the enrolment boot,
+# e2e-enrol writes the files after multi-user.target was reached, so the exporter is skipped and nothing is
+# listening — the probes would just fail with "connection refused" and waste the boot's time budget)
+exporter_active="$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)"
+if [ "$exporter_active" = active ] && [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
   address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' /var/lib/regalia-etc/default/prometheus-node-exporter | head -1)"
   cafile=/mnt/enrol/monitoring-ca.pem
   probe() {  # probe <name> <client-cert-file|-> <client-key-file|->: one bounded TLS GET. The guest has no
