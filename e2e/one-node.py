@@ -356,7 +356,7 @@ def non_serving_admission(path, manifest, previous):
 
 
 def observe_shutdown(kms, read_admission, started, lifetime):
-    """Capture responses and the zero admission before one deadline. Correlate the journal separately."""
+    """Observe zero admission first, then a sign refusal, under one deadline."""
     deadline = started + lifetime
     candidates = {}
     stopped = denied = None
@@ -376,7 +376,7 @@ def observe_shutdown(kms, read_admission, started, lifetime):
                     stopped = observed - started
             except (OSError, ValueError, membership.Refused):
                 pass
-        if denied is None and (remaining := deadline - time.monotonic()) > 0:
+        if stopped is not None and denied is None and (remaining := deadline - time.monotonic()) > 0:
             request_id = str(uuid.uuid4())
             try:
                 status, response, _ = kms.sign(b"after the shutdown", request_id=request_id, timeout=min(remaining, 2))
@@ -566,7 +566,7 @@ def scenario(cluster, kms):
        "with \"%s\" typed, the owner's revocation is committed on a (epoch 2), the phrase in a's sync trail" % phrase, commits[-1:])
     took, stop_took = observe_shutdown(
         kms, lambda: non_serving_admission(admission_path, cluster.manifest, previous), started, lease.MAX_LIFETIME)
-    ok(took is not None, "the daemon refuses signing with a correlated deny/not-admitted audit within one lease", kms.log())
+    ok(took is not None, "after a publishes zero admission, the daemon refuses signing with correlated audit within one lease", kms.log())
     ok(stop_took is not None, "a publishes an epoch-2 non-serving admission within one lease",
        cluster.journal("a", "admission")[-600:])
     if took is not None and stop_took is not None:

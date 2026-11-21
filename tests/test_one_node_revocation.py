@@ -255,6 +255,29 @@ print("FIFO rejected as nonregular")
             self.fail("FIFO blocked instead of returning a nonregular-file refusal")
         self.assertEqual((result.returncode, result.stdout.strip()), (0, "FIFO rejected as nonregular"), result.stderr)
 
+    def test_early_audited_503_cannot_combine_with_later_zero_and_200(self):
+        self.path.write_text(json.dumps(self.document))
+
+        def later_zero():
+            return self.read() if self.now >= 1 else None
+
+        def sign_at_time(*args, **kwargs):
+            if self.now < 1:
+                return self.sign(*args, **kwargs)
+            return 200, {}, None
+
+        self.kms.sign.side_effect = sign_at_time
+        self.assertEqual(self.observe(later_zero), (None, 1))
+        self.kms.sign.assert_called()
+
+    def test_delayed_post_zero_audit_retains_the_response_observation_time(self):
+        self.path.write_text(json.dumps(self.document))
+        audit = self.kms.denied_not_admitted
+        self.kms.denied_not_admitted = lambda request_id: self.now >= 5 and audit(request_id)
+        self.assertEqual(self.observe(lambda: self.read() if self.now >= 1 else None), (1, 1))
+        self.assertEqual(self.now, 5)
+        self.assertEqual(self.kms.sign.call_count, 2)
+
     def test_correlated_gate_denial_and_current_zero_admission_pass(self):
         self.path.write_text(json.dumps(self.document))
         self.assertEqual(self.observe(), (0, 0))
@@ -274,7 +297,7 @@ print("FIFO rejected as nonregular")
                 self.now = 0
                 if raw is not None:
                     self.path.write_text(raw)
-                self.assertEqual(self.observe(), (0, None))
+                self.assertEqual(self.observe(), (None, None))
 
     def test_exceptions_are_not_observations(self):
         self.kms.sign.side_effect = OSError("broken socket")
