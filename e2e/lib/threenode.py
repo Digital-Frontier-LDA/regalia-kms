@@ -2128,8 +2128,11 @@ class Cluster:
         owner_beat's, and says so). Returns {node: whether it does}."""
         epoch = self.manifest["epoch"] if epoch is None else epoch
         names = [n for n in self.nodes if self.running(n)] if names is None else list(names)
-        return {name: bool(until(lambda name=name: self.holds_heartbeat(name, epoch) and membership.OWNER not in self.heartbeat_signers(name),
-                                 timeout, 2)) for name in names}
+        return {
+            name: until(lambda name=name: self.holds_heartbeat(name, epoch)
+                        and membership.OWNER not in self.heartbeat_signers(name), timeout, 2) is True
+            for name in names
+        }
 
     def beat_events(self, names, last=4):
         """{node: its last `last` heartbeat-signing events (beat-propose, the beat-sign answers it gave), from its sync trail}:
