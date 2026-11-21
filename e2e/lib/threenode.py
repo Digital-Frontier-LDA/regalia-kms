@@ -2126,13 +2126,24 @@ class Cluster:
         """#199: wait until each node in `names` (default: every running node) holds a heartbeat for `epoch` (default: the
         current manifest's) that the NODES signed: no owner among its signers (an owner's hand-recovery heartbeat is
         owner_beat's, and says so). Returns {node: whether it does}."""
+        from deploy.baremetal import heartbeat
         epoch = self.manifest["epoch"] if epoch is None else epoch
+        manifest = self.manifest if self.manifest["epoch"] == epoch else next(
+            (entry["manifest"] for entry in reversed(self.chain) if entry["manifest"]["epoch"] == epoch), None)
         names = [n for n in self.nodes if self.running(n)] if names is None else list(names)
-        return {
-            name: until(lambda name=name: self.holds_heartbeat(name, epoch)
-                        and membership.OWNER not in self.heartbeat_signers(name), timeout, 2) is True
-            for name in names
-        }
+
+        def verified(name):
+            if manifest is None or manifest["schema"] not in membership.QUORUM_SCHEMAS:
+                return False
+            with self.tpm_of(name):
+                held = self.node(name).freshness().held()
+            if held is None:
+                return False
+            heartbeat.verify(held, manifest)
+            # verify checked every signature and the manifest's threshold on this same envelope.
+            return all(sig["party"] != membership.OWNER for sig in held["signatures"])
+
+        return {name: until(lambda name=name: verified(name), timeout, 2) is True for name in names}
 
     def beat_events(self, names, last=4):
         """{node: its last `last` heartbeat-signing events (beat-propose, the beat-sign answers it gave), from its sync trail}:

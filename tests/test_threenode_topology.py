@@ -10,6 +10,7 @@ behind it, so the topology's guards are held here and not only by a scenario tha
     peer, no service mesh; the three-node one is what it was;
   * a single-node host has no peer path: enrol() takes the owner's, and refuses a peer;
   * the genesis console (Cluster.acknowledge) types the phrase the shipped prompt names, and the tool accepts it."""
+import contextlib
 import os
 import pathlib
 import shutil
@@ -22,8 +23,9 @@ import unittest.mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "e2e", "lib"))
 import threenode  # noqa: E402
 from deploy.baremetal import manifest as manifest_tool  # noqa: E402
-from deploy.baremetal import membership, sitecfg  # noqa: E402
-from tests.test_baremetal_membership_v4 import manifest4  # noqa: E402
+from deploy.baremetal import heartbeat, membership, sitecfg  # noqa: E402
+from tests.test_baremetal_membership_v4 import A, B, O1, manifest4, p256_sig, pub
+from tests.test_baremetal_heartbeat import T0, stamp  # noqa: E402
 from tests.test_baremetal_membership_v5 import one, single5  # noqa: E402
 
 
@@ -96,50 +98,63 @@ class Fresh(Fixture):
     def setUp(self):
         self.subject = self.cluster(topology=membership.SINGLE_NODE)
         self.subject.manifest = single5(1, "")
+        self.held = unittest.mock.Mock()
+        self.subject.tpm_of = lambda _: contextlib.nullcontext()
+        self.subject.node = lambda _: SimpleNamespace(freshness=lambda: SimpleNamespace(held=self.held))
         self.now = 0
-        clock = SimpleNamespace(monotonic=lambda: self.now, sleep=self.advance_clock)
-        patch = unittest.mock.patch.object(threenode, "time", clock)
+        patch = unittest.mock.patch.object(threenode, "time",
+                                           SimpleNamespace(monotonic=lambda: self.now, sleep=self.advance_clock))
         patch.start()
         self.addCleanup(patch.stop)
 
     def advance_clock(self, seconds):
         self.now += seconds
 
-    def test_repeated_heartbeat_read_errors_are_not_fresh(self):
-        with unittest.mock.patch.object(self.subject, "holds_heartbeat", side_effect=OSError("heartbeat unavailable")) as read, \
-                unittest.mock.patch.object(self.subject, "heartbeat_signers") as signers:
-            result = self.subject.fresh(["a"], epoch=1, timeout=6)
-        self.assertEqual(read.call_args_list, [unittest.mock.call("a", 1)] * 3)
-        signers.assert_not_called()
-        self.assertEqual(result, {"a": False}, "heartbeat read errors cannot prove freshness")
+    def envelope(self, *signers, **overrides):
+        manifest = self.subject.manifest
+        body = dict(schema=heartbeat.SCHEMA, epoch=manifest["epoch"], sequence=1,
+                    issued_at=stamp(T0), expires_at=stamp(T0 + 60), manifest_digest=membership.digest(manifest))
+        body.update(overrides)
+        message = heartbeat.DOMAIN + membership.canonical(body)
+        return dict(heartbeat=body, signatures=[dict(party=party, key=pub(key), sig=p256_sig(key, message))
+                                                for party, key in signers])
 
-    def test_repeated_signer_read_errors_are_not_fresh(self):
-        with unittest.mock.patch.object(self.subject, "holds_heartbeat", return_value=True), \
-                unittest.mock.patch.object(self.subject, "heartbeat_signers", side_effect=OSError("signers unavailable")) as signers:
-            result = self.subject.fresh(["a"], epoch=1, timeout=6)
-        self.assertEqual(signers.call_args_list, [unittest.mock.call("a")] * 3)
-        self.assertEqual(result, {"a": False}, "signer read errors cannot prove freshness")
+    def fresh(self):
+        return self.subject.fresh(["a"], timeout=6)
 
-    def test_only_a_held_node_signed_heartbeat_is_fresh(self):
-        for held, parties, expected in ((True, ["a"], True), (True, [membership.OWNER], False), (False, ["a"], False)):
-            with self.subTest(held=held, parties=parties), \
-                    unittest.mock.patch.object(self.subject, "holds_heartbeat", return_value=held), \
-                    unittest.mock.patch.object(self.subject, "heartbeat_signers", return_value=parties):
-                self.assertEqual(self.subject.fresh(["a"], epoch=1, timeout=6), {"a": expected})
+    def test_repeated_read_errors_are_not_fresh(self):
+        self.held.side_effect = OSError("heartbeat unavailable")
+        self.assertEqual(self.fresh(), {"a": False})
+        self.assertEqual(self.held.call_count, 3)
 
-    def test_transient_read_error_can_recover(self):
-        with unittest.mock.patch.object(self.subject, "holds_heartbeat", side_effect=[OSError("try again"), True]) as read, \
-                unittest.mock.patch.object(self.subject, "heartbeat_signers", return_value=["a"]):
-            self.assertEqual(self.subject.fresh(["a"], epoch=1, timeout=6), {"a": True})
-        self.assertEqual(read.call_count, 2)
+    def test_single_node_uses_one_envelope_and_recovers_after_a_read_error(self):
+        self.held.side_effect = [OSError("try again"), self.envelope(A), None]
+        self.assertEqual(self.fresh(), {"a": True})
+        self.assertEqual(self.held.call_count, 2)
+
+    def test_rejects_missing_empty_bad_signature_wrong_epoch_and_wrong_digest(self):
+        invalid = self.envelope(A)
+        invalid["signatures"][0]["sig"] = "00" * 64
+        for envelope in (None, self.envelope(), invalid, self.envelope(A, epoch=2),
+                         self.envelope(A, manifest_digest="00" * 32)):
+            with self.subTest(envelope=envelope):
+                self.held.return_value = envelope
+                self.assertEqual(self.fresh(), {"a": False})
+
+    def test_multi_node_requires_a_node_only_quorum(self):
+        self.subject.manifest = three()
+        for signers, expected in (((A, B), True), ((A,), False), ((A, O1), False)):
+            with self.subTest(parties=[party for party, _ in signers]):
+                self.held.return_value = self.envelope(*signers)
+                self.assertEqual(self.fresh(), {"a": expected})
 
     def test_single_node_beaten_rejects_failed_freshness(self):
-        with unittest.mock.patch.object(self.subject, "running", return_value=True), \
-                unittest.mock.patch.object(self.subject, "holds_heartbeat", side_effect=OSError("heartbeat unavailable")) as read, \
-                unittest.mock.patch.object(self.subject, "beat_events", return_value={"a": []}):
-            with self.assertRaisesRegex(RuntimeError, "a signed no heartbeat for epoch 1"):
-                self.subject._beaten(self.subject.manifest, timeout=6)
-        self.assertEqual(read.call_count, 3)
+        self.held.side_effect = OSError("heartbeat unavailable")
+        self.subject.running = lambda _: True
+        self.subject.beat_events = lambda _: {"a": []}
+        with self.assertRaisesRegex(RuntimeError, "a signed no heartbeat for epoch 1"):
+            self.subject._beaten(self.subject.manifest, timeout=6)
+        self.assertEqual(self.held.call_count, 3)
 
 
 class Replacement(Fixture):
