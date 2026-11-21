@@ -72,6 +72,7 @@ import glob
 import hashlib
 import json
 import os
+import pwd
 import re
 import socket
 import stat
@@ -821,10 +822,9 @@ class Node:
         names this node (measurements.self_attest_policy, from the document the manifest commits to), and its AK is
         enrolled by the same credential activation a peer runs (enrolpeer.challenge, then this TPM's activation), so only
         the manifest's AK in the manifest's EK's TPM is taken. Its state is its own file, apart from a peer's verifier, in
-        admission's own directory (held): admission makes it, and as regalia-admission under ProtectSystem=strict it cannot
-        write sync's state directory (the one-node scenario's first run, dx7.10: EACCES on its lock there)."""
+        sync's state directory: regalia-sync builds it, for its local lease listener (regalia-kms-41n, sync.LocalServer)."""
         document = measurements.held(self.documents(), manifest)
-        attester = attest.Verifier(measurements.self_attest_policy(manifest, document, self.node_id), self.held("attest-self.json"),
+        attester = attest.Verifier(measurements.self_attest_policy(manifest, document, self.node_id), self.path("attest-self.json"),
                                    run=self.run)
         credential = enrolpeer.challenge(attester, manifest, self.node_id, *enrolpeer.tpm_identity(self.tcti, self.run)())
         if credential is not None:
@@ -850,6 +850,11 @@ class Node:
             return {}
         mine, port = self.own_address(manifest), self.site["service_mesh"]["sync_port"]
         return {node: sync.tcp_transport(where, port, mine, timeout) for node, where in self.peers(manifest).items()}
+
+    def self_source(self, timeout=sync.DEADLINE):
+        """sync.Client transports under single-node (regalia-kms-41n): this node's own regalia-sync, at its local lease
+        listener (sync.LEASE_SOCKET in sync's state directory). The only lease source a single-node host has."""
+        return {self.node_id: sync.unix_transport(self.path(sync.LEASE_SOCKET), timeout)}
 
     def own_address(self, manifest):
         entries = {n["node_id"]: n for n in manifest["nodes"]}
@@ -990,32 +995,16 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     class Manifest:
         load = staticmethod(node.manifest)
     order = []
-    own = {}                # dx7.3: this node's own issuer parts, made at its first self-issued lease
-
-    def renew_self(request, manifest):
-        """dx7.3, single-node only: no peer exists, so this node issues its own lease (lease.issue_self) under every rule a
-        peer's follows: a fresh quote to its own verifier, its own heartbeat, TPM signer and RevisionFloor (fed here at
-        each attempt, so it fails closed for one lease after this service starts, as a restarted peer does)."""
-        if not own:
-            own.update(freshness=node.freshness(), signer=lease.TpmSigner(node.tcti, node.run), floor=lease.RevisionFloor())
-        event = {"event": "admission-renew", "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
-                 "subject": node.node_id, "peer": node.node_id}
-        try:
-            own["floor"].applied(*lease.read_applied())
-            attester = node.self_attester(manifest)
-            evidence = node.quote(session, public)(attester.nonce(node.node_id).hex(), manifest, lease.request_binding(request))
-            got = lease.issue_self(manifest, node.node_id, request, attester, evidence, own["freshness"], own["signer"], own["floor"])
-        except Refused as refused:
-            quiet.deny(dict(event, outcome="DENY", reason=convergence._printable(refused, membership.REASON_LIMIT)))
-            raise
-        quiet.allow(dict(event, outcome="ALLOW", reason=""))
-        return got
 
     def renew(request):
         manifest = node.manifest()
+        # regalia-kms-41n: under single-node this node's own regalia-sync issues its lease (lease.issue_self, sync's own
+        # heartbeat state, TPM signer and RevisionFloor), asked for over its local lease listener as a peer is over the
+        # tunnel. Admission makes no issuer part of its own: it cannot write sync's state (its sandbox is unchanged).
         if membership.profile(manifest) == membership.SINGLE_NODE:
-            return renew_self(request, manifest)
-        sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
+            sources = node.self_source(timeout=admission.RENEW_TIMEOUT)
+        else:
+            sources = node.sources(manifest, timeout=admission.RENEW_TIMEOUT)    # a silent peer costs seconds, not a lease
         peers = sorted(sources)
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
@@ -1119,6 +1108,12 @@ class Sync:
 
     def manifest(self):
         return self.store.load()
+
+    def local_server(self):
+        """regalia-kms-41n: this node's own lease, on its local lease listener (sync.LocalServer), with the same heartbeat
+        state, TPM signer and RevisionFloor a peer's lease is issued with under multi-node, and the self-attest verifier."""
+        return sync.LocalServer(self.node.node_id, self.store, self.freshness, self.node.self_attester, self.signer, self.trail,
+                                admission_uid=pwd.getpwnam(sync.ADMISSION_USER).pw_uid, floor=self.floor, applied=lease.read_applied)
 
     def server(self):
         # the enrolment operations (#190): the same contribution store the unlock peer serves paths from
@@ -1251,7 +1246,7 @@ class Sync:
         mesh, svc = self.node.site["boot_mesh"], self.node.site["service_mesh"]
         listeners, threads = [], []
         if svc is not None:
-            # dx7.6: a single-node host (no service_mesh) serves no peer and is nobody's unlock peer: no listener at all
+            # dx7.6: a single-node host (no service_mesh) serves no peer and is nobody's unlock peer: no tunnel listener
             service = bind_when_up((self.node.own_address(self.manifest()), svc["sync_port"]), stop, family=socket.AF_INET6)
             service.settimeout(1)
             listeners.append(service)
@@ -1259,6 +1254,12 @@ class Sync:
             listeners.append(unlocking)
             threads = [threading.Thread(target=sync.serve, args=(self.server(), service, stop), daemon=True),
                        threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
+        else:
+            # regalia-kms-41n: its one listener is local, this node's own lease to its own admission service (sync.LocalServer)
+            local = sync.bind_local(self.node.path(sync.LEASE_SOCKET), pwd.getpwnam(sync.SYNC_USER).pw_uid)
+            listeners.append(local)
+            threads = [threading.Thread(target=sync.serve, args=(self.local_server(), local, stop), kwargs={"source_of": sync.peer_source},
+                                        daemon=True)]
         for thread in threads:
             thread.start()
         watch, proposer = self.watch(), self.proposer()
