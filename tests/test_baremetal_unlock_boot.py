@@ -1589,41 +1589,23 @@ class OnQemuVerity(OnQemu):
         gives it no configuration). Not `systemctl is-enabled`: it counts links under /etc and /run only, and says
         "disabled" for a unit the image wants from /usr (measured on the first local run); started is the proof.
         `exporter` (regalia-kms-r1s.17): the per-host EnvironmentFile is on /var, so the exporter is configured
-        (active, its main process started) or skipped (its ConditionPathExists says no); on the enrolment boot its
-        file arrives after multi-user.target was reached, so it is neither (none): e2e-enrol writes it after the
-        exporter's condition was already evaluated, and it starts on the next boot (v2c-control)
-        (the GA ruling: every other unit's check runs on every boot, the exporter is excluded only there)."""
+        (active, its main process started) or skipped (its ConditionPathExists says no)."""
         units = unit_states(said)
         self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
         for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
             self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
-        if exporter == "enrol":
-            # the enrolment boot: chrony is not active (its per-host configuration is not on this host's enrolment
-            # disk — the test's carries only the exporter's), so its process check is what main's boot 1 shows.
-            # Every other unit in this check still runs (the GA ruling names the exporter alone, and its state is
-            # the exporter_skipped lines, not an exclusion from the unit table)
-            self.assertEqual((units["chrony.service"]["active"], units["chrony.service"]["result"]), ("inactive", "success"),
-                             units["chrony.service"])
-        else:
-            self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
-            self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
+        self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
+        self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
         if exporter == "configured":
             self.assertEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
             self.assertGreater(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
         elif exporter == "skipped":
             self.exporter_skipped(said, units)
-        elif exporter == "enrol":
-            # the enrolment boot (AC1's own): the per-host EnvironmentFile is the package's own plain ARGS (main's
-            # fixture: no --web.config.file), and the guard keeps the unit SKIPPED with it: skipped by name (the
-            # exporter_skipped lines), not failed, and the journal is systemd's own condition line, UNFILTERED. A
-            # mutant that removes the guard starts the unit here, on the package default
-            self.exporter_skipped(said, units)
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.per_host_started(said)
         self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
-        if exporter != "enrol":
-            # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
-            self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
+        # chronyd confined by its profile in enforce mode while it reads /etc/chrony/regalia.conf through the link to /var
+        self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
 
     def exporter_skipped(self, said, units=None):
         """regalia-kms-r1s.17, AC1: the enabled exporter, with its per-host EnvironmentFile absent (the L+ link to
@@ -1656,14 +1638,7 @@ class OnQemuVerity(OnQemu):
         # (the build-8 shape: start limit, result resources) would show up here
         self.assertEqual(state["failed_units"], "0",
                          "the unconfigured host has failed units (the exporter's skip should not degrade it): %r" % state)
-        # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
-        # Read from the settled line (the report's own would say "starting": it is a job of multi-user.target):
-        # the test's probe runs after the target's last job, where "running" is the only reading a healthy host
-        # leaves. A degraded host (the build-8 shape) names itself here, by name
-        self.assertEqual(state["settled"], "running",
-                         "the unconfigured host's settled state is not running (the exporter's skip should not "
-                         "degrade it): %r" % state)
-        print("boot proof: the unconfigured exporter is skipped, no listener, etctarget=%s, failed-units=%s, settled=%s" % (
+        print("boot proof: the skipped exporter: no listener, etctarget=%s, failed-units=%s, settled=%s" % (
             state["etctarget"], state["failed_units"], state["settled"]), file=sys.stderr)
 
     def exporter_configured(self, said):
@@ -1739,22 +1714,29 @@ class OnQemuVerity(OnQemu):
         # through bootnext; its test mode makes none). First an entry carrying LOAD OPTIONS: refused, and deleted again
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0],
-                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(),
+                                         extra={"esp-partuuid": self.installed["partuuids"]["esp"].encode(), "chrony.conf": self.CHRONY,
                                                 **self.exporter_materials_ready(configured=False), **self.per_host_files()})
         said = self.boot("v1-enrolment", enrol_disk=image, recovery=True, nvram="host")
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
-        # the image's units on this boot: factory, sysusers, apparmor, the KMS, per-host, AppArmor enforce all
-        # asserted here (the GA ruling 2026-11-20: only the exporter is not active on the enrolment boot, and it is
-        # asserted, not excluded — by the exporter_skipped lines, AC1's own: its per-host file is the package's own
-        # plain ARGS (no --web.config.file), and the guard keeps it SKIPPED with it, its journal the condition line.
-        # chrony is absent too: the test's enrolment disk carries no chrony.conf (main's boot 1 shows it inactive),
-        # so chronyd's process checks (active, started, confined) are main's boot 1's and are not on this boot.
-        # v2c-control carries the configured exporter: its per-host ARGS and the production web.yml's mutual TLS,
-        # active on its configured listener only, and the metrics go out to the monitoring CA's client and to no
-        # other (the report's probe cases, by name))
-        self.started(said, exporter="enrol")
+        # the image's units on this boot, as main's v1 (c617e2402) asserts them: nothing else on the enrolment boot
+        # is asserted (started() is main's later boots'). The one addition of this bead (regalia-kms-r1s.17): the
+        # exporter is SKIPPED, by name — its per-host file is the package's own plain ARGS (main's fixture,
+        # --web.listen-address=127.0.0.1:9100, no --web.config.file), and the guard's ConditionPathExists keeps
+        # the unit held (inactive/dead/no, no restarts, no listener, failed-units=0, the journal the
+        # condition line, UNFILTERED). (AC1's own boot is v2-unconfigured: the same disk with the file moved
+        # aside, so the guard holds for its absence too.)
+        units = unit_states(said)
+        for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service", "chrony.service"):
+            self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
+        self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
+        self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
+        self.per_host_started(said)
+        self.assertRegex(said, r"REGALIA-E2E-FACTORY assert=yes")
+        self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
+        self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
+        self.exporter_skipped(said, units)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1817,6 +1799,13 @@ class OnQemuVerity(OnQemu):
         unattended(self, said)
         self.proven(said, "a")
         self.started(said, exporter="skipped")
+        # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
+        # Read from the settled line (the report's own would say "starting": it is a job of multi-user.target):
+        # the test's probe runs after the target's last job, where "running" is the only reading a healthy host
+        # leaves. A degraded host (the build-8 shape) names itself here, by name
+        self.assertEqual(exporter_state(said)["settled"], "running",
+                         "the unconfigured host's settled state is not running (the exporter's skip should not "
+                         "degrade it): %r" % exporter_state(said))
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
         # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v1's enrolment kept its package
