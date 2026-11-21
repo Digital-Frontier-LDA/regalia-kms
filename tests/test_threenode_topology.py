@@ -143,6 +143,23 @@ class Fresh(Fixture):
 
 
 class Replacement(Fixture):
+    def replacement_serials(self, **kw):
+        cluster = self.cluster(names=("a", "b", "c", "c2"), **kw)
+        cluster.manifest = three()
+        cluster.document = {}
+        cluster.ids = {"c2": ("new-ek", "new-ak")}
+        cluster.keys = {"c2": {"boot": (None, "new-boot"), "service": (None, "new-service")}}
+        cluster.signing = {"c2": "new-signing"}
+        with unittest.mock.patch.object(threenode.measurements, "version", return_value="test-policy"):
+            candidate, _ = cluster.replacement("c", "c2", same_policy=True)
+        return next(entry["hsm_serials"] for entry in candidate["nodes"] if entry["node_id"] == "c2")
+
+    def test_replacement_keeps_the_configured_serials(self):
+        self.assertEqual(self.replacement_serials(hsm_serials={"c2": ["TOKEN1", "TOKEN2"]}), ["TOKEN1", "TOKEN2"])
+
+    def test_replacement_keeps_the_default_serial(self):
+        self.assertEqual(self.replacement_serials(), ["E2E3C2"])
+
     def test_a_single_node_replacement_is_refused_by_name(self):
         with self.assertRaisesRegex(RuntimeError, r"replacing a by a2 is refused under the single-node profile \(epoch 1\): no running "
                                     r"peer can take the epoch; a single-node replacement is a restore from the owner's chain"):

@@ -1594,7 +1594,7 @@ class Cluster:
         document = self.document if same_policy else \
             dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, self.attested(example["pcrs"]))]}}))
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
-                 "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
+                 "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": self._hsm_serials(new)}
         current = self.manifest
         # #199: its SSH host key and its signing key; it takes the old one's place in every signer rule
         from cryptography.hazmat.primitives import serialization
