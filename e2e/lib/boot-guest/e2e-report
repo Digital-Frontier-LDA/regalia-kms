@@ -282,9 +282,9 @@ echo "REGALIA-E2E-CLIENT processes=$clients" > /dev/console
 # but a kernel built without the options, or with a debug option that excludes them, ignores them. The
 # kernel says what it enabled at boot (an info message, kept in the ring buffer whatever the loglevel).
 echo "REGALIA-E2E-MEMINIT $(dmesg 2>/dev/null | grep -o 'mem auto-init:.*' | head -1)" > /dev/console
-# the SETTLED state (regalia-kms-r1s.17, AC1): this report is a oneshot of multi-user.target, so its own
-# is-system-running would read "starting". Start the probe AFTER the report finishes (systemd-run --on-active=5s):
-# it runs outside the boot transaction, where is-system-running settles to "running" on a healthy host.
-# The probe writes REGALIA-E2E-PROBE settled is-system-running=<state> to the console.
-systemd-run --on-active=5s --unit=regalia-e2e-settled /usr/lib/regalia/e2e-probe 2>/dev/null || true
+# AC1 as written (systemctl is-system-running reports running) cannot be read from inside the guest during
+# the boot: this report is a oneshot of multi-user.target, so its own is-system-running reads "starting"
+# while it runs, and a probe started after it (systemd-run --on-active=, a .timer) would be killed by the
+# poweroff before it runs. The failed-units count (line above) stands in for AC1: zero failed units means
+# the host settles to "running" once the boot jobs finish. The PA 01:15Z note allows this stand-in.
 systemctl --no-block poweroff

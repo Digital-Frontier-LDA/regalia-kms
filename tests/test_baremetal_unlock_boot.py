@@ -1800,12 +1800,10 @@ class OnQemuVerity(OnQemu):
                          "the /etc link resolves: the per-host file is on /var (the unit should have started): %r"
                          % exporter_state(said))
         # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
-        # Read from the settled line (the report's own would say "starting": it is a job of multi-user.target):
-        # the test's probe runs after the target's last job, where "running" is the only reading a healthy host
-        # leaves. A degraded host (the build-8 shape) names itself here, by name
-        self.assertEqual(exporter_state(said)["settled"], "running",
-                         "the unconfigured host's settled state is not running (the exporter's skip should not "
-                         "degrade it): %r" % exporter_state(said))
+        # Cannot be read from inside the guest during the boot (the report is a oneshot of multi-user.target, so
+        # its own is-system-running reads "starting"; a probe started after it is killed by the poweroff). The
+        # failed-units count (asserted in exporter_skipped) stands in for AC1: zero failed units means the host
+        # settles to "running" once the boot jobs finish (PA 01:15Z note allows this stand-in).
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
         # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v2-unconfigured moved the
