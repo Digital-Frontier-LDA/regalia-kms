@@ -87,7 +87,10 @@ done
 # the configured address when it is. NRestarts and the boot-scoped journal say a failure would not be hidden: a
 # unit in failed/activating, or one that has retried, cannot read as the line a skipped unit leaves
 restarts="$(systemctl show -P NRestarts prometheus-node-exporter.service 2>/dev/null || echo none)"
-journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | grep -m4 -E 'Failed to load environment|Failed with result|Start request|start request|limit' | tr '\n' '|' | cut -c1-300)"
+# the exporter's own words: the last 4 lines of its boot-scoped journal (the error, not just the systemd
+# wrapper). A successful start shows its startup lines; a failure shows the cause (cannot read key, TLS
+# config error, port in use) that the wrapper's "Failed with result" does not
+journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | tail -4 | tr '\n' '|' | cut -c1-300)"
 echo "REGALIA-E2E-EXPORTER unit=$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P SubState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P ConditionResult prometheus-node-exporter.service 2>/dev/null || echo none) result=$(systemctl show -P Result prometheus-node-exporter.service 2>/dev/null || echo none) restarts=${restarts:-none}" > /dev/console
 echo "REGALIA-E2E-EXPORTER journal=${journal:-none}" > /dev/console
 # its listener, MEASURED (ss -ltnp, every address, not derived from the file's presence): 9100 on the address the
