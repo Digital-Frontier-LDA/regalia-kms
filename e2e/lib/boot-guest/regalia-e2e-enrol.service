@@ -1,6 +1,10 @@
 [Unit]
 Description=regalia e2e: seal the boot credentials on this machine (only when the enrolment disk is attached)
 ConditionPathExists=/dev/vdb
+# after the exporter (regalia-kms-r1s.17): its per-host file is what the exporter's ConditionPathExists gates on,
+# so the guard is evaluated before e2e-enrol writes the file. Without this order the v1 exporter_skipped held by
+# scheduling luck, not by the unit file
+After=prometheus-node-exporter.service
 Before=regalia-e2e-report.service
 
 [Service]

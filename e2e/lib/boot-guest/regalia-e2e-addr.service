@@ -1,0 +1,12 @@
+[Unit]
+Description=regalia e2e: give the guest's eth0 its underlay address (the test's network gives the peers their IPs, not the guest)
+Before=prometheus-node-exporter.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExec=yes
+ExecStart=/usr/lib/regalia/e2e-addr
+
+[Install]
+WantedBy=multi-user.target

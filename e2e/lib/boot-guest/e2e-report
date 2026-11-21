@@ -82,6 +82,145 @@ for u in systemd-firstboot.service regalia-etc-factory.service systemd-sysusers.
   enabled="$(systemctl is-enabled "$u" 2>/dev/null | head -1)"
   echo "REGALIA-E2E-UNIT $u state=$st started=${started:-none} enabled=${enabled:-none}" > /dev/console
 done
+# THE EXPORTER'S STATE (regalia-kms-r1s.17): the enabled unit that reads the per-host EnvironmentFile. Skipped (its
+# ConditionPathExists) when that file is not on /var: inactive, no restarts, no start limit, no listener. Started on
+# the configured address when it is. NRestarts and the boot-scoped journal say a failure would not be hidden: a
+# unit in failed/activating, or one that has retried, cannot read as the line a skipped unit leaves
+restarts="$(systemctl show -P NRestarts prometheus-node-exporter.service 2>/dev/null || echo none)"
+# the unit's boot journal, UNFILTERED (the test's negative check greps exactly these lines: a unit that
+# failed or retried names its cause here, from systemd's own wrapper, and the exporter's stdout/stderr sits
+# among them — a filter would let the build-8 failure pass the check that exists to catch it, regalia-kms-r1s.17)
+journal="$(journalctl -b -u prometheus-node-exporter.service -o cat --no-pager 2>/dev/null | tail -8 | tr '\n' '|' | cut -c1-800)"
+echo "REGALIA-E2E-EXPORTER unit=$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P SubState prometheus-node-exporter.service 2>/dev/null)/$(systemctl show -P ConditionResult prometheus-node-exporter.service 2>/dev/null || echo none) result=$(systemctl show -P Result prometheus-node-exporter.service 2>/dev/null || echo none) restarts=${restarts:-none}" > /dev/console
+echo "REGALIA-E2E-EXPORTER journal=${journal:-none}" > /dev/console
+# its listener, MEASURED (ss -ltnp, every address, not derived from the file's presence): 9100 on the address the
+# per-host ARGS configure (only) when configured; nothing at all when the unit skipped (a package-default start
+# would show the wildcard address, not 127.0.0.1). Also: the dangling /etc link (its target absent) and the
+# unconfigured host's health (the settled is-system-running comes from the probe's line, after the report)
+listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$' | sort -u)"
+listen="$(printf '%s' "$listen" | tr '\n' ' ' | sed 's/ $//')"
+[ -z "$listen" ] && listen=none
+etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
+etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
+# the system's health, without deadlocking: the report is a oneshot in multi-user.target, so its OWN
+# is-system-running would read "starting" (its job keeps the target's job open). The count of the FAILED units
+# says the same from inside: a unit in failed state (the exporter's build-8 shape: start limit, result
+# resources) holds the system in "degraded", zero means it settles to "running" once the jobs finish
+failed="$(systemctl --failed --no-legend --no-pager 2>/dev/null | wc -l)"
+# AC1 as written (systemctl is-system-running reports running) is read once every job has really ended: the
+# probe (regalia-e2e-settled, e2e-report's own systemd-run) runs AFTER multi-user.target (its last job) and
+# writes its own settled line, REGALIA-E2E-PROBE settled, which the test asserts. This count is the
+# in-report diagnostic beside it
+# the server key's mode and owner (0640 root:prometheus, as e2e-enrol and MONITORING.md give it): a world-readable
+# key would pass the test even if the exporter's group access to it were broken
+keymode="$(stat -c '%U:%G:%a' /etc/regalia/node-exporter/server.key 2>/dev/null || echo none)"
+echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget failed-units=$failed key=$keymode" > /dev/console
+# THE MUTUAL-TLS PROBE (regalia-kms-r1s.17, the boot where the test's web.yml and server material are staged):
+# the metrics are served only to a client the monitoring CA authenticated. Each case is a bounded probe:
+# trusted (a certificate the monitoring CA signed for the test), missing (no client certificate) and wrong (a
+# certificate from another CA). The probe VERIFIES the server certificate against the monitoring CA (loaded from
+# /mnt/enrol/node-exporter.monitoring-ca.pem, staged by e2e-enrol beside the client fixtures), so a server that
+# presents no valid certificate is caught here, not hidden. The negative cases fail on the CLIENT side's
+# certificate check (the server's RequireAndVerifyClientCert), not on server verification: the server cert is
+# verified in all three cases, and only the client cert differs
+# the probes run only when the exporter is ACTIVE (not just when its files are on /var: on a boot where the unit
+# skipped, nothing is listening — the probes would just fail with "connection refused" and waste the boot's time
+# budget)
+exporter_active="$(systemctl show -P ActiveState prometheus-node-exporter.service 2>/dev/null)"
+if [ "$exporter_active" = active ] && [ -f /var/lib/regalia-etc/regalia/node-exporter/server.pem ] && [ -f /var/lib/regalia-etc/default/prometheus-node-exporter ]; then
+  address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' /var/lib/regalia-etc/default/prometheus-node-exporter | head -1)"
+  # the probe's inputs are on /var (e2e-enrol copied them there: the enrolment disk is only attached on v1,
+  # the probes run on v2c, where the disk is gone)
+  probe_dir=/var/lib/regalia-etc/regalia/node-exporter
+  cafile=$probe_dir/monitoring-ca.pem
+  probe() {  # probe <name> <client-cert-file|-> <client-key-file|->: one bounded TLS GET. The guest has no
+    # curl (packages.txt), so python3's ssl does it: a 200 is "ok" with the body's node_ line count; any other
+    # code is "denied" with the code; a handshake refusal (RequireAndVerifyClientCert with no, or a foreign,
+    # client certificate) is "refused" with the ssl error. The server certificate is VERIFIED against the
+    # monitoring CA (check_hostname on, verify_mode CERT_REQUIRED): a server that does not present a valid
+    # certificate for this address fails here, not in the client-cert check
+    name=$1; cert=$2; key=$3
+    probeout=$(python3 -I - "$address" "$cert" "$key" "$cafile" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
+import socket, ssl, sys
+address, cert, key, cafile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if not address or address == "-":
+    print("refused no-address"); sys.exit(0)
+host, port = address.rsplit(":", 1)
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.load_verify_locations(cafile)
+ctx.check_hostname = True
+ctx.verify_mode = ssl.CERT_REQUIRED
+# "-" is the NO-certificate case: a real client with no certificate would simply not present one, and
+# the server's RequireAndVerifyClientCert refuses the handshake (a client-certificate error). It must NOT
+# be opened as a file named "-", which is a fixture error, not a missing certificate
+if cert and cert != "-":
+    ctx.load_cert_chain(cert, key)
+try:
+    sock = socket.create_connection((host, int(port)), timeout=5)
+    tls = ctx.wrap_socket(sock, server_hostname=host)
+    request = ("GET /metrics HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n").encode()
+    tls.sendall(request)
+    data = b""
+    while True:
+        chunk = tls.recv(65536)
+        if not chunk:
+            break
+        data += chunk
+except (ssl.SSLError, OSError) as e:
+    # a refusal, not a probe crash: the server's RequireAndVerifyClientCert (no, or a foreign, client
+    # certificate) ends the handshake with a TLS alert, and an unreachable listener with a connection
+    # error. Either way the probe says "refused" with the cause, and the assertions read it by name
+    print("refused %s: %s" % (type(e).__name__, e)); sys.exit(0)
+finally:
+    sock.close()
+head, _, body = data.partition(b"\r\n\r\n")
+code = head.split(b" ", 2)[1].decode()
+sys.stdout.write("ok %d %d\n" % (int(code), body.count(b"\nnode_")))
+PYEOF
+    )
+  if printf '%s' "$probeout" | grep -q '^refused'; then
+    echo "REGALIA-E2E-PROBE $name http=refused reason=${probeout#refused }" > /dev/console
+  else
+    echo "REGALIA-E2E-PROBE $name http=$probeout" > /dev/console
+  fi
+  }
+  trusted=$probe_dir/node-exporter.client.crt
+  wrong=$probe_dir/node-exporter.client-wrong.crt
+  probe trusted "$trusted" $probe_dir/node-exporter.client.key
+  probe missing - -
+  probe wrong "$wrong" $probe_dir/node-exporter.client-wrong.key
+  # plaintext: a non-TLS connection to the TLS-only server must be refused (web.yml is TLS 1.3 only)
+  plainout=$(python3 -I - "$address" <<'PYEOF' 2>&1 | tr '\n' ' ' | cut -c1-200
+import socket, sys
+address = sys.argv[1]
+if not address or address == "-":
+    print("refused no-address"); sys.exit(0)
+host, port = address.rsplit(":", 1)
+sock = socket.create_connection((host, int(port)), timeout=5)
+try:
+    sock.sendall(b"GET /metrics HTTP/1.1\r\nHost: " + host.encode() + b"\r\nConnection: close\r\n\r\n")
+    data = sock.recv(65536)
+finally:
+    sock.close()
+if data.startswith(b"HTTP"):
+    # a TLS server answers a non-TLS handshake with a 400 error page (a plaintext server answers the
+    # request: its body is metrics). "ok" is the metrics body only — a plaintext-serving regression shows
+    # "ok", and the TLS-only server, however it encodes its refusal, does not
+    if b"node_" in data:
+        sys.stdout.write("ok %d\n" % int(data.split(b" ", 2)[1]))
+    else:
+        sys.stdout.write("refused tls-error-page\n")
+else:
+    sys.stdout.write("refused non-tls\n")
+PYEOF
+  )
+  if printf '%s' "$plainout" | grep -q '^refused'; then
+    echo "REGALIA-E2E-PROBE plaintext http=refused reason=${plainout#refused }" > /dev/console
+  else
+    echo "REGALIA-E2E-PROBE plaintext http=$plainout" > /dev/console
+  fi
+  echo "REGALIA-E2E-PROBE done" > /dev/console
+fi
 # THE PER-HOST UNITS (regalia-kms-r1s.8): what the image enables under /usr gated on a per-host file (units-enabled.txt
 # [per-host]): the firewall, and every regalia-* unit its multi-user and timers targets want. ConditionResult says whether
 # the gate let it start ("no": the per-host file is not there), AssertResult whether an assert held (regalia-kms: the ruleset)
@@ -161,4 +300,11 @@ echo "REGALIA-E2E-CLIENT processes=$clients" > /dev/console
 # but a kernel built without the options, or with a debug option that excludes them, ignores them. The
 # kernel says what it enabled at boot (an info message, kept in the ring buffer whatever the loglevel).
 echo "REGALIA-E2E-MEMINIT $(dmesg 2>/dev/null | grep -o 'mem auto-init:.*' | head -1)" > /dev/console
-systemctl --no-block poweroff
+# AC1 as written (systemctl is-system-running reports running) is read OUTSIDE the boot transaction:
+# this report is a oneshot of multi-user.target, so its own is-system-running reads "starting" while
+# it runs. A transient unit (regalia-e2e-settled, started by systemd-run --on-active=5s after the
+# report finishes) runs after the target's last job, where is-system-running settles to "running" on
+# a healthy host. The poweroff is in its command line (after the settled read), so it ends the boot.
+# The QEMU boot timeout is the fallback for a guest whose probe never fires.
+systemd-run --on-active=5s --unit=regalia-e2e-settled \
+  /bin/sh -c "/usr/lib/regalia/e2e-probe; systemctl --no-block poweroff" 2>/dev/null || true
