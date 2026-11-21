@@ -430,6 +430,12 @@ mkdir "$W/esp"; mount "${LOOP}p1" "$W/esp"; MOUNTED+=("$W/esp")
 mkdir -p "$W/esp/loader/credentials"; echo "the image: $(stat -c %s "$W/e2e.efi") bytes"
 umount "$W/esp"; MOUNTED=()
 losetup -d "$LOOP"; LOOP=""
+# The guest's OWN account database, kept where the test can read it (regalia-kms-r1s.17): the test resolves
+# the exporter's server-key group (0640 root:prometheus) from the image's factory /etc/group, and the
+# deletions below (and $ROOT's) run before the test. It is the guest's file, so the gid stays the GUEST's
+# (e2e-enrol's install -g prometheus resolves the same number from the guest's own /etc/group at enrolment)
+[ "$GUEST/usr/share/factory/etc/group" -ef "$ROOT/usr/share/factory/etc/group" ] \
+  || install -m 0644 "$GUEST/usr/share/factory/etc/group" "$W/guest-factory-group"
 [ "$GUEST" = "$ROOT" ] || rm -rf --one-file-system "$GUEST"
 rm -rf "$ROOT"
 
