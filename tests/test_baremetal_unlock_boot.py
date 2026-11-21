@@ -1461,13 +1461,18 @@ class OnQemuVerity(OnQemu):
         """The gid of `name` in the image's factory /etc/group (the guest's, not the runner's): the image's
         accounts are in the factory copy, and the guest's /etc/group is a copy of it at every boot. In the verity
         case the guest's tree is REGALIA_BOOT_DIR's guest/ (unlock-boot-qemu.sh extracts rootfs.tar there), not
-        REGALIA_BOOT_DIR itself."""
+        REGALIA_BOOT_DIR itself. The gid is resolved from the guest's tree ONLY: if that file is missing the
+        write fails (the gid is the image's; the runner's group table is a different set of numbers and would
+        silently give the key a wrong group). e2e-enrol's install -g prometheus resolves it from the guest's own
+        /etc/group at enrolment, so the two match; a guest whose /etc/group lacks the group cannot stage the key
+        either, and a crash here says so instead of chowning to a runner number."""
         factory = "%s/guest/usr/share/factory/etc/group" % BOOT
         with open(factory) as f:
             for line in f:
                 if line.startswith(name + ":"):
                     return int(line.split(":")[2])
-        self.fail("no group %r in the image's factory /etc/group" % name)
+        self.fail("no group %r in the image's factory /etc/group (%s): the guest's gid is its own, not the "
+                  "runner's, so the key's group is unresolvable here" % (name, factory))
 
     def per_host_started(self, said):
         """The per-host units (regalia-kms-r1s.8), with this host's files on /var: enabled by the image under /usr, gated on
