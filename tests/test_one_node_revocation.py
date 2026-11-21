@@ -130,7 +130,7 @@ class Shutdown(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.directory = Path(directory.name)
+        self.directory = Path(directory.name).resolve()
         self.parent = self.directory / "run" / "admission"
         self.parent.mkdir(parents=True)
         self.path = self.parent / "admission.json"
@@ -286,6 +286,23 @@ print("FIFO rejected as nonregular")
         self.assertEqual(self.observe(later_zero), (None, 1))
         self.kms.sign.assert_called()
 
+    def test_pending_503_audit_cannot_hide_a_later_success(self):
+        self.path.write_text(json.dumps(self.document))
+        requests = []
+
+        def sign(*args, request_id, **kwargs):
+            requests.append(request_id)
+            if len(requests) == 1:
+                return 503, {"request_id": request_id}, None
+            if len(requests) == 2:
+                self.record(requests[0], self.outcome)
+                return 200, {"request_id": request_id}, None
+            self.fail("a later successful sign must immediately invalidate the refusal")
+
+        self.kms.sign.side_effect = sign
+        self.assertEqual(self.observe(), (None, 0))
+        self.assertEqual(len(requests), 2)
+
     def test_delayed_post_zero_audit_retains_the_response_observation_time(self):
         self.path.write_text(json.dumps(self.document))
         audit = self.kms.denied_not_admitted
@@ -346,6 +363,23 @@ print("FIFO rejected as nonregular")
         self.assertEqual(self.observe(), (0, 0))
         self.assertEqual(self.now, 5)
         self.assertEqual(self.kms.sign.call_count, 3)
+
+
+class SymlinkedTempRoot(unittest.TestCase):
+    def test_valid_admission_and_fifo_use_the_trusted_real_temp_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            actual = root / "actual"
+            actual.mkdir()
+            link = root / "temp-root"
+            link.symlink_to(actual, target_is_directory=True)
+            prefix = "tests.test_one_node_revocation.Shutdown."
+            run = subprocess.run(
+                [sys.executable, "-m", "unittest", prefix + "test_valid_admission_uses_configured_owner",
+                 prefix + "test_fifo_returns_a_regular_file_refusal_without_waiting_for_a_writer"],
+                env=dict(os.environ, TMPDIR=str(link)), capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("Ran 2 tests", run.stderr)
 
 
 if __name__ == "__main__":

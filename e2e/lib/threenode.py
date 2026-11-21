@@ -443,17 +443,35 @@ def wait_unlock_reply(reply, client, deadline):
     return drain_unlock_reply(reply)
 
 
-def finish_unlock_client(client, reply, key, timeout):
-    try:
-        _, err = client.communicate(timeout=timeout)
-        rc = client.returncode
-    except subprocess.TimeoutExpired:
-        client.kill()
-        _, err = client.communicate(timeout=5)
-        rc = "timeout"
-    # A last reply can arrive after the running poll stops but before the process exits.
-    return rc, (err or "")[-1500:], key or drain_unlock_reply(reply)
+UNLOCK_COMPLETION_GRACE = 30
 
+
+def finish_unlock_client(client, reply, key, timeout, open_reply):
+    """Drain client output without leaving a late ask-password reply waiting for the mapper."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if not key and (key := drain_unlock_reply(reply)):
+            open_reply(key)
+            # Give a late answer the same mapper/completion grace as an early answer.
+            deadline = max(deadline, time.monotonic() + UNLOCK_COMPLETION_GRACE)
+        remaining = max(0, deadline - time.monotonic())
+        try:
+            _, err = client.communicate(timeout=remaining if key else min(0.2, remaining))
+            rc = client.returncode
+            break
+        except subprocess.TimeoutExpired:
+            if remaining > 0:
+                continue
+            rc = client.poll()
+            if rc is None:
+                client.kill()
+                rc = "timeout"
+            _, err = client.communicate(timeout=5)
+            break
+    # A queued answer can outlive the client. Preserve its exit status and key evidence.
+    if not key and (key := drain_unlock_reply(reply)):
+        open_reply(key)
+    return rc, (err or "")[-1500:], key
 
 
 def until(what, seconds, interval=1.0):
@@ -2040,7 +2058,7 @@ class Cluster:
         `rounds` is the client's -attempts. Returns {rc, peer, marker, stderr}: `peer` the one whose keyslot
         opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking. rc 0 with
         no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody.
-        `probe_owner_off` adds the TCP result from this same negative boot before deleting its tunnel."""
+        `probe_owner_off` samples the client's tunnel traffic before the independent TCP probe on the same boot."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
         self._initrd_only(name, "unlock")
         with self.tpm_of(name):
@@ -2102,11 +2120,10 @@ class Cluster:
             if key:
                 open_reply(key)
             result["rc"], result["stderr"], final_key = finish_unlock_client(
-                client, reply, key, 30 if key else max(5.0, deadline - time.monotonic()))
+                client, reply, key, UNLOCK_COMPLETION_GRACE if key else max(5.0, deadline - time.monotonic()), open_reply)
             result["key_delivered"] = bool(final_key)
-            if final_key and not key:
-                open_reply(final_key)
             if probe_owner_off:
+                result["owner_client_traffic"] = self.owner_boot_traffic(name)
                 result["owner_tcp_errno"] = owner_tcp_probe(n.ns, n.boot_address, boot)
         finally:
             if client is not None and client.poll() is None:

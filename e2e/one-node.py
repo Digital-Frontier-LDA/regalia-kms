@@ -298,10 +298,11 @@ class Daemon:
             return ""
 
 
-def owner_connection_refused(result, before, after):
+def owner_connection_refused(result, before):
     """The real client made its owner attempt, received no key, and exhausted one round."""
     lines = result["stderr"].splitlines()
     expected = "regalia-unlock: attempt 1: %s (path epoch 1): hello: the transport failed (no connection);" % unlock.OWNER
+    after = result.get("owner_client_traffic")
     exchanged = (before is not None and after is not None and after[0] > 0 and after[0] >= before[0]
                  and after[1] > before[1] and after[2] > before[2])
     return (exchanged and result.get("owner_tcp_errno") == errno.ECONNREFUSED
@@ -386,6 +387,8 @@ def observe_shutdown(kms, read_admission, started, lifetime):
             try:
                 status, response, _ = kms.sign(b"after the shutdown", request_id=request_id, timeout=min(remaining, 2))
                 observed = time.monotonic()
+                if 200 <= status < 300:
+                    return None, stopped    # a later success invalidates any pending refusal evidence
                 if status == 503 and isinstance(response, dict) and response.get("request_id") == request_id and observed <= deadline:
                     candidates[request_id] = observed - started
             except (OSError, http.client.HTTPException):
@@ -476,10 +479,9 @@ def scenario(cluster, kms):
     with cluster.owner_tunnel("a"):
         before = cluster.owner_boot_traffic("a")
         alone = cluster.unlock("a", timeout=90, rounds=1, probe_owner_off=True)
-        after = cluster.owner_boot_traffic("a")
-        ok(owner_connection_refused(alone, before, after),
+        ok(owner_connection_refused(alone, before),
            "the pinned owner tunnel exchanges traffic and its inner TCP endpoint refuses the connection, with no key delivered",
-           {"unlock": alone, "owner_tunnel_before": before, "owner_tunnel_after": after})
+           {"unlock": alone, "owner_tunnel_before": before})
         cluster.stop("a")                             # fresh TPM session for the positive attempt
         with cluster.owner_answering("a") as owner_said:
             opened = cluster.unlock("a", timeout=90, rounds=1)
