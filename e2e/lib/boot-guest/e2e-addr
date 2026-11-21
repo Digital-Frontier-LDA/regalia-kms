@@ -1,0 +1,15 @@
+#!/bin/sh
+# Inside the test guest, before the exporter starts: give the guest's eth0 its underlay address.
+# The test's network setup gives the peers their underlay IPs, not the guest (the guest's eth0 is a
+# virtio-net device on the switch, with no IP assigned). In production the site network gives the
+# node its host_ipv4; here the test plays that step. The address is read from the per-host file
+# (node-exporter.default's --web.listen-address), so the exporter's bind and the probes' target
+# are the same address.
+addrfile=/var/lib/regalia-etc/default/prometheus-node-exporter
+[ -s "$addrfile" ] || exit 0
+address="$(sed -n 's/.*--web\.listen-address=\([^ :"]*:[0-9]*\).*/\1/p' "$addrfile" | head -1)"
+[ -n "$address" ] || exit 0
+host="${address%:*}"
+ip link set eth0 up 2>/dev/null || true
+ip addr replace "$host/32" dev eth0 2>/dev/null || true
+echo "REGALIA-E2E-ADDR eth0=$host" > /dev/console

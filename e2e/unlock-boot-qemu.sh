@@ -264,9 +264,9 @@ else
 fi
 # the test's own: the enrolment step and the report, enabled under /usr
 mkdir -p "$GUEST/usr/lib/regalia" "$GUEST/usr/lib/systemd/system/multi-user.target.wants"
-install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report "$GUEST/usr/lib/regalia/"
-install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service "$GUEST/usr/lib/systemd/system/"
-for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sfn "../$u" "$GUEST/usr/lib/systemd/system/multi-user.target.wants/$u"; done
+install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report e2e/lib/boot-guest/e2e-probe e2e/lib/boot-guest/e2e-addr "$GUEST/usr/lib/regalia/"
+install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service e2e/lib/boot-guest/regalia-e2e-addr.service "$GUEST/usr/lib/systemd/system/"
+for u in regalia-e2e-enrol.service regalia-e2e-report.service regalia-e2e-addr.service; do ln -sfn "../$u" "$GUEST/usr/lib/systemd/system/multi-user.target.wants/$u"; done
 if [ "$CASES" = unlock ]; then
   rm -rf "$GUEST/usr/share/factory/etc"; mkdir -p "$GUEST/usr/share/factory/etc"
   cp -a "$GUEST/etc/." "$GUEST/usr/share/factory/etc/"
@@ -428,6 +428,12 @@ mkdir "$W/esp"; mount "${LOOP}p1" "$W/esp"; MOUNTED+=("$W/esp")
 mkdir -p "$W/esp/loader/credentials"; echo "the image: $(stat -c %s "$W/e2e.efi") bytes"
 umount "$W/esp"; MOUNTED=()
 losetup -d "$LOOP"; LOOP=""
+# The guest's OWN account database, kept where the test can read it (regalia-kms-r1s.17): the test resolves
+# the exporter's server-key group (0640 root:prometheus) from the image's factory /etc/group, and the
+# deletions below (and $ROOT's) run before the test. It is the guest's file, so the gid stays the GUEST's
+# (e2e-enrol's install -g prometheus resolves the same number from the guest's own /etc/group at enrolment)
+[ "$GUEST/usr/share/factory/etc/group" -ef "$ROOT/usr/share/factory/etc/group" ] \
+  || install -m 0644 "$GUEST/usr/share/factory/etc/group" "$W/guest-factory-group"
 [ "$GUEST" = "$ROOT" ] || rm -rf --one-file-system "$GUEST"
 rm -rf "$ROOT"
 
@@ -457,6 +463,6 @@ if ! grep -q "^$TEST" <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep
 fi
 # The initrd's actual module payload and preload entry must belong to the UKI kernel just booted.
 python3 -BEs e2e/tests/image-esp-content.py "$W/initrd-build" --kernel "$KVER"
-[ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, the per-host units started after the reboot and gated without their files (the KMS refusing with no firewall), a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
+[ "$CASES" = verity ] && { echo "unlock-boot-qemu: the verity /usr's boots passed (enrolment and the installer's firmware entry, an entry with options refused, the proof on every boot, the exporter configured and its mTLS probes (trusted, missing and wrong-CA clients), the unconfigured boot (the exporter skipped, no listener, no start limit), the per-host units started after the reboot and gated without their files (the KMS refusing with no firewall), a wrong usrhash, a tampered block, A/B and the fallback, a broken factory /etc)"; exit 0; }
 echo "unlock-boot-qemu: 17 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock, a new epoch on the ESP ahead of the anchor and with it, the ESP behind the anchor refused)"
 
