@@ -98,11 +98,11 @@ listen="$(ss -ltnp 2>/dev/null | awk 'NR>1 {print $4}' | grep -oE '[^ ]+:[0-9]+$
 [ -z "$listen" ] && listen=none
 etclink="$(readlink /etc/default/prometheus-node-exporter 2>/dev/null || echo none)"
 etctarget=absent; [ -e /etc/default/prometheus-node-exporter ] && etctarget=present
-# the settled state: the report runs after multi-user.target, so the units it reports on have already been
-# evaluated. is-system-running (without --wait) returns the current state immediately: "running" on a healthy
-# boot, "degraded" if any unit is failed. A --wait here would block on a unit that never settles (a timer, a
-# retrying service), and the 600 s boot timeout would kill the guest before the report finished
-sysrun="$(systemctl is-system-running 2>/dev/null || echo unknown)"
+# the settled state: the report runs after multi-user.target, but the system may still be in "starting"
+# (units transitioning). Wait up to 10 s for the system to settle to "running" or "degraded". A unit that
+# never settles (a timer, a retrying service) would block --wait indefinitely, so bound it with timeout.
+# On a healthy unconfigured boot the system settles to "running" within a few seconds of multi-user.target
+sysrun="$(timeout 10 systemctl is-system-running --wait 2>/dev/null || systemctl is-system-running 2>/dev/null || echo unknown)"
 echo "REGALIA-E2E-EXPORTER listen=$listen etclink=$etclink etctarget=$etctarget is-system-running=$sysrun" > /dev/console
 # THE MUTUAL-TLS PROBE (regalia-kms-r1s.17, the boot where the test's web.yml and server material are staged):
 # the metrics are served only to a client the monitoring CA authenticated. Each case is a bounded probe:
