@@ -480,6 +480,23 @@ class NodeMetricsDirectories(unittest.TestCase):
         self.assertFalse(set(names) & {name + ".prom" for name in trails.TRAILS})     # no basename shared with a shipper's file
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["ExecStart"].count("-metrics /run/regalia-metrics/audit-ship/%i.prom"), 1)
 
+    def test_staging_networkd_waits_for_tmpfiles(self):
+        """regalia-kms-ib0: the staging .network link under /etc is made by systemd-tmpfiles (regalia-staging.tmpfiles.conf,
+        After=local-fs.target since 9tv's efi.automount), which can start AFTER systemd-networkd has already read its
+        configuration -- build 12 booted that way: networkd at 15.06s saw only lo, the link appeared at 15.54s, wait-online
+        timed out at 135s and the staging sshd failed to bind its address 94 times. The drop-in (installed verbatim by
+        build-rootfs.sh as systemd-networkd.service.d/regalia-staging.conf) must order networkd after the tmpfiles service
+        so the link exists before the config is read. Removing the line makes this test fail by name."""
+        dropin = unit("../image/staging/networkd.conf")
+        self.assertIn("Unit", dropin, "no [Unit] section: the staging networkd has no ordering")
+        self.assertIn("systemd-tmpfiles-setup.service", dropin["Unit"]["After"].split())
+        # the staging-boot and per-host-file conditions must still guard the unit: the ordering is the fix, not a replacement
+        self.assertEqual(dropin["Unit"]["ConditionKernelCommandLine"], "regalia.staging=1")
+        self.assertEqual(dropin["Unit"]["ConditionPathExists"], "/var/lib/regalia-staging/network/10-regalia-staging.network")
+        # and the tmpfiles rule the ordering points at still makes that link
+        self.assertIn("L /etc/systemd/network/10-regalia-staging.network - - - - /var/lib/regalia-staging/network/10-regalia-staging.network",
+                      (UNITS.parent / "image" / "staging" / "regalia-staging.tmpfiles.conf").read_text())
+
     def test_the_exporter_starts_only_on_this_hosts_own_arguments(self):
         """regalia-kms-r1s.17: the image replaces Debian's /etc/default/prometheus-node-exporter with the tmpfiles
         link to /var/lib/regalia-etc (00-regalia-etc.tmpfiles.conf), the operator's per-host ARGS (MONITORING.md).
