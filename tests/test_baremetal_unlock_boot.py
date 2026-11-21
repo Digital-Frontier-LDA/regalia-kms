@@ -1544,8 +1544,8 @@ class OnQemuVerity(OnQemu):
         # configuration, the writers' directories) come from the production rendering
         base_args = metrics.node_exporter_args(cfg)
         args = b"ARGS=\"" + base_args.replace(
-            ("--web.listen-address=%s:9100" % cfg["host_ipv4"]).encode(),
-            b"--web.listen-address=127.0.0.1:9100") + b"\"\n"
+            "--web.listen-address=%s:9100" % cfg["host_ipv4"],
+            "--web.listen-address=127.0.0.1:9100").encode() + b"\"\n"
         with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
             web_yml = f.read()
         # the file names on the enrolment disk are what e2e-enrol and e2e-report expect (node-exporter.* for the
