@@ -1788,7 +1788,6 @@ class OnQemuVerity(OnQemu):
         # its file is the ruleset's, not the exporter's)
         self.reference = reference(expected["pcr12"])
         self.var_rename([(self.EXPORTER_VAR, self.EXPORTER_VAR + ".aside")])
-        self.var_rename([(self.EXPORTER_VAR + ".enrol", self.EXPORTER_VAR)])
         since = len(self.events)
         said = self.boot("v2-unconfigured", credentials, nvram="host")
         unattended(self, said)
@@ -1809,12 +1808,14 @@ class OnQemuVerity(OnQemu):
                          "degrade it): %r" % exporter_state(said))
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
-        # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v1's enrolment kept its package
-        # file aside as .enrol), unattended through a peer, from the installer's firmware entry; the proof, and the
-        # image's units started from their enablement under /usr. The exporter is now ACTIVE: its ConditionPathExists
-        # holds, it listens on the host's underlay address on 9100 only, and serves metrics only to the client the
-        # monitoring CA authenticated (the report's probe cases, by name). The disk has no chrony.conf (the test's
-        # guest's chronyd never starts: main's boot 1 shows it), so its units run as main's v2 showed them
+        # boot v2c, THE CONTROL (AC2): the per-host file back — the CONFIGURED one (v2-unconfigured moved the
+        # package's plain ARGS aside as .aside; this writes the production rendering to the real name and keeps
+        # the package's file as .enrol), unattended through a peer, from the installer's firmware entry; the
+        # proof, and the image's units started from their enablement under /usr. The exporter is now ACTIVE:
+        # its ConditionPathExists holds, it listens on the host's underlay address on 9100 only, and serves
+        # metrics only to the client the monitoring CA authenticated (the report's probe cases, by name). The
+        # disk has no chrony.conf (the test's guest's chronyd never starts: main's boot 1 shows it), so its
+        # units run as main's v2 showed them
         self.var_rename([(self.EXPORTER_VAR + ".aside", self.EXPORTER_VAR + ".enrol")])
         self.var_write(self.EXPORTER_VAR, self.exporter_materials_ready()["node-exporter.default"])
         since = len(self.events)
