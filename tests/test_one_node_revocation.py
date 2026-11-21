@@ -176,6 +176,22 @@ class Shutdown(unittest.TestCase):
     def observe(self, read=None):
         return one_node.observe_shutdown(self.kms, read or self.read, 0, 3)
 
+    def test_reason_accepts_the_printable_ascii_length_boundary(self):
+        document = dict(self.document, reason=" ~" + "x" * (admission.ADMISSION_REASON_LIMIT - 2))
+        self.path.write_text(json.dumps(document))
+        self.assertEqual(self.read(), document)
+
+    def test_reason_rejects_printable_unicode_and_ascii_controls(self):
+        for reason in ("révocation", "revoked\x7f", "revoked\n"):
+            with self.subTest(reason=reason):
+                self.path.write_text(json.dumps(dict(self.document, reason=reason)))
+                self.assertIsNone(self.read())
+
+    def test_reason_rejects_one_byte_over_the_limit(self):
+        reason = "x" * (admission.ADMISSION_REASON_LIMIT + 1)
+        self.path.write_text(json.dumps(dict(self.document, reason=reason)))
+        self.assertIsNone(self.read())
+
     def test_valid_admission_uses_configured_owner(self):
         self.path.write_text(json.dumps(self.document))
         self.assertEqual(self.read(), self.document)

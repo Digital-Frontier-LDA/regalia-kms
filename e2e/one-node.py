@@ -350,7 +350,8 @@ def non_serving_admission(path, manifest, previous):
                     lease_issued_at=admission.NEVER, requested_boottime_ms=0, **admission.NO_STATE,
                     serve_until_boottime_ms=0, mode="lease")
     reason = doc.get("reason") if isinstance(doc, dict) else None
-    if (not isinstance(reason, str) or not reason.strip() or not reason.isprintable()
+    if (not isinstance(reason, str) or not reason.strip() or len(reason) > admission.ADMISSION_REASON_LIMIT
+            or any(not " " <= char <= "~" for char in reason)
             or set(doc) != set(admission.FIELDS)
             or any(type(doc[k]) is not type(value) or doc[k] != value for k, value in expected.items())):
         return None
