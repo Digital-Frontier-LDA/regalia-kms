@@ -1625,11 +1625,12 @@ class OnQemuVerity(OnQemu):
         # MEASURED: no exporter socket on any address (a package-default start would show :9100 on the wildcard)
         self.assertEqual(state["listen"], "none",
                          "the exporter holds a listener with no per-host configuration: %r" % state)
-        # the /etc link is present (the factory copy) but its target on /var is absent: the dangling link that
-        # made build 8 fail. The guard is on /var (the persistent name), not /etc (always present)
+        # the /etc link is present (the factory copy). Its target on /var: the guard is on /var (the persistent
+        # name), not /etc (always present). On AC1's boot (v2-unconfigured) the target is absent (the dangling
+        # link that made build 8 fail); on the enrolment boot (v1) e2e-enrol writes it AFTER the condition was
+        # already evaluated, so the target is present even though the unit is still skipped. The etctarget
+        # assertion lives at the v2-unconfigured call site, not here.
         self.assertNotEqual(state["etclink"], "none", "no /etc link: the factory copy is missing: %r" % state)
-        self.assertEqual(state["etctarget"], "absent",
-                         "the /etc link resolves: the per-host file is on /var (the unit should have started): %r" % state)
         self.assertEqual(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
         self.assertNotEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
         self.assertEqual(units["prometheus-node-exporter.service"]["result"], "success",
@@ -1793,6 +1794,12 @@ class OnQemuVerity(OnQemu):
         unattended(self, said)
         self.proven(said, "a")
         self.started(said, exporter="skipped")
+        # AC1's own: the per-host file is genuinely absent (moved aside on /var), so the /etc link dangles.
+        # A mutant that removes the guard would start the unit here, and the etctarget line would still say
+        # "present" (the file is on /var from v1's enrolment) — the state line catches it, not this one.
+        self.assertEqual(exporter_state(said)["etctarget"], "absent",
+                         "the /etc link resolves: the per-host file is on /var (the unit should have started): %r"
+                         % exporter_state(said))
         # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
         # Read from the settled line (the report's own would say "starting": it is a job of multi-user.target):
         # the test's probe runs after the target's last job, where "running" is the only reading a healthy host
