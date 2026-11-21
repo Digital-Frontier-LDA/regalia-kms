@@ -1720,23 +1720,17 @@ class OnQemuVerity(OnQemu):
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
-        # the image's units on this boot, as main's v1 (c617e2402) asserts them: nothing else on the enrolment boot
-        # is asserted (started() is main's later boots'). The one addition of this bead (regalia-kms-r1s.17): the
-        # exporter is SKIPPED, by name — its per-host file is the package's own plain ARGS (main's fixture,
-        # --web.listen-address=127.0.0.1:9100, no --web.config.file), and the guard's ConditionPathExists keeps
-        # the unit held (inactive/dead/no, no restarts, no listener, failed-units=0, the journal the
+        # main's v1 (c617e2402) asserts no unit states on the enrolment boot: the per-host files (chrony.conf,
+        # node-exporter.default, the firewall ruleset, the audit config) are written by e2e-enrol AFTER
+        # multi-user.target is reached, so every ConditionPathExists-gated unit (chrony, the exporter, the
+        # shippers, nftables) has already been evaluated and skipped by the time e2e-enrol runs. started() is
+        # main's later boots' (v2-control, v5, v6, v9). The one addition of this bead (regalia-kms-r1s.17):
+        # the exporter is SKIPPED, by name — its per-host file is the package's own plain ARGS (main's fixture,
+        # --web.listen-address=127.0.0.1:9100, no --web.config.file), and the guard's ConditionPathExists
+        # keeps the unit held (inactive/dead/no, no restarts, no listener, failed-units=0, the journal the
         # condition line, UNFILTERED). (AC1's own boot is v2-unconfigured: the same disk with the file moved
         # aside, so the guard holds for its absence too.)
-        units = unit_states(said)
-        for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service", "chrony.service"):
-            self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
-        self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
-        self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
-        self.per_host_started(said)
-        self.assertRegex(said, r"REGALIA-E2E-FACTORY assert=yes")
-        self.assertRegex(said, r"REGALIA-E2E-APPARMOR enabled=Y regalia-kms=regalia-kms \(enforce\) etc-passwd=present")
-        self.assertRegex(said, r"REGALIA-E2E-CHRONYD confined=\S*chronyd\S* \(enforce\)")
-        self.exporter_skipped(said, units)
+        self.exporter_skipped(said, unit_states(said))
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
