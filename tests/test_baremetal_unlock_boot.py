@@ -1548,6 +1548,10 @@ class OnQemuVerity(OnQemu):
             "--web.listen-address=127.0.0.1:9100").encode() + b"\"\n"
         with open("%s/deploy/baremetal/node-exporter/web.yml" % os.getcwd(), "rb") as f:
             web_yml = f.read()
+        # the web.yml's /etc/regalia paths resolve to /var/lib/regalia-etc/regalia via the image's symlink,
+        # but the test's guest may not have the symlink set up (or the directory may not exist). Use the
+        # /var paths directly: the test writes the files there (var_write), so the exporter finds them
+        web_yml = web_yml.replace(b"/etc/regalia/node-exporter/", b"/var/lib/regalia-etc/regalia/node-exporter/")
         # the file names on the enrolment disk are what e2e-enrol and e2e-report expect (node-exporter.* for the
         # /var staging, monitoring-ca.pem and client.* for the probes' inputs, read from /mnt/enrol directly)
         self.exporter_materials = {"node-exporter.default": args, "node-exporter.web.yml": web_yml,
