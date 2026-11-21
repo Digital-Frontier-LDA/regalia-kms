@@ -22,8 +22,8 @@ GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA
      signature verifies under the token's key), refuses the same nonce again (409), and still refuses it after a restart
      (the spend is state, on disk, not memory)
   4  a refused survivor authorization (dx7.3): the owner's tool refuses to make one for the single-node chain, by name; one
-     made by hand and installed where admission reads it is refused by survivor.verify_authorization, and a's admission keeps
-     serving in mode single over its next renewals, never recovery
+     made by hand is refused by survivor.verify_authorization; admission refuses recovery when the lease runs out, then
+     returns to mode single and signs when renewal resumes
   5  owner revocation (dx7.4): the owner's revocation of a (owner.py sign-manifest, revoke.py import on a) is refused at
      import without the typed shutdown phrase, and committed with it (the phrase in a's sync trail); within ONE lease
      (lease.MAX_LIFETIME) the daemon refuses to sign and a's admission stops serving, its own lease refused naming the state
@@ -361,6 +361,36 @@ def observe_shutdown(kms, read_admission, started, lifetime):
     return denied, stopped
 
 
+def synthetic_survivor(tip, signer, now):
+    """Schema-valid negative fixture. The synthetic fence is not a claim about any real node."""
+    auth = {"schema": survivor.AUTH_SCHEMA, "node_id": "a", "quarantine_epoch": tip["epoch"],
+            "quarantine_digest": membership.digest(tip), "not_before": survivor._stamp(now),
+            "expires_at": survivor._stamp(now + 3600), "fenced": "synthetic fence for the single-node refusal test",
+            "scope": "full", "fence": {"method": "attested", "nodes": {
+                "synthetic-node": {"power_state": "unreachable", "read_at": survivor._stamp(now)}}}}
+    message = survivor.authorization_message(auth)      # validates the schema before signing
+    sig = {"party": membership.OWNER, "key": signer.public(), "sig": signer.sign(message).hex()}
+    membership.require(membership.counting_parties(tip, message, [sig], "survivor authorization") == {membership.OWNER},
+                       "the synthetic authorization must verify under the owner's key")
+    return {"authorization": auth, "signature": sig}
+
+
+def survivor_runtime_refusal(cluster, previous):
+    """Stop only the fixture lease issuer. Admission stays up and must write its recovery refusal."""
+    path = cluster.nodes["a"].run / "admission" / "admission.json"
+    reason = "recovery is refused under the %s profile" % membership.SINGLE_NODE
+
+    def refused():
+        doc = non_serving_admission(path, cluster.manifest, previous)
+        return doc is not None and reason in doc["reason"]
+
+    sh("systemctl", "stop", cluster.unit("a", "sync"))
+    try:
+        return until(refused, lease.MAX_LIFETIME + 30, 1) is True
+    finally:
+        cluster._run(cluster.nodes["a"], "sync")
+
+
 def scenario(cluster, kms):
     header("1  genesis: schema v5, topology single-node, the limits acknowledged")
     cluster.build()
@@ -449,32 +479,34 @@ def scenario(cluster, kms):
     ok(made is not None and "a survivor authorization is refused under the %s profile" % membership.SINGLE_NODE in made and not asked,
        "the owner's tool refuses to make a survivor authorization for the single-node chain, by name, before asking anything",
        {"refusal": made, "asked": asked})
-    now = int(time.time())
-    auth = {"schema": survivor.AUTH_SCHEMA, "node_id": "a", "quarantine_epoch": tip["epoch"], "quarantine_digest": membership.digest(tip),
-            "not_before": survivor._stamp(now), "expires_at": survivor._stamp(now + 3600), "fenced": "made by hand, past the tool",
-            "scope": "full", "fence": {"method": "attested", "nodes": {}}}
-    signer = cluster.owner_signer(0)
-    forged = {"authorization": auth, "signature": {"party": membership.OWNER, "key": signer.public(),
-                                                   "sig": signer.sign(survivor.AUTH_DOMAIN + membership.canonical(auth)).hex()}}
+    forged = synthetic_survivor(tip, cluster.owner_signer(0), int(time.time()))
     installed = cluster.nodes["a"].run / survivor.AUTH_FILE
     installed.write_text(json.dumps(forged))
     os.chmod(installed, 0o644)
     taken = refusal(survivor.verify_authorization, forged, tip, "a")
     ok(taken is not None and "a survivor authorization is refused under the %s profile" % membership.SINGLE_NODE in taken,
        "an owner-signed authorization made by hand is refused by survivor.verify_authorization, by name", taken)
-    before, seen = (cluster.lease("a") or {}).get("lease_issued_at"), set()
+    try:
+        previous = cluster.lease("a")
+        if not previous or previous.get("mode") != "single":
+            raise RuntimeError("a must hold a live self-lease before withholding renewal")
+        refused_at_runtime = survivor_runtime_refusal(cluster, previous)
+        seen = set()
 
-    def renewed_since():
-        doc = cluster.lease("a")
-        if doc:
-            seen.add(doc.get("mode"))                 # every admission file read meanwhile, by its mode
-        return doc if doc and doc.get("lease_issued_at") != before else None
-    renewed = until(renewed_since, lease.MAX_LIFETIME + 60, 1)
-    status, answer, _ = kms.sign(b"still one node")
-    ok(bool(renewed) and seen == {"single"} and status == 200,
-       "with it installed, a's admission renews in mode single (no file in any other mode meanwhile) and the daemon still serves",
-       {"admission": renewed, "modes": sorted(map(str, seen)), "sign": status})
-    installed.unlink()
+        def renewed_since():
+            doc = cluster.lease("a")
+            if doc:
+                seen.add(doc.get("mode"))
+            return doc if doc and doc.get("lease_issued_at") != previous["lease_issued_at"] else None
+
+        renewed = until(renewed_since, lease.MAX_LIFETIME + 60, 1)
+        status, answer, _ = kms.sign(b"still one node")
+        ok(refused_at_runtime and isinstance(renewed, dict) and seen == {"single"} and status == 200
+           and kms.verifies(b"still one node", answer),
+           "with renewal unavailable admission explicitly refuses recovery, then renews in mode single and signs",
+           {"recovery_refused": refused_at_runtime, "modes": sorted(map(str, seen)), "sign": status})
+    finally:
+        installed.unlink()
 
     header("5  owner revocation: the typed shutdown, and a stops within one lease")
     reason = "e2e: the owner revokes the only node"
