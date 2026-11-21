@@ -419,12 +419,13 @@ def scenario(cluster, kms):
        cluster.journal("a", "admission")[-600:])
     print("  MEASURED: the owner's revocation of the only node -> the daemon refuses after %.0f s, admission stops after %.0f s "
           "(MAX_LIFETIME %d s)" % (took, stop_took, lease.MAX_LIFETIME), flush=True)
-    # the first refusal after the commit: under epoch 2 no node is left to attest, so the verifier is refused before the
-    # state is read (fail-closed; the PA's ruling on #759, first one-node runs)
-    first_refusal = "the manifest leaves no node this peer could attest"
+    # sync's local lease-nonce rejects a revoked node before building its verifier. Require a's own refusal under the
+    # committed epoch, not an aggregate denial or a different peer's failure.
+    first_refusal = "the source refused: a may not serve under epoch 2: no lease"
     named = until(lambda: [e for e in admission_trail(cluster, "a") if e.get("event") == "admission-renew" and e.get("outcome") == "DENY"
-                           and e.get("epoch") == 2 and first_refusal in e.get("reason", "")], 60, 2)
-    ok(bool(named), "a's own lease is refused under epoch 2 (admission-renew DENY: %s)" % first_refusal, admission_trail(cluster, "a")[-3:])
+                           and e.get("peer") == "a" and e.get("epoch") == 2 and e.get("reason") == first_refusal], 60, 2)
+    ok(bool(named), "a's own lease is refused under epoch 2 (admission-renew DENY, peer a: %s)" % first_refusal,
+       admission_trail(cluster, "a")[-3:])
 
     header("6  not here yet: dx7.7 and dx7.8 extend this scenario")
     # TODO(regalia-kms-dx7.7): the owner-chain re-anchor and recovery (recount floor) on this one node, once that bead lands
