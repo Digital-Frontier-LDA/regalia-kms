@@ -248,8 +248,12 @@ def exporter_state(said):
 
 def exporter_probes(said):
     """The REGALIA-E2E-PROBE lines (the mTLS cases of the boot where the test's web.yml is staged) as
-    {name: "ok 200 14|refused ...|denied 403|..."}, or {}. "done" is the report's own end marker, dropped here."""
-    return {m.group(1): m.group(2) for m in re.finditer(r"REGALIA-E2E-PROBE (\S+) http=(.*)", said) if m.group(1) != "done"}
+    {name: "ok 200 14|refused ...|denied 403|..."}, or {}. "done" is the report's own end marker, dropped here.
+    The console is a tty (QEMU's -serial stdio), so the report's `> /dev/console` lines end in a carriage
+    return the raw capture keeps; it is stripped here, not in the report (the value the assertions read is the
+    probe's own word, and a trailing \\r is the console's, not the probe's)."""
+    return {m.group(1): m.group(2).rstrip("\r\n ") for m in re.finditer(r"REGALIA-E2E-PROBE (\S+) http=(.*)", said)
+            if m.group(1) != "done"}
 
 
 def esp_mount(said):
