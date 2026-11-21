@@ -1,0 +1,7 @@
+#!/bin/sh
+# Inside the test guest, once multi-user.target's own jobs are all through (this unit is after the target, and it
+# is the last job): the SETTLED state the report cannot read from inside the target (its own job holds
+# is-system-running at "starting"). The exporter's skip must leave the host "running" (regalia-kms-r1s.17, AC1:
+# on an otherwise healthy unconfigured image, systemctl is-system-running reports running). The line goes to the
+# console as the report's do; nothing here changes state (the report's power off, after it, ends the boot)
+echo "REGALIA-E2E-PROBE settled is-system-running=$(systemctl is-system-running 2>/dev/null || echo unknown)" > /dev/console

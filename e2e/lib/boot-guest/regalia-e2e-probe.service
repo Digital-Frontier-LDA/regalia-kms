@@ -1,0 +1,14 @@
+[Unit]
+Description=regalia e2e: the settled system state after every multi-user job has ended
+# The report's own is-system-running would read "starting": it is a oneshot of multi-user.target, so while IT is
+# running the target's job is not done (regalia-kms-r1s.17, AC1). This probe runs once the target's own units are
+# all through: its ExecStart is then the last job, and is-system-running settles to "running" once it itself has
+# ended (nothing else remains). Ordering only, it pulls nothing in
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/regalia/e2e-probe
+
+[Install]
+WantedBy=multi-user.target

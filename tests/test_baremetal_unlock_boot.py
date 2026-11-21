@@ -219,8 +219,12 @@ def boot_entry(said):
 
 def exporter_state(said):
     """The REGALIA-E2E-EXPORTER lines (regalia-kms-r1s.17) as {"state", "result", "restarts", "journal", "listen",
-    "etclink", "etctarget", "system_running"}, or None: the enabled unit's condition-skip, by name. A boot whose
-    report predates the line has None (an assertion on a verity boot is the test's own, not the report's)."""
+    "etclink", "etctarget", "failed_units", "settled"}, or None: the enabled unit's condition-skip, by name. The
+    journal is UNFILTERED (a negative check on it greps systemd's own lines for the failure's words). `settled`
+    is the REGALIA-E2E-PROBE settled line: the report is a job of multi-user.target and its own is-system-running
+    would read "starting", so the settled state comes from the test's probe that runs after the target's last job.
+    A boot whose report predates the lines has None or "" (an assertion on a verity boot is the test's own, not
+    the report's)."""
     unit = re.search(r"REGALIA-E2E-EXPORTER unit=(\S+) result=(\S+) restarts=(\S+)", said)
     if not unit:
         return None
@@ -233,9 +237,11 @@ def exporter_state(said):
         listen_only = re.search(r"REGALIA-E2E-EXPORTER listen=(.*)", said)
         listen = listen_only.group(1) if listen_only else ""
         etclink = etctarget = failed = ""
+    settled = re.search(r"REGALIA-E2E-PROBE settled is-system-running=(\S+)", said)
     return {"state": unit.group(1), "result": unit.group(2), "restarts": unit.group(3),
             "journal": found.group(1) if found else "", "listen": listen,
-            "etclink": etclink, "etctarget": etctarget, "failed_units": failed}
+            "etclink": etclink, "etctarget": etctarget, "failed_units": failed,
+            "settled": settled.group(1) if settled else ""}
 
 
 def exporter_probes(said):
@@ -324,23 +330,30 @@ class VerityReport(unittest.TestCase):
         fail on the line, not on a later PCR or the boot's outcome."""
         skipped = ("REGALIA-E2E-EXPORTER unit=inactive/dead/no result=success restarts=0\n"
                    "REGALIA-E2E-EXPORTER journal=none\n"
-                   "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=0\n")
+                   "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=0\n"
+                   "REGALIA-E2E-PROBE settled is-system-running=running\n")
         self.assertEqual(exporter_state(skipped), {"state": "inactive/dead/no", "result": "success", "restarts": "0",
                                                    "journal": "none", "listen": "none",
                                                    "etclink": "/var/lib/regalia-etc/default/prometheus-node-exporter",
-                                                   "etctarget": "absent", "failed_units": "0"})
-        # the build 8 shape (the failure this guard removes): resources, a restart, the environment file's name
+                                                   "etctarget": "absent", "failed_units": "0", "settled": "running"})
+        # the build 8 shape (the failure this guard removes): resources, a restart, the environment file's name,
+        # and systemd's own line for the failure in the UNFILTERED journal (a filtered capture would not hold it)
         failed = ("REGALIA-E2E-EXPORTER unit=activating/start-limit/no result=resources restarts=4\n"
-                  "REGALIA-E2E-EXPORTER journal=Failed to load environment files: No such file or directory|\n"
-                  "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=1\n")
+                  "REGALIA-E2E-EXPORTER journal=prometheus-node-exporter.service: Failed to load environment files: No such file or directory|prometheus-node-exporter.service: Failed with result 'resources'.\n"
+                  "REGALIA-E2E-EXPORTER listen=none etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=absent failed-units=1\n"
+                  "REGALIA-E2E-PROBE settled is-system-running=degraded\n")
         self.assertEqual(exporter_state(failed)["state"], "activating/start-limit/no")
         self.assertIn("Failed to load environment", exporter_state(failed)["journal"])
+        self.assertIn("Failed with result", exporter_state(failed)["journal"])
         self.assertEqual(exporter_state(failed)["failed_units"], "1")
+        self.assertEqual(exporter_state(failed)["settled"], "degraded")
         started = ("REGALIA-E2E-EXPORTER unit=active/running/yes result=success restarts=0\n"
                    "REGALIA-E2E-EXPORTER journal=none\n"
-                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present failed-units=0\n")
+                   "REGALIA-E2E-EXPORTER listen=192.0.2.10:9100 etclink=/var/lib/regalia-etc/default/prometheus-node-exporter etctarget=present failed-units=0\n"
+                   "REGALIA-E2E-PROBE settled is-system-running=running\n")
         self.assertEqual(exporter_state(started)["listen"], "192.0.2.10:9100")
         self.assertEqual(exporter_state(started)["etctarget"], "present")
+        self.assertEqual(exporter_state(started)["settled"], "running")
         self.assertIsNone(exporter_state("nothing"))
         # the probes: the configured boot's four cases, by name, with the report's own end marker dropped
         probes = ("REGALIA-E2E-PROBE trusted http=ok 200 14\n"
@@ -1544,23 +1557,26 @@ class OnQemuVerity(OnQemu):
         no_shell(self, said)
         return proof
 
-    def started(self, said, configured=True):
+    def started(self, said, exporter="none"):
         """The image's own units, enabled under /usr, ran: the factory /etc, the system users, AppArmor with the KMS's
         profile, chronyd, node_exporter, and the KMS's main process (started is what is shown, not serving: the test
         gives it no configuration). Not `systemctl is-enabled`: it counts links under /etc and /run only, and says
         "disabled" for a unit the image wants from /usr (measured on the first local run); started is the proof.
-        `configured` (regalia-kms-r1s.17): the per-host EnvironmentFile's written on /var, so the exporter started.
-        Without it (the unconfigured boots) the exporter is the other half of the proof: skipped, by name."""
+        `exporter` (regalia-kms-r1s.17): the per-host EnvironmentFile is on /var, so the exporter is configured
+        (active, its main process started) or skipped (its ConditionPathExists says no); on the enrolment boot its
+        file arrives after multi-user.target was reached, so it is neither (none): e2e-enrol writes it after the
+        exporter's condition was already evaluated, and it starts on the next boot (v2c-control)
+        (the GA ruling: every other unit's check runs on every boot, the exporter is excluded only there)."""
         units = unit_states(said)
         self.assertIn("REGALIA-E2E-FACTORY assert=yes", said)
         for unit in ("regalia-etc-factory.service", "systemd-sysusers.service", "apparmor.service"):
             self.assertEqual((units[unit]["active"], units[unit]["result"]), ("active", "success"), (unit, units[unit]))
         self.assertEqual(units["chrony.service"]["active"], "active", units["chrony.service"])
         self.assertGreater(units["chrony.service"]["started"], 0, units["chrony.service"])
-        if configured:
+        if exporter == "configured":
             self.assertEqual(units["prometheus-node-exporter.service"]["active"], "active", units["prometheus-node-exporter.service"])
             self.assertGreater(units["prometheus-node-exporter.service"]["started"], 0, units["prometheus-node-exporter.service"])
-        else:
+        elif exporter == "skipped":
             self.exporter_skipped(said, units)
         self.assertGreater(units["regalia-kms.service"]["started"], 0, "regalia-kms.service's main process never started")
         self.per_host_started(said)
@@ -1599,8 +1615,15 @@ class OnQemuVerity(OnQemu):
         # (the build-8 shape: start limit, result resources) would show up here
         self.assertEqual(state["failed_units"], "0",
                          "the unconfigured host has failed units (the exporter's skip should not degrade it): %r" % state)
-        print("boot proof: the unconfigured exporter is skipped, no listener, etctarget=%s, failed-units=%s" % (
-            state["etctarget"], state["failed_units"]), file=sys.stderr)
+        # AC1 as written: on an otherwise healthy unconfigured image, systemctl is-system-running reports running.
+        # Read from the settled line (the report's own would say "starting": it is a job of multi-user.target):
+        # the test's probe runs after the target's last job, where "running" is the only reading a healthy host
+        # leaves. A degraded host (the build-8 shape) names itself here, by name
+        self.assertEqual(state["settled"], "running",
+                         "the unconfigured host's settled state is not running (the exporter's skip should not "
+                         "degrade it): %r" % state)
+        print("boot proof: the unconfigured exporter is skipped, no listener, etctarget=%s, failed-units=%s, settled=%s" % (
+            state["etctarget"], state["failed_units"], state["settled"]), file=sys.stderr)
 
     def exporter_configured(self, said):
         """regalia-kms-r1s.17, AC2: with the per-host ARGS and the mutual-TLS web.yml staged, the exporter is active,
@@ -1681,11 +1704,14 @@ class OnQemuVerity(OnQemu):
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.proven(said, "a", entry=False)          # (the firmware's own removable-media entry: none was installed yet)
-        # the exporter and chrony are not active on this boot: e2e-enrol writes their /var files after multi-user.target
-        # was reached, so their ConditionPathExists was already evaluated (absent) before the files existed. They start
-        # on the next boot (v2c-control), where the exporter is CONFIGURED: its per-host ARGS and the production web.yml's
-        # mutual TLS, active on its configured listener only, and the metrics go out to the monitoring CA's client and to
-        # no other (the report's probe cases, by name). The enrolment disk stays attached for v2c's probes
+        # the image's units started on this boot, with the exporter EXCLUDED (GA ruling 2026-11-20: its per-host file
+        # is the only one of them that is not active on the enrolment boot — e2e-enrol writes it after multi-user.target
+        # was reached, so its ConditionPathExists was already evaluated (absent); it starts on the next boot,
+        # v2c-control, where it is CONFIGURED: its per-host ARGS and the production web.yml's mutual TLS, active on its
+        # configured listener only, and the metrics go out to the monitoring CA's client and to no other (the report's
+        # probe cases, by name). The enrolment disk stays attached for v2c's probes. Every OTHER unit is asserted here:
+        # factory, sysusers, apparmor, chrony, the KMS, per-host, AppArmor enforce, confined chronyd)
+        self.started(said)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
         def text(name):
             with open("%s/%s" % (mnt, name)) as f:
@@ -1746,7 +1772,7 @@ class OnQemuVerity(OnQemu):
         said = self.boot("v2-unconfigured", credentials, nvram="host")
         unattended(self, said)
         self.proven(said, "a")
-        self.started(said, configured=False)
+        self.started(said, exporter="skipped")
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
         # boot v2c, THE CONTROL (AC2): the per-host file back, unattended through a peer, from the installer's firmware
@@ -1759,7 +1785,7 @@ class OnQemuVerity(OnQemu):
         said = self.boot("v2c-control", credentials, nvram="host")
         unattended(self, said)
         self.proven(said, "a")
-        self.started(said)
+        self.started(said, exporter="configured")
         self.exporter_configured(said)
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
