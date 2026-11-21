@@ -398,8 +398,8 @@ def scenario(cluster, kms):
     try:
         cluster.revoke_by_owner("a", "a", "REVOKED_STOLEN", reason)
         unphrased = None
-    except subprocess.CalledProcessError as error:
-        unphrased = (error.stderr or "") + (error.stdout or "")
+    except RuntimeError as error:                     # the fixture's sh(): the unit's exit and its output
+        unphrased = str(error)
     denied = [e for e in cluster.trail("a") if e.get("event") == "revoke-commit" and e.get("outcome") == "DENY"]
     ok(unphrased is not None and cluster.held_epoch("a") == 1 and any("shutdown phrase" in e.get("reason", "") for e in denied),
        "without the typed shutdown phrase the import is refused, and a stays at epoch 1", {"denied": denied[-1:], "said": (unphrased or "")[-300:]})
