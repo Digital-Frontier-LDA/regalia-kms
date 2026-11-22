@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "scope": "Finite hosted tooling observation for adoption B only; no review, authority, coverage or product qualification.",
+  "observedDate": "2026-11-22",
+  "pr": 765,
+  "head": "321bbba167a6a95295bc49b5ccea4aacf0a5f57d",
+  "evaluatedCommit": "2c57082fc468b1516a6d3d0167719dbfac18ac68",
+  "evaluatedTree": "2fb66dc31a5c56180e8f8c082a16b14364ad92e7",
+  "parents": [
+    "3378b31fa3d7bc46d5782ce654c00eeb446df3b2",
+    "321bbba167a6a95295bc49b5ccea4aacf0a5f57d"
+  ],
+  "run": 45008483298,
+  "attempt": 1,
+  "event": "pull_request",
+  "draft": false,
+  "conclusion": "success",
+  "runUrl": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/45008483298",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "productSourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "toolingSourceRevision": "c6f7f72c0a039d28ddb607198ec6c0d615c29884",
+  "toolingSourceTree": "c02d38ea4a0aad7d2fbe9d84527f19b96749b5d8",
+  "build": {
+    "job": 137165275641,
+    "durationSeconds": 918.0,
+    "timeoutSeconds": 1200,
+    "tail": [
+      {
+        "completed_at": "2026-11-22T09:52:49Z",
+        "conclusion": "success",
+        "durationSeconds": 0.0,
+        "name": "Reserve OpenSpec product source directory",
+        "number": 18,
+        "started_at": "2026-11-22T09:52:49Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:51Z",
+        "conclusion": "success",
+        "durationSeconds": 2.0,
+        "name": "Fetch immutable OpenSpec product source",
+        "number": 19,
+        "started_at": "2026-11-22T09:52:49Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:51Z",
+        "conclusion": "success",
+        "durationSeconds": 0.0,
+        "name": "Verify local OpenSpec product source",
+        "number": 20,
+        "started_at": "2026-11-22T09:52:51Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:57Z",
+        "conclusion": "success",
+        "durationSeconds": 6.0,
+        "name": "Select pinned Python for OpenSpec checks",
+        "number": 21,
+        "started_at": "2026-11-22T09:52:51Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:57Z",
+        "conclusion": "success",
+        "durationSeconds": 0.0,
+        "name": "Read the optional OpenSpec tooling declaration",
+        "number": 22,
+        "started_at": "2026-11-22T09:52:57Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:57Z",
+        "conclusion": "success",
+        "durationSeconds": 0.0,
+        "name": "Reserve OpenSpec tooling source directory",
+        "number": 23,
+        "started_at": "2026-11-22T09:52:57Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:58Z",
+        "conclusion": "success",
+        "durationSeconds": 1.0,
+        "name": "Fetch immutable OpenSpec tooling source",
+        "number": 24,
+        "started_at": "2026-11-22T09:52:57Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:52:58Z",
+        "conclusion": "success",
+        "durationSeconds": 0.0,
+        "name": "Verify local OpenSpec tooling source",
+        "number": 25,
+        "started_at": "2026-11-22T09:52:58Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:53:02Z",
+        "conclusion": "success",
+        "durationSeconds": 4.0,
+        "name": "Install pinned OpenSpec toolchain",
+        "number": 26,
+        "started_at": "2026-11-22T09:52:58Z",
+        "status": "completed"
+      },
+      {
+        "completed_at": "2026-11-22T09:53:09Z",
+        "conclusion": "success",
+        "durationSeconds": 7.0,
+        "name": "Validate OpenSpec syntax and reference integrity",
+        "number": 27,
+        "started_at": "2026-11-22T09:53:02Z",
+        "status": "completed"
+      }
+    ]
+  },
+  "gate": {
+    "job": 137171945600,
+    "needs": {
+      "build-test": {
+        "result": "success",
+        "outputs": {}
+      },
+      "e2e-swtpm": {
+        "result": "success",
+        "outputs": {}
+      },
+      "e2e-netns-disk": {
+        "result": "success",
+        "outputs": {}
+      },
+      "e2e-sandbox-policy": {
+        "result": "success",
+        "outputs": {}
+      },
+      "known-polkit-rules-debian13": {
+        "result": "success",
+        "outputs": {}
+      },
+      "govulncheck": {
+        "result": "success",
+        "outputs": {}
+      },
+      "pkcs11-e2e": {
+        "result": "success",
+        "outputs": {}
+      },
+      "privileged-and-fuzz": {
+        "result": "success",
+        "outputs": {}
+      },
+      "cosmos-node": {
+        "result": "success",
+        "outputs": {}
+      },
+      "unlock-boot-qemu": {
+        "result": "success",
+        "outputs": {}
+      },
+      "verity-boot-qemu": {
+        "result": "success",
+        "outputs": {}
+      },
+      "initrd-reproducible": {
+        "result": "success",
+        "outputs": {}
+      },
+      "rootfs-reproducible": {
+        "result": "success",
+        "outputs": {}
+      },
+      "initrd-reproducible-debian": {
+        "result": "success",
+        "outputs": {}
+      },
+      "initrd-reproducible-compare": {
+        "result": "success",
+        "outputs": {}
+      },
+      "peer-unlock-swtpm": {
+        "result": "success",
+        "outputs": {}
+      },
+      "pcrlock-luks-swtpm": {
+        "result": "success",
+        "outputs": {}
+      },
+      "uki-build": {
+        "result": "success",
+        "outputs": {}
+      }
+    },
+    "draft": false
+  },
+  "checks": {
+    "strictItems": 35,
+    "referenceTests": 42,
+    "isolationTests": 5,
+    "nodeWiringTests": 23,
+    "referenceInputHashes": 102,
+    "requirements": 162,
+    "scenarios": 444,
+    "canonicalCases": 463,
+    "allJobExecutions": 20,
+    "allJobsSucceeded": true
+  },
+  "runtime": {
+    "python": "3.14.7",
+    "node": "24.22.3",
+    "npm": "11.19.1",
+    "openspec": "2.1.1",
+    "nodeArchiveSha256": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb",
+    "openspecPackageIntegrity": "sha512-GQv1xU4uLrTVJ6MfOKNIxo/BgEk+e8C/XBmjTfzd/W3LNh4v2UMAsfTdn8mjHdjDA/KjfGstwUhZedQW4hdcZQ=="
+  },
+  "toolFilesSha256": {
+    ".github/workflows/ci.yml": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+    "tools/check_openspec_references.py": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+    "tests/test_check_openspec_references.py": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+    "tools/openspec-ci/plan-tooling-source.py": "fdc8da2d88fa503fb1affb64c0b22c859164347d0609f7b0fcb8718592265f12",
+    "tools/openspec-ci/check-source.sh": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c",
+    "tools/openspec-ci/check-result.py": "03b0204f9398f542c577de9440555da1c3c9383641eaf59903f5bbfb0e16757e",
+    "tools/openspec-ci/install-runtime.sh": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760",
+    "tools/openspec-ci/package.json": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621",
+    "tools/openspec-ci/package-lock.json": "73308b1729ed26821ebbb86f60348e94a03c3206d511cca8c766ee78e8f0acca",
+    "tools/openspec-ci/check-lock.cjs": "8bd521601116fcab317a854853e5fd972e52d61faee2b0a59155339ce01cd594",
+    "tools/openspec-ci/wiring.test.cjs": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895"
+  },
+  "logSha256": {
+    "build-test.log": "169fc45a1762bf0b0800d5c824bacef1bc03886382bf41784d1cdf9cb5f73411",
+    "ci-gate.log": "6c2c049d19fb29bfcb1bb0a61122dbb0230a09c17bd60702916785905e7b162a"
+  },
+  "reviewApproval": false,
+  "referenceIntegrity": true,
+  "verificationAuthority": "not-assessed",
+  "coverageComplete": false,
+  "recordPolicy": "This record is added after the observed head. It does not claim execution of its own later documentation commit. Historical 9115/3378 observations and authoring executionEvidence remain unchanged."
+}

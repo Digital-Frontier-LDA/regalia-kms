@@ -1,0 +1,605 @@
+{
+  "schemaVersion": 1,
+  "sourceDomain": "tooling",
+  "owner": "tooling",
+  "sourceRevision": "c6f7f72c0a039d28ddb607198ec6c0d615c29884",
+  "sourceTree": "c02d38ea4a0aad7d2fbe9d84527f19b96749b5d8",
+  "files": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1"
+    },
+    {
+      "path": "tests/test_check_openspec_references.py",
+      "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c"
+    },
+    {
+      "path": "tools/check_openspec_references.py",
+      "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e"
+    },
+    {
+      "path": "tools/openspec-ci/check-lock.cjs",
+      "fileSha256": "8bd521601116fcab317a854853e5fd972e52d61faee2b0a59155339ce01cd594"
+    },
+    {
+      "path": "tools/openspec-ci/check-result.py",
+      "fileSha256": "03b0204f9398f542c577de9440555da1c3c9383641eaf59903f5bbfb0e16757e"
+    },
+    {
+      "path": "tools/openspec-ci/check-source.sh",
+      "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c"
+    },
+    {
+      "path": "tools/openspec-ci/install-runtime.sh",
+      "fileSha256": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760"
+    },
+    {
+      "path": "tools/openspec-ci/package-lock.json",
+      "fileSha256": "73308b1729ed26821ebbb86f60348e94a03c3206d511cca8c766ee78e8f0acca"
+    },
+    {
+      "path": "tools/openspec-ci/package.json",
+      "fileSha256": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621"
+    },
+    {
+      "path": "tools/openspec-ci/plan-tooling-source.py",
+      "fileSha256": "fdc8da2d88fa503fb1affb64c0b22c859164347d0609f7b0fcb8718592265f12"
+    },
+    {
+      "path": "tools/openspec-ci/wiring.test.cjs",
+      "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895"
+    }
+  ],
+  "requirements": [
+    {
+      "id": "KMS-CI-009",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Validate OpenSpec reference integrity",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 773,
+          "symbol": "main",
+          "supports": "Disables shortened long options for the CLI.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)",
+          "lineSha256": "d8245733ee67dafa18136d6c475c6f8a21280ac8c228c06ba5b6306e35525b1c"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 151,
+          "symbol": "Files.json",
+          "supports": "Uses strict constant and duplicate-key hooks for checked input.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            return json.loads(self.read(name), object_pairs_hook=unique_pairs, parse_constant=reject_constant)",
+          "lineSha256": "a6b27e086c3ff86548a0e35645791a85326a94911915a8a64ff826e749a4d5e4"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 318,
+          "symbol": "ReferenceChecker.check_specs",
+          "supports": "Checks main and baseline-delta identities together.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            require(main == delta, \"MAIN_DELTA_IDENTITY_MISMATCH\", cap)",
+          "lineSha256": "ead5bdf59d1a108879c21e09457c64dc883ccbbabf2d7d58af3dfca0497aeba9"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 769,
+          "symbol": "boundary",
+          "supports": "Sets authority and coverage fields without qualification.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    return {\"verificationAuthority\": \"not-assessed\", \"coverageComplete\": False}",
+          "lineSha256": "22bf9ca11951518f55fa8a6737fbab7b107add79242574457cf238242fa1ea9b"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 792,
+          "symbol": "main",
+          "supports": "Binds the JSON integrity result to the checked exit status.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    return 0 if result[\"referenceIntegrity\"] else 1",
+          "lineSha256": "775e5b510406e7a6cf12b37f466294a9e188ca14d03ee5c929eb4ddf8b15591d"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 174,
+          "symbol": "ReferenceIntegrity.test_reference_integrity_has_no_authority",
+          "supports": "Checks verification authority on a valid fixture.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.assertEqual(result[\"verificationAuthority\"], \"not-assessed\")",
+          "lineSha256": "1383f27acfaa11b8bbba43c7c9e26448059184fb1a5bc6fa4f372ce85cf9e71c"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 186,
+          "symbol": "ReferenceIntegrity.test_scenario_must_belong_to_named_requirement",
+          "supports": "Expects the wrong-requirement scenario refusal.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.rejected(\"SCENARIO_NOT_UNDER_REQUIREMENT\")",
+          "lineSha256": "4f2e8cd050876d03c21196f72adf1e95b38ff3769f83993125d4306d6a138b88"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 323,
+          "symbol": "ReferenceIntegrity.test_non_finite_json_constants_are_refused_in_opaque_authoring_metadata",
+          "supports": "Rejects nonfinite constants also in rationale metadata.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "                    self.rejected(\"INVALID_JSON_CONSTANT\")",
+          "lineSha256": "66875fc5ec8b52e605e9e7156fb3886fb0444e0b908ec647640251a7bbf0d552"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 374,
+          "symbol": "ReferenceEntrypoint.test_help_is_text_and_does_not_access_inputs_or_git",
+          "supports": "Checks the help path does not invoke the instrumented Git command.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "                    self.assertFalse(marker.exists())",
+          "lineSha256": "539344a7a69476e827fd9a2d54db2c0e421993967c31ecf2188ef93113fde0b5"
+        }
+      ],
+      "rationale": "Frozen source and focused assertions trace local reference checks and CLI behavior. They do not qualify the evidence in input records or establish discovery completeness.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-010",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Enforce the finite OpenSpec checks in build-test",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 260,
+          "symbol": "build-test.openspec-checks",
+          "supports": "Makes required command and piped reference failures fail the check step.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "          set -euo pipefail",
+          "lineSha256": "b59ebfa511328c02df3dede32efbef4258b32fd3b735083046107f6e9ba82602"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 270,
+          "symbol": "build-test.openspec-checks",
+          "supports": "Runs strict validation on main specs and active changes.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "          \"$node\" \"$cli\" validate --all --strict --no-interactive --json",
+          "lineSha256": "8fefef72563570a9e16cbe4bb5f1ae6d1deabfe1e79b11be12c37d59218cf32d"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 271,
+          "symbol": "build-test.openspec-checks",
+          "supports": "Runs the focused checker test file.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "          python3 -BEs -m unittest discover -v -s tests -p test_check_openspec_references.py",
+          "lineSha256": "a726d36b209ee0d13c5b9787c362723a6505c1dcd0ff09efa2168deba1fe9395"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 289,
+          "symbol": "build-test.openspec-checks",
+          "supports": "Runs the reference checker with the pinned product input and retains its JSON.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "            --source-revision \"$OPENSPEC_PRODUCT_REVISION\" \"${tooling_args[@]}\" | tee \"$runtime/references.json\"",
+          "lineSha256": "ca4f96da98b1ef0a221ea17336f7ca40e351e6a3cfc9ca24d196d6e3691224a4"
+        },
+        {
+          "path": "tools/openspec-ci/check-source.sh",
+          "line": 45,
+          "symbol": "verify and verify-tooling",
+          "supports": "Requires the declared commit object to be locally available before use.",
+          "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c",
+          "text": "        kind=\"$(local_git -C \"$source_path\" cat-file -t \"$revision\")\" || fail \"required ${domain} object is not a locally available commit\"",
+          "lineSha256": "785051daee7ff32af2c1211e88293d7e2a1ef6bca309a9574afa003a74f3c47d"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 43,
+          "symbol": "required tail uses the immutable product checkout and preserves aggregate participation",
+          "supports": "Asserts the aggregate still depends on build-test.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.ok(workflow.jobs['ci-gate'].needs.includes('build-test'));",
+          "lineSha256": "2037ad447188d8e78caed941c605ef5bebe37aa57d9a129e1465a76da49fbc30"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 62,
+          "symbol": "required tail uses the immutable product checkout and preserves aggregate participation",
+          "supports": "Asserts the actual workflow pin and product tree check.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.equal(actual[2].run, 'bash tools/openspec-ci/check-source.sh verify ' + revision + ' ' + tree);",
+          "lineSha256": "593173958fa970e094a07e593a785a16192b922c46e4ddffc444996f9e5b354a"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 158,
+          "symbol": "actual check step runs strict validation, focused tests and the reference envelope in order",
+          "supports": "Checks the actual extracted shell-body phase sequence with command doubles.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.deepEqual(trace, phases, 'missing or reordered required check');",
+          "lineSha256": "3672df4c17a02bf17d5aa1ff90e77b51bc6bb9c5de3c90f9d96f329bccd4ab61"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 165,
+          "symbol": "actual check step fails closed when a phase fails",
+          "supports": "Checks subsequent phases stop after an injected strict, test, or reference failure.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "        assert.deepEqual(trace, phases.slice(0, phases.indexOf(phase) + 1));",
+          "lineSha256": "9aadc29151eb163a0ff08715b245792cda3928b9a89b40cc7b3c2dacea2d8ee4"
+        }
+      ],
+      "rationale": "Workflow declarations and shell-body assertions describe required local behavior. The earlier executed hosted tail remains recorded only at its own revision.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-011",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Resolve an explicitly pinned tooling authoring domain",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 171,
+          "symbol": "tooling_declaration",
+          "supports": "Requires exact integer schema version 1 for this shard.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    require_schema_v1(doc, TOOLING_AUTHORING)",
+          "lineSha256": "57f742db47cbb7cc381d3d18d5f998b7059396a92b305678efb6d641e85cc9b1"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 398,
+          "symbol": "ReferenceChecker.check_tooling_authoring",
+          "supports": "Matches declared file digests against bytes read from the tooling commit.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            digest(data, expected, \"TOOLING_FILE_HASH_MISMATCH\", path)",
+          "lineSha256": "10220da4330cdae563c72d50a0db9cad322aeca18e9afc6eaf7e06b81be7a231"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 408,
+          "symbol": "ReferenceChecker.check_tooling_authoring",
+          "supports": "Restricts the tooling join to entries of the existing runtime-owned delivery capability.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "                    and self.requirements.get(ident) == (TOOLING_CAPABILITY, row[\"title\"], \"runtime\"),",
+          "lineSha256": "15a306b64acd33e7d455f656e9ede8c6ec8626ea52a4a3933c9f9ac2f68d73d0"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 429,
+          "symbol": "ReferenceChecker.check_tooling_authoring",
+          "supports": "Checks tooling file line text and hash using the declared immutable blob.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "                    self.anchors(data, {\"anchors\": [{key: ref[key] for key in (\"line\", \"text\", \"lineSha256\")}]}, path)",
+          "lineSha256": "d7f901cb7b66d2d9ff319975c0a8eb0c83c648f3a69d7238ed327afe5ff621b9"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 749,
+          "symbol": "ReferenceChecker.check",
+          "supports": "Rejects partial adoption of the required IDs.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            require(adopted == TOOLING_IDS, \"TOOLING_REQUIREMENT_SET\", TOOLING_AUTHORING)",
+          "lineSha256": "80d9693b8916e2ffd7963aa88c27ee777d81f3bce1716f2aa1ace6e1c9a576be"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 754,
+          "symbol": "ReferenceChecker.check",
+          "supports": "Binds the explicit revision to the declared tooling commit.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            require(revision == tooling[\"sourceRevision\"], \"TOOLING_SOURCE_PIN_MISMATCH\", TOOLING_AUTHORING)",
+          "lineSha256": "5aa8e859a3af70382ea3ae6b1ff75df64e3e9d56a187de546e8d3c72f1861178"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 756,
+          "symbol": "ReferenceChecker.check",
+          "supports": "Binds the resolved local commit to the declared tooling tree.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "            require(self.tooling.tree == tooling[\"sourceTree\"], \"TOOLING_SOURCE_TREE_MISMATCH\", TOOLING_AUTHORING)",
+          "lineSha256": "e70beeb9b7420e4930d941a701ebee4c11aa66909549826903e2636802f669c8"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 782,
+          "symbol": "main",
+          "supports": "Rejects a partial optional pair as usage before checking.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "        parser.error(\"--tooling-source-repo and --tooling-source-revision must be supplied together\")",
+          "lineSha256": "f893ae455b11af78f4fc544520dee865a546f799862a712ce2972eaec266281c"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 401,
+          "symbol": "ReferenceEntrypoint.test_tooling_pair_usage_and_exact_names",
+          "supports": "Asserts the partial-pair diagnostic within the usage-error check.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "                    self.assertIn(\"must be supplied together\", result.stderr)",
+          "lineSha256": "2ef6ea38b475a9ae43bfd3da15e7b07928d9cc3a0978c46f83443565e139ae1d"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 558,
+          "symbol": "ToolingDomain.test_enabled_pair_uses_bound_blob_not_product_or_worktree_bytes",
+          "supports": "Checks the returned tooling tree even when the tooling worktree differs.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.assertEqual(payload[\"toolingSourceTree\"], self.tree)",
+          "lineSha256": "29f0cec8b459553dcb7c878023ad90bbcb738f3ad1683f258c70aaa5a3cd4c84"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 565,
+          "symbol": "ToolingDomain.test_enabled_pair_uses_bound_blob_not_product_or_worktree_bytes",
+          "supports": "Rejects a same-path hash from the product domain.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.refuses(\"TOOLING_FILE_HASH_MISMATCH\")",
+          "lineSha256": "8d2cb3811778c5d1c7302a149fd2ea6df5dfa5b82779c6c893fa050a53ebaa09"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 572,
+          "symbol": "ToolingDomain.test_checkout_root_and_linked_worktree",
+          "supports": "Accepts a checked linked-worktree root.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.assertEqual(self.run_check(repo=linked)[0], 0)",
+          "lineSha256": "76e9123993d762e176068a99e3c3a1902aca22cfca9429040b0fdc166feb3ccb"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 544,
+          "symbol": "ToolingDomain.refuses",
+          "supports": "Asserts the checked refusal code for the explicit negative fixture calls.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.assertEqual(payload[\"error\"][\"code\"], code, payload)",
+          "lineSha256": "3754717c5f2d6bded615af51be1ea45f18d9c0174c34abc5f810f17985dfebaa"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 651,
+          "symbol": "ToolingDomain.test_tooling_declaration_and_closed_authoring_bindings",
+          "supports": "Checks table-driven failures for scope, version, identity, hash and anchor changes.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "                self.refuses(code)",
+          "lineSha256": "c4cb729fe375402663217ec530047d43b563a225fe618503a89cfc29bc628af6"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 660,
+          "symbol": "ToolingDomain.test_adopted_ids_require_shard_and_reject_legacy_claim",
+          "supports": "Rejects an otherwise legacy-shaped authoring claim for a tooling ID.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.refuses(\"TOOLING_LEGACY_AUTHORING\")",
+          "lineSha256": "555280f62f4865db0dafb393bcdd39da0ab0a947baaf01daf95692f8881ad5d5"
+        },
+        {
+          "path": "tests/test_check_openspec_references.py",
+          "line": 662,
+          "symbol": "ToolingDomain.test_adopted_ids_require_shard_and_reject_legacy_claim",
+          "supports": "Rejects a baseline containing the tooling IDs without the shard or pair.",
+          "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c",
+          "text": "        self.refuses(\"TOOLING_DOMAIN_REQUIRED\", use_pair=False)",
+          "lineSha256": "3fe6d35463ddfe00af2aae0f8db43e1908109bf4784097c18e4352d15a7a4b3c"
+        }
+      ],
+      "rationale": "The local CLI, Git reader, and fixture assertions establish the intended reference jurisdiction. They do not authenticate a requester, authorize a proof, or change the product inventory.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-012",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Prepare immutable tooling source for reference checks",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "tools/openspec-ci/plan-tooling-source.py",
+          "line": 10,
+          "symbol": "main",
+          "supports": "Validates the declaration before emitting checkout coordinates.",
+          "fileSha256": "fdc8da2d88fa503fb1affb64c0b22c859164347d0609f7b0fcb8718592265f12",
+          "text": "        doc = checker[\"tooling_declaration\"](checker[\"Files\"](snapshot))",
+          "lineSha256": "819ba7c4c5b712acb0ccef160e71fa568b3729fb8df7e9a9c34b98900abcd189"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 226,
+          "symbol": "build-test.openspec-tooling-checkout",
+          "supports": "Makes the separate checkout conditional on tooling declaration presence.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "        if: steps.openspec-tooling-plan.outputs.present == 'true'",
+          "lineSha256": "f9d31e288bdfddeacecc79c78d7274f4c757790a76755bc3b494d606d696f1ab"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 230,
+          "symbol": "build-test.openspec-tooling-checkout",
+          "supports": "Selects the declared commit in the same repository checkout step.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "          ref: ${{ steps.openspec-tooling-plan.outputs.revision }}",
+          "lineSha256": "a331e2eb02691b44faa08521d74eb1b5d91a9bb609e4d4c8bfdf77a965576218"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 236,
+          "symbol": "build-test.openspec-tooling-checkout",
+          "supports": "Keeps credentials out of the extra checkout after preparation.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "          persist-credentials: false",
+          "lineSha256": "c5b6e30a9485fed934bb3e037506a78bb2dfa6c0098610d3ff88d859c64e0b58"
+        },
+        {
+          "path": "tools/openspec-ci/check-source.sh",
+          "line": 27,
+          "symbol": "reserve and reserve-tooling",
+          "supports": "Refuses existing checkout paths including dangling symlinks.",
+          "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c",
+          "text": "        if [[ -e \"$source_path\" || -L \"$source_path\" ]]; then",
+          "lineSha256": "0b0568a9848d39a110db7084d87f0d5570e93af046c29d4cb738258511a60a9a"
+        },
+        {
+          "path": "tools/openspec-ci/check-source.sh",
+          "line": 37,
+          "symbol": "verify and verify-tooling",
+          "supports": "Checks that the primary analyzed revision did not drift.",
+          "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c",
+          "text": "        [[ \"$primary_head\" == \"$GITHUB_SHA\" ]] ||",
+          "lineSha256": "0ee8da7c240d2e3294a13cf54cad02e55480b498da08840f6d8973ef36ef31ed"
+        },
+        {
+          "path": "tools/openspec-ci/check-source.sh",
+          "line": 49,
+          "symbol": "verify and verify-tooling",
+          "supports": "Asserts exact tree identity in preflight.",
+          "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c",
+          "text": "        [[ \"$source_tree\" == \"$tree\" ]] ||",
+          "lineSha256": "3632820a103366793dd1cc5709140bfa36ad05d26402b090df52dbecc8c64ed7"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 278,
+          "symbol": "build-test.openspec-checks",
+          "supports": "Passes the separate local tooling checkout only on the enabled branch.",
+          "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1",
+          "text": "              tooling_args=(--tooling-source-repo \"$GITHUB_WORKSPACE/.openspec-tooling-source\"",
+          "lineSha256": "d1d0b4b7a568ab5d77040e04addb31d7bf282fed5a7a024a305f4a0c6b875d4f"
+        },
+        {
+          "path": "tools/openspec-ci/check-result.py",
+          "line": 22,
+          "symbol": "reference result guard",
+          "supports": "Rejects tool identity mismatch or unexpected extra tooling keys in legacy mode.",
+          "fileSha256": "03b0204f9398f542c577de9440555da1c3c9383641eaf59903f5bbfb0e16757e",
+          "text": "if observed != tooling:",
+          "lineSha256": "21e994bd73d607d043f5b669fd45698d4d8ff725f380c99c80dd3f2599e3c5dc"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 68,
+          "symbol": "required tail uses the immutable product checkout and preserves aggregate participation",
+          "supports": "Compares the exact tooling checkout binding and policy together.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.deepEqual(actual[6].with, {",
+          "lineSha256": "933b7adf23b641e2af1464015bbfcdffb2205c2b587d4194bdb10b7f3013f379"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 274,
+          "symbol": "enabled check passes the exact tooling pair and propagates reference and envelope failures",
+          "supports": "Checks enabled required-phase order and stops on reference or envelope failure.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "        assert.deepEqual(trace, phase ? phases.slice(0, phases.indexOf(phase) + 1) : phases);",
+          "lineSha256": "bf86fcd33b6ed734daaaf73da33d7a4177baa2c0bab1b19a6a4adacf8cdcfbd0"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 287,
+          "symbol": "check body refuses missing or inconsistent tooling preparation outputs",
+          "supports": "Asserts that inconsistent outputs prevent the checker invocation.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "        assert.deepEqual(trace, phases.slice(0, 3), 'checker must not receive an unverified tooling pair');",
+          "lineSha256": "242d86b71a77572f5ed3a29e048fc62c110ee30015134e97a064c3988c0e8842"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 306,
+          "symbol": "actual plan body emits only a validated pin, and refuses invalid or symlinked records",
+          "supports": "Checks exact enabled-plan outputs; the same test covers absence and malformed inputs.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.equal(fs.readFileSync(output, 'utf8'), `present=true\\nrevision=${revision}\\ntree=${tree}\\n`);",
+          "lineSha256": "14f7c06869e9d7c064b8b17612cf6d389d8a968bad887468dd95f956019553aa"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 363,
+          "symbol": "real independent checkouts pass preflight and tooling scripts refuse collisions or wrong inputs",
+          "supports": "Checks the preflight on the independent local tooling checkout.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.equal(verify(toolCommit, toolTree).status, 0);",
+          "lineSha256": "9094938c52bfaf4ca7bcaf9931cc3e67e64ada0bb7edf7c3c6edd6bbeb349460"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 377,
+          "symbol": "real independent checkouts pass preflight and tooling scripts refuse collisions or wrong inputs",
+          "supports": "Checks the missing local object diagnostic.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "    assert.match(missingObject.stderr, /required tooling object is not a locally available commit/);",
+          "lineSha256": "f73e71aa5c3967eddc4a0d389c01d8f38b8a9813f46fb3957f631497ad377823"
+        },
+        {
+          "path": "tools/openspec-ci/wiring.test.cjs",
+          "line": 395,
+          "symbol": "actual result guard binds both tooling fields and refuses extra fields in legacy mode",
+          "supports": "Checks mismatched envelope tooling identities and unexpected legacy additions.",
+          "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895",
+          "text": "        if (expected) assert.match(run.stderr, /required tooling pin/);",
+          "lineSha256": "46d4a1c9d23ba64ca2c805b0e477ee815c55d4f07b78cb3b8cba3e83dd725651"
+        }
+      ],
+      "rationale": "Actual wiring and shell checks are anchored in A. Fresh hosted execution with the adopted shard, independent review and timing acceptance remain open.",
+      "executionEvidence": [],
+      "beads": []
+    }
+  ],
+  "sourceAreas": [
+    {
+      "paths": [
+        "tools/check_openspec_references.py",
+        "tests/test_check_openspec_references.py"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Reference checker input, bounded source join, and focused CLI and Git fixture assertions."
+    },
+    {
+      "paths": [
+        ".github/workflows/ci.yml",
+        "tools/openspec-ci/check-source.sh",
+        "tools/openspec-ci/plan-tooling-source.py",
+        "tools/openspec-ci/check-result.py",
+        "tools/openspec-ci/wiring.test.cjs"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Required build-test wiring, local immutable source preparation, reference envelope, and focused shell/wiring assertions."
+    },
+    {
+      "paths": [
+        "tools/openspec-ci/install-runtime.sh",
+        "tools/openspec-ci/package.json",
+        "tools/openspec-ci/package-lock.json",
+        "tools/openspec-ci/check-lock.cjs"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Pinned runtime installer and locked OpenSpec dependency preparation referenced by build-test."
+    }
+  ],
+  "knownGaps": [
+    {
+      "id": "TOOLING-HOSTED-ADOPTION-PROOF",
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "description": "Fresh adopted non-draft hosted execution and timing evidence is pending under task 4.1. The shard establishes reference integrity only.",
+      "beads": [],
+      "releaseGate": "Hosted tooling-source adoption"
+    }
+  ]
+}
