@@ -2,7 +2,12 @@
 set -euo pipefail
 
 workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
-product="$workspace/.openspec-product-source"
+case "$1" in
+    reserve|verify) domain=product ;;
+    reserve-tooling|verify-tooling) domain=tooling ;;
+    *) domain= ;;
+esac
+source_path="$workspace/.openspec-${domain}-source"
 
 fail() {
     printf 'OpenSpec source preparation: %s\n' "$1" >&2
@@ -18,34 +23,34 @@ local_git() (
 )
 
 case "$1" in
-    reserve)
-        if [[ -e "$product" || -L "$product" ]]; then
-            fail "reserved product source directory already exists"
+    reserve|reserve-tooling)
+        if [[ -e "$source_path" || -L "$source_path" ]]; then
+            fail "reserved ${domain} source directory already exists"
         fi
         ;;
-    verify)
+    verify|verify-tooling)
         revision="$2"
         tree="$3"
-        [[ -d "$workspace/.git" && -d "$product/.git" && ! -L "$product" && ! -L "$product/.git" ]] ||
-            fail "missing separate product Git checkout"
+        [[ -d "$workspace/.git" && -d "$source_path/.git" && ! -L "$source_path" && ! -L "$source_path/.git" ]] ||
+            fail "missing separate ${domain} Git checkout"
         primary_head="$(local_git -C "$workspace" rev-parse --verify HEAD)" || fail "primary checkout HEAD differs from workflow revision"
         [[ "$primary_head" == "$GITHUB_SHA" ]] ||
             fail "primary checkout HEAD differs from workflow revision"
-        product_root="$(local_git -C "$product" rev-parse --show-toplevel)" || fail "product source does not resolve to a separate Git checkout"
-        [[ "$product_root" == "$product" ]] ||
-            fail "product source does not resolve to a separate Git checkout"
-        product_head="$(local_git -C "$product" rev-parse --verify HEAD)" || fail "product checkout HEAD differs from the required revision"
-        [[ "$product_head" == "$revision" ]] ||
-            fail "product checkout HEAD differs from the required revision"
-        kind="$(local_git -C "$product" cat-file -t "$revision")" || fail "required product object is not a locally available commit"
+        source_root="$(local_git -C "$source_path" rev-parse --show-toplevel)" || fail "${domain} source does not resolve to a separate Git checkout"
+        [[ "$source_root" == "$source_path" ]] ||
+            fail "${domain} source does not resolve to a separate Git checkout"
+        source_head="$(local_git -C "$source_path" rev-parse --verify HEAD)" || fail "${domain} checkout HEAD differs from the required revision"
+        [[ "$source_head" == "$revision" ]] ||
+            fail "${domain} checkout HEAD differs from the required revision"
+        kind="$(local_git -C "$source_path" cat-file -t "$revision")" || fail "required ${domain} object is not a locally available commit"
         [[ "$kind" == commit ]] ||
-            fail "required product object is not a locally available commit"
-        product_tree="$(local_git -C "$product" rev-parse --verify "$revision^{tree}")" || fail "product commit tree does not match the required tree"
-        [[ "$product_tree" == "$tree" ]] ||
-            fail "product commit tree does not match the required tree"
+            fail "required ${domain} object is not a locally available commit"
+        source_tree="$(local_git -C "$source_path" rev-parse --verify "$revision^{tree}")" || fail "${domain} commit tree does not match the required tree"
+        [[ "$source_tree" == "$tree" ]] ||
+            fail "${domain} commit tree does not match the required tree"
         printf 'OpenSpec source preflight passed at %s, tree %s\n' "$revision" "$tree"
         ;;
     *)
-        fail "expected reserve or verify"
+        fail "expected reserve or verify for product or tooling"
         ;;
 esac

@@ -212,6 +212,37 @@ jobs:
           architecture: x64
           check-latest: false
 
+      - name: Read the optional OpenSpec tooling declaration
+        id: openspec-tooling-plan
+        run: python3 -BEs tools/openspec-ci/plan-tooling-source.py "$GITHUB_WORKSPACE" "$GITHUB_OUTPUT"
+
+      - name: Reserve OpenSpec tooling source directory
+        id: openspec-tooling-reserve
+        if: steps.openspec-tooling-plan.outputs.present == 'true'
+        run: bash tools/openspec-ci/check-source.sh reserve-tooling
+
+      - name: Fetch immutable OpenSpec tooling source
+        id: openspec-tooling-checkout
+        if: steps.openspec-tooling-plan.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.openspec-tooling-plan.outputs.revision }}
+          path: .openspec-tooling-source
+          fetch-depth: 1
+          fetch-tags: false
+          lfs: false
+          submodules: false
+          persist-credentials: false
+
+      - name: Verify local OpenSpec tooling source
+        id: openspec-tooling-verify
+        if: steps.openspec-tooling-plan.outputs.present == 'true'
+        env:
+          OPENSPEC_TOOLING_REVISION: ${{ steps.openspec-tooling-plan.outputs.revision }}
+          OPENSPEC_TOOLING_TREE: ${{ steps.openspec-tooling-plan.outputs.tree }}
+        run: bash tools/openspec-ci/check-source.sh verify-tooling "$OPENSPEC_TOOLING_REVISION" "$OPENSPEC_TOOLING_TREE"
+
       - name: Install pinned OpenSpec toolchain
         id: openspec-install
         run: bash tools/openspec-ci/install-runtime.sh
@@ -222,6 +253,9 @@ jobs:
         env:
           OPENSPEC_PRODUCT_REVISION: 0a32a901d1240eec51ddff323274e2ad935116f3
           OPENSPEC_PRODUCT_TREE: 347cc36bd44945fcff8a6624237222cb64c0cf17
+          OPENSPEC_TOOLING_PRESENT: ${{ steps.openspec-tooling-plan.outputs.present }}
+          OPENSPEC_TOOLING_REVISION: ${{ steps.openspec-tooling-plan.outputs.revision }}
+          OPENSPEC_TOOLING_TREE: ${{ steps.openspec-tooling-plan.outputs.tree }}
         run: |
           set -euo pipefail
           runtime="$RUNNER_TEMP/openspec-ci"
@@ -236,11 +270,25 @@ jobs:
           "$node" "$cli" validate --all --strict --no-interactive --json
           python3 -BEs -m unittest discover -v -s tests -p test_check_openspec_references.py
           "$node" --test tools/openspec-ci/wiring.test.cjs
+          tooling_args=()
+          tooling_result_args=()
+          case "$OPENSPEC_TOOLING_PRESENT" in
+            true)
+              [[ "$OPENSPEC_TOOLING_REVISION" =~ ^[a-f0-9]{40}$ && "$OPENSPEC_TOOLING_TREE" =~ ^[a-f0-9]{40}$ ]]
+              tooling_args=(--tooling-source-repo "$GITHUB_WORKSPACE/.openspec-tooling-source"
+                            --tooling-source-revision "$OPENSPEC_TOOLING_REVISION")
+              tooling_result_args=("$OPENSPEC_TOOLING_REVISION" "$OPENSPEC_TOOLING_TREE")
+              ;;
+            false)
+              [[ -z "$OPENSPEC_TOOLING_REVISION" && -z "$OPENSPEC_TOOLING_TREE" ]]
+              ;;
+            *) echo 'OpenSpec tooling declaration did not report a valid state' >&2; exit 1 ;;
+          esac
           python3 -BEs tools/check_openspec_references.py --snapshot "$GITHUB_WORKSPACE" \
             --source-repo "$GITHUB_WORKSPACE/.openspec-product-source" \
-            --source-revision "$OPENSPEC_PRODUCT_REVISION" | tee "$runtime/references.json"
+            --source-revision "$OPENSPEC_PRODUCT_REVISION" "${tooling_args[@]}" | tee "$runtime/references.json"
           python3 -BEs tools/openspec-ci/check-result.py "$runtime/references.json" \
-            "$OPENSPEC_PRODUCT_REVISION" "$OPENSPEC_PRODUCT_TREE"
+            "$OPENSPEC_PRODUCT_REVISION" "$OPENSPEC_PRODUCT_TREE" "${tooling_result_args[@]}"
 
 
   # Folded jobs (CI minutes): software-TPM end-to-end checks (swtpm, tpm2-tools; SoftHSM for runtime-admission). Each former job is ONE step named after it, with its own

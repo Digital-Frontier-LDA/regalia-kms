@@ -17,6 +17,17 @@ MAIN = "openspec/specs/"
 DELTA = "openspec/changes/document-kms-spec-baseline/specs/"
 PROPOSED = "openspec/changes/close-single-node-no-history-bootstrap/specs/"
 REGISTRY = COVERAGE + "external-sources/registry.json"
+TOOLING_AUTHORING = COVERAGE + "tooling-authoring.json"
+TOOLING_CAPABILITY = "delivery/software-build-and-ci"
+TOOLING_IDS = {"KMS-CI-009", "KMS-CI-010", "KMS-CI-011", "KMS-CI-012"}
+TOOLING_PATHS = {
+    ".github/workflows/ci.yml", "tools/check_openspec_references.py",
+    "tests/test_check_openspec_references.py",
+    *("tools/openspec-ci/" + name for name in (
+        "check-source.sh", "plan-tooling-source.py", "install-runtime.sh",
+        "package.json", "package-lock.json", "check-lock.cjs", "check-result.py", "wiring.test.cjs",
+    )),
+}
 AUTHORING = {
     "runtime.json": ("runtime", "runtime"),
     "baremetal.json": ("baremetal", "baremetal"),
@@ -148,20 +159,48 @@ class Files:
                 for f in root.rglob("spec.md")}
 
 
+def tooling_declaration(files):
+    path = files.path(TOOLING_AUTHORING)
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return None
+    doc = files.json(TOOLING_AUTHORING)
+    shape(doc, {"schemaVersion", "sourceDomain", "sourceRevision", "sourceTree", "owner",
+                "files", "requirements", "sourceAreas", "knownGaps"}, set(), TOOLING_AUTHORING)
+    require_schema_v1(doc, TOOLING_AUTHORING)
+    require(doc["sourceDomain"] == "tooling" and doc["owner"] == "tooling",
+            "TOOLING_DOMAIN_SCOPE", TOOLING_AUTHORING)
+    for key in ("sourceRevision", "sourceTree"):
+        check_hex(doc[key], 40, f"{TOOLING_AUTHORING}:{key}")
+    for key in ("files", "requirements", "sourceAreas", "knownGaps"):
+        sequence(doc[key], f"{TOOLING_AUTHORING}:{key}")
+    return doc
+
+
 class GitSource:
     """A local-only reader over regular blobs in the explicitly named revision."""
 
-    def __init__(self, repo, revision):
-        self.repo = Path(repo).resolve(strict=True)
-        self.revision = check_hex(revision, 40, "product revision")
+    def __init__(self, repo, revision, *, tooling=False):
+        path = Path(repo)
+        if tooling:
+            require(not path.is_symlink() and path.is_dir(), "TOOLING_CHECKOUT_ROOT", str(path))
+        self.repo = path.resolve(strict=True)
+        self.revision = check_hex(revision, 40, "tooling revision" if tooling else "product revision")
         self.env = {
             **{key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
             "GIT_NO_REPLACE_OBJECTS": "1", "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0",
             "GIT_ALLOW_PROTOCOL": "",
         }
+        if tooling:
+            require(self.git("rev-parse", "--is-inside-work-tree") == b"true\n"
+                    and os.fsdecode(self.git("rev-parse", "--show-toplevel")).removesuffix("\n") == str(self.repo),
+                    "TOOLING_CHECKOUT_ROOT", str(path))
+            require(self.git("cat-file", "-t", revision) == b"commit\n", "SOURCE_NOT_COMMIT", revision)
         self.tree = self.git("rev-parse", "--verify", f"{revision}^{{tree}}").decode().strip()
-        require(self.git("cat-file", "-t", revision) == b"commit\n", "SOURCE_NOT_COMMIT", revision)
+        if not tooling:
+            require(self.git("cat-file", "-t", revision) == b"commit\n", "SOURCE_NOT_COMMIT", revision)
         self.blobs = {}
         for row in self.git("ls-tree", "-rz", self.tree).split(b"\0"):
             if row:
@@ -237,9 +276,10 @@ def file_hash(record, where, required):
 
 
 class ReferenceChecker:
-    def __init__(self, files, product):
+    def __init__(self, files, product, *, tooling_input=None):
         self.files = files
         self.product = product
+        self.tooling_input = tooling_input
         self.count = Counter()
         self.specs = {}
         self.requirements = {}
@@ -306,7 +346,7 @@ class ReferenceChecker:
         self.count[kind] += 1
         self.count["hashedFlatLocators"] += expected is not None
 
-    def check_authoring(self):
+    def check_authoring(self, tooling):
         authored = set()
         for name, (declared_owner, owner) in AUTHORING.items():
             path = COVERAGE + name
@@ -319,6 +359,7 @@ class ReferenceChecker:
                 shape(row, {"id", "capability", "title", "status", "sources", "tests", "rationale",
                             "executionEvidence", "beads"}, {"caseIds"}, path)
                 ident = string(row["id"], path)
+                require(ident not in TOOLING_IDS, "TOOLING_LEGACY_AUTHORING", ident)
                 require(ident not in authored, "DUPLICATE_AUTHORING_ID", ident)
                 require(self.requirements.get(ident) == (row["capability"], row["title"], owner),
                         "AUTHORING_IDENTITY_MISMATCH", ident)
@@ -338,10 +379,75 @@ class ReferenceChecker:
             for gap in sequence(doc["knownGaps"], path):
                 for cap in sequence(gap["capabilities"], path):
                     require(cap in self.catalog, "UNKNOWN_AUTHORING_CAPABILITY", cap)
+        if tooling is not None:
+            authored.update(self.check_tooling_authoring(tooling))
         require(authored == set(self.requirements), "MISSING_AUTHORING_ROW",
                 ", ".join(sorted(set(self.requirements)-authored)))
         self.count["authoringRows"] = len(authored)
 
+
+    def check_tooling_authoring(self, doc):
+        declared = {}
+        for ref in doc["files"]:
+            shape(ref, {"path", "fileSha256"}, set(), TOOLING_AUTHORING)
+            path = relative(ref["path"]).as_posix()
+            require(path in TOOLING_PATHS, "TOOLING_PATH_SCOPE", path)
+            require(path not in declared, "DUPLICATE_TOOLING_PATH", path)
+            expected = check_hex(ref["fileSha256"], 64, path)
+            data = self.tooling.read(path)
+            digest(data, expected, "TOOLING_FILE_HASH_MISMATCH", path)
+            declared[path] = (expected, data)
+
+        used = set()
+        authored = set()
+        for row in doc["requirements"]:
+            shape(row, {"id", "capability", "title", "status", "sources", "tests", "rationale",
+                        "executionEvidence", "beads"}, set(), TOOLING_AUTHORING)
+            ident = string(row["id"], TOOLING_AUTHORING)
+            require(ident in TOOLING_IDS and row["capability"] == TOOLING_CAPABILITY
+                    and self.requirements.get(ident) == (TOOLING_CAPABILITY, row["title"], "runtime"),
+                    "TOOLING_AUTHORING_SCOPE", ident)
+            require(ident not in authored, "DUPLICATE_AUTHORING_ID", ident)
+            authored.add(ident)
+            require(row["status"] == "UNVERIFIED" and row["executionEvidence"] == [],
+                    "TOOLING_AUTHORING_SCOPE", ident)
+            string(row["rationale"], ident)
+            for bead in sequence(row["beads"], ident):
+                string(bead, ident)
+            for role in ("sources", "tests"):
+                refs = sequence(row[role], ident)
+                require(refs, "EMPTY_TOOLING_LOCATORS", f"{ident}:{role}")
+                for ref in refs:
+                    shape(ref, {"path", "line", "symbol", "supports", "fileSha256", "text", "lineSha256"},
+                          set(), ident)
+                    path = relative(ref["path"]).as_posix()
+                    require(path in declared, "UNDECLARED_TOOLING_PATH", path)
+                    expected, data = declared[path]
+                    require(ref["fileSha256"] == expected, "TOOLING_LOCATOR_HASH_MISMATCH", path)
+                    string(ref["symbol"], ident)
+                    string(ref["supports"], ident)
+                    self.anchors(data, {"anchors": [{key: ref[key] for key in ("line", "text", "lineSha256")}]}, path)
+                    used.add(path)
+                    self.count["authoringLocators"] += 1
+        require(authored == TOOLING_IDS, "TOOLING_REQUIREMENT_SET", TOOLING_AUTHORING)
+        for area in doc["sourceAreas"]:
+            shape(area, {"paths", "capabilities", "rationale"}, set(), TOOLING_AUTHORING)
+            require(area["capabilities"] == [TOOLING_CAPABILITY], "TOOLING_AUTHORING_SCOPE", TOOLING_AUTHORING)
+            string(area["rationale"], TOOLING_AUTHORING)
+            for path in sequence(area["paths"], TOOLING_AUTHORING):
+                path = relative(path).as_posix()
+                require(path in declared, "UNDECLARED_TOOLING_PATH", path)
+                used.add(path)
+                self.count["authoringSourcePaths"] += 1
+        for gap in doc["knownGaps"]:
+            shape(gap, {"id", "capabilities", "description", "beads", "releaseGate"}, set(), TOOLING_AUTHORING)
+            require(gap["capabilities"] == [TOOLING_CAPABILITY], "TOOLING_AUTHORING_SCOPE", TOOLING_AUTHORING)
+            for key in ("id", "description", "releaseGate"):
+                string(gap[key], TOOLING_AUTHORING)
+            for bead in sequence(gap["beads"], TOOLING_AUTHORING):
+                string(bead, TOOLING_AUTHORING)
+        require(used == set(declared), "UNUSED_TOOLING_PATH", TOOLING_AUTHORING)
+        return authored
 
     def load_cases(self):
         path = COVERAGE + "reconciled-cases.json"
@@ -632,13 +738,29 @@ class ReferenceChecker:
                     self.count["historicalMetadataPointers"] += 1
 
     def check(self):
+        tooling = tooling_declaration(self.files)
+        require(tooling is not None or self.tooling_input is None,
+                "TOOLING_DOMAIN_UNDECLARED", TOOLING_AUTHORING)
+        require(tooling is None or self.tooling_input is not None,
+                "TOOLING_DOMAIN_REQUIRED", TOOLING_AUTHORING)
         self.check_specs()
+        adopted = TOOLING_IDS & self.requirements.keys()
+        if adopted or tooling is not None:
+            require(adopted == TOOLING_IDS, "TOOLING_REQUIREMENT_SET", TOOLING_AUTHORING)
+            require(tooling is not None, "TOOLING_DOMAIN_REQUIRED", TOOLING_AUTHORING)
+        tooling_result = {}
+        if tooling is not None:
+            repo, revision = self.tooling_input
+            require(revision == tooling["sourceRevision"], "TOOLING_SOURCE_PIN_MISMATCH", TOOLING_AUTHORING)
+            self.tooling = GitSource(repo, revision, tooling=True)
+            require(self.tooling.tree == tooling["sourceTree"], "TOOLING_SOURCE_TREE_MISMATCH", TOOLING_AUTHORING)
+            tooling_result = {"toolingSourceRevision": revision, "toolingSourceTree": self.tooling.tree}
         canonical = self.load_cases()
-        self.check_authoring()
+        self.check_authoring(tooling)
         self.check_candidates(canonical["localTestCandidates"])
         self.check_external_registry()
         self.check_case_refs()
-        return {**boundary(), "referenceIntegrity": True, "counts": dict(sorted(self.count.items())),
+        return {**boundary(), **tooling_result, "referenceIntegrity": True, "counts": dict(sorted(self.count.items())),
                 "productSourceRevision": self.product.revision, "productSourceTree": self.product.tree,
                 "snapshotInputsSha256": dict(sorted(self.files.hashes.items()))}
 
@@ -652,10 +774,16 @@ def main(argv=None):
     parser.add_argument("--snapshot", required=True, help="Frozen local documentation directory")
     parser.add_argument("--source-repo", required=True, help="Explicit local Git repository with the product commit")
     parser.add_argument("--source-revision", required=True, help="Full product commit ID")
+    parser.add_argument("--tooling-source-repo", help="Explicit local Git checkout for declared tooling")
+    parser.add_argument("--tooling-source-revision", help="Full declared tooling commit ID")
     args = parser.parse_args(argv)
+    pair = (args.tooling_source_repo, args.tooling_source_revision)
+    if (pair[0] is None) != (pair[1] is None):
+        parser.error("--tooling-source-repo and --tooling-source-revision must be supplied together")
     try:
         product = GitSource(args.source_repo, args.source_revision)
-        result = ReferenceChecker(Files(args.snapshot), product).check()
+        result = ReferenceChecker(Files(args.snapshot), product,
+                                  tooling_input=pair if pair[0] is not None else None).check()
     except IntegrityError as exc:
         result = {**boundary(), "referenceIntegrity": False, "error": {"code": exc.code, "where": exc.where}}
     except (OSError, UnicodeError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:

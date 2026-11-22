@@ -9,7 +9,7 @@ import unittest
 
 from tools.check_openspec_references import (
     AUTHORING, COVERAGE, DELTA, Files, IntegrityError, MAIN,
-    PROPOSED, REGISTRY, ReferenceChecker, sha256,
+    PROPOSED, REGISTRY, TOOLING_AUTHORING, ReferenceChecker, sha256,
 )
 
 
@@ -361,13 +361,15 @@ class ReferenceEntrypoint(unittest.TestCase):
             git.chmod(0o700)
             env = {**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}", "GIT_MARKER": str(marker)}
             for args in (["-h"], ["--snapshot", str(root / "missing"), "--source-repo", str(root),
-                                   "--source-revision", "a" * 40, "--help"]):
+                                   "--source-revision", "a" * 40, "--tooling-source-repo", str(root / "missing-tooling"),
+                                   "--tooling-source-revision", "b" * 40, "--help"]):
                 with self.subTest(args=args):
                     result = self.invoke(args, env)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stderr, "")
                     self.assertIn("usage:", result.stdout)
-                    for option in ("--snapshot", "--source-repo", "--source-revision"):
+                    for option in ("--snapshot", "--source-repo", "--source-revision",
+                                   "--tooling-source-repo", "--tooling-source-revision"):
                         self.assertIn(option, result.stdout)
                     self.assertFalse(marker.exists())
 
@@ -383,6 +385,285 @@ class ReferenceEntrypoint(unittest.TestCase):
         self.assertEqual(payload["verificationAuthority"], "not-assessed")
         self.assertEqual(payload["error"]["code"], "INPUT_SHAPE_OR_READ_ERROR")
 
+
+
+    def test_tooling_pair_usage_and_exact_names(self):
+        required = ["--snapshot", "/absent", "--source-repo", "/absent", "--source-revision", "a" * 40]
+        for extra in (["--tooling-source-repo", "/absent"], ["--tooling-source-revision", "a" * 40],
+                      ["--tooling-source-rep", "/absent", "--tooling-source-revision", "a" * 40],
+                      ["--tooling-source-repo", "/absent", "--tooling-source-rev", "a" * 40]):
+            with self.subTest(extra=extra):
+                result = self.invoke(required + extra)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("usage:", result.stderr)
+                if len(extra) == 2:
+                    self.assertIn("must be supplied together", result.stderr)
+
+    def test_actual_legacy_and_unmatched_tooling_declarations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            snapshot, repo, commit, tree = local_snapshot(Path(directory))
+            required = ["--snapshot", str(snapshot), "--source-repo", str(repo), "--source-revision", commit]
+            pair = ["--tooling-source-repo", str(repo), "--tooling-source-revision", commit]
+            result = self.invoke(required)
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            payload = json.loads(result.stdout)
+            self.assertEqual(set(payload), {"referenceIntegrity", "verificationAuthority", "coverageComplete",
+                                             "counts", "productSourceRevision", "productSourceTree",
+                                             "snapshotInputsSha256"})
+            self.assertTrue(payload["referenceIntegrity"])
+            self.assertEqual(payload["productSourceTree"], tree)
+            refused = self.invoke(required + pair)
+            self.assertEqual(refused.returncode, 1, refused.stderr + refused.stdout)
+            self.assertEqual(json.loads(refused.stdout)["error"]["code"], "TOOLING_DOMAIN_UNDECLARED")
+            write_local_json(snapshot / COVERAGE / "tooling-authoring.json", {
+                "schemaVersion": 1, "sourceDomain": "tooling", "owner": "tooling",
+                "sourceRevision": commit, "sourceTree": tree,
+                "files": [], "requirements": [], "sourceAreas": [], "knownGaps": [],
+            })
+            refused = self.invoke(required)
+            self.assertEqual(refused.returncode, 1, refused.stderr + refused.stdout)
+            self.assertEqual(json.loads(refused.stdout)["error"]["code"], "TOOLING_DOMAIN_REQUIRED")
+
+
+def fixture_git(repo, *args):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return subprocess.check_output(["git", "-C", str(repo), *args], stderr=subprocess.PIPE,
+                                   text=True, env=env, timeout=10).strip()
+
+
+def create_test_repo(repo, files):
+    repo.mkdir()
+    fixture_git(repo, "init", "-q", "--template=")
+    for name, text in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    fixture_git(repo, "add", ".")
+    fixture_git(repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+             "commit", "-qm", "fixture")
+    return fixture_git(repo, "rev-parse", "HEAD"), fixture_git(repo, "rev-parse", "HEAD^{tree}")
+
+
+def write_local_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
+
+
+def local_snapshot(root):
+    snapshot = root / "snapshot"
+    repo = root / "product"
+    commit, tree = create_test_repo(repo, {"code.go": "package fixture\n",
+                                          ".github/workflows/ci.yml": "product source at same path\n"})
+    cap = "runtime/example"
+    write_local_json(snapshot / COVERAGE / "capability-catalog.json",
+                     [{"path": cap, "prefix": "KMS-EX", "owner": "runtime", "scope": "fixture"}])
+    block = "### Requirement: KMS-EX-001 Example\n#### Scenario: Example\n"
+    for prefix, heading in [(MAIN, "## Requirements"), (DELTA, "## ADDED Requirements")]:
+        path = snapshot / prefix / cap / "spec.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{heading}\n{block}")
+    pin = {"schemaVersion": 1, "sourceRevision": commit, "sourceTree": tree}
+    row = {"id": "KMS-EX-001", "capability": cap, "title": "Example", "status": "UNVERIFIED",
+           "sources": [{"path": "code.go", "line": 1}], "tests": [], "rationale": "fixture",
+           "executionEvidence": [], "beads": []}
+    for name, (owner, _) in AUTHORING.items():
+        write_local_json(snapshot / COVERAGE / name, {**pin, "owner": owner, "sourceAreas": [],
+                         "knownGaps": [], "requirements": [row] if name == "runtime.json" else []})
+    write_local_json(snapshot / COVERAGE / "reconciled-cases.json", {**pin, "cases": [], "inputDigests": {},
+                     "localTestCandidates": [], "previousLocalTestCandidates": []})
+    write_local_json(snapshot / REGISTRY, {"schemaVersion": 1, "contracts": []})
+    return snapshot, repo, commit, tree
+
+
+def tooling_snapshot(snapshot, repo, ids=range(9, 13)):
+    cap = "delivery/software-build-and-ci"
+    catalog = snapshot / COVERAGE / "capability-catalog.json"
+    existing = json.loads(catalog.read_text())
+    existing.append({"path": cap, "prefix": "KMS-CI", "owner": "runtime", "scope": "fixture"})
+    write_local_json(catalog, existing)
+    rows = [(f"KMS-CI-{n:03d}", f"Fixture {n}") for n in ids]
+    spec = "".join(f"### Requirement: {ident} {title}\n#### Scenario: Example\n" for ident, title in rows)
+    for prefix, heading in [(MAIN, "## Requirements"), (DELTA, "## ADDED Requirements")]:
+        path = snapshot / prefix / cap / "spec.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(f"{heading}\n{spec}")
+    anchors = [
+        (".github/workflows/ci.yml", "  actual tooling source"),
+        ("tests/test_check_openspec_references.py", "  assert result"),
+    ]
+    revision, tree = create_test_repo(repo, {path: line + "\n" for path, line in anchors})
+    locators = [{"path": path, "line": 1, "text": line, "symbol": "example", "supports": "fixture",
+                 "fileSha256": sha256((line + "\n").encode()), "lineSha256": sha256(line.encode())}
+                for path, line in anchors]
+    doc = {"schemaVersion": 1, "sourceDomain": "tooling", "owner": "tooling",
+           "sourceRevision": revision, "sourceTree": tree,
+           "files": [{key: loc[key] for key in ("path", "fileSha256")} for loc in locators],
+           "requirements": [{"id": ident, "title": title, "capability": cap, "status": "UNVERIFIED",
+                             "sources": [locators[0]], "tests": [locators[1]], "rationale": "fixture",
+                             "beads": [], "executionEvidence": []} for ident, title in rows],
+           "sourceAreas": [{"paths": [locators[0]["path"]], "capabilities": [cap], "rationale": "fixture"}],
+           "knownGaps": [{"id": "FIXTURE-1", "capabilities": [cap], "description": "gap",
+                           "beads": [], "releaseGate": "fixture"}]}
+    write_local_json(snapshot / TOOLING_AUTHORING, doc)
+    return revision, tree, doc
+
+
+class ToolingDomain(unittest.TestCase):
+    script = ReferenceEntrypoint.script
+    invoke = ReferenceEntrypoint.invoke
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.snapshot, self.product, self.product_revision, self.product_tree = local_snapshot(self.root)
+
+    def configured(self, ids=range(9, 13)):
+        self.repo = self.root / "tooling"
+        self.revision, self.tree, self.doc = tooling_snapshot(self.snapshot, self.repo, ids)
+
+    def run_check(self, *, repo=None, revision=None, use_pair=True):
+        args = ["--snapshot", str(self.snapshot), "--source-repo", str(self.product),
+                "--source-revision", self.product_revision]
+        if use_pair:
+            args += ["--tooling-source-repo", str(repo or self.repo),
+                     "--tooling-source-revision", revision or self.revision]
+        result = self.invoke(args)
+        self.assertEqual(result.stderr, "")
+        payload = json.loads(result.stdout)
+        self.assertIs(payload["coverageComplete"], False)
+        self.assertEqual(payload["verificationAuthority"], "not-assessed")
+        return result.returncode, payload
+
+    def refuses(self, code, **kwargs):
+        status, payload = self.run_check(**kwargs)
+        self.assertEqual(status, 1, payload)
+        self.assertIs(payload["referenceIntegrity"], False)
+        self.assertEqual(payload["error"]["code"], code, payload)
+
+    def modify(self, edit):
+        record = json.loads(json.dumps(self.doc))
+        edit(record)
+        write_local_json(self.snapshot / TOOLING_AUTHORING, record)
+
+    def test_enabled_pair_uses_bound_blob_not_product_or_worktree_bytes(self):
+        self.configured()
+        (self.repo / ".github/workflows/ci.yml").write_text("modified tooling worktree")
+        status, payload = self.run_check()
+        self.assertEqual(status, 0, payload)
+        self.assertIs(payload["referenceIntegrity"], True)
+        self.assertEqual(payload["toolingSourceRevision"], self.revision)
+        self.assertEqual(payload["toolingSourceTree"], self.tree)
+        self.assertEqual(payload["productSourceRevision"], self.product_revision)
+        self.assertEqual(payload["counts"]["authoringRows"], 5)
+        self.assertEqual(payload["snapshotInputsSha256"][TOOLING_AUTHORING],
+                         sha256((self.snapshot / TOOLING_AUTHORING).read_bytes()))
+        same_path = self.product / ".github/workflows/ci.yml"
+        self.modify(lambda d: d["files"][0].update(fileSha256=sha256(same_path.read_bytes())))
+        self.refuses("TOOLING_FILE_HASH_MISMATCH")
+
+    def test_checkout_root_and_linked_worktree(self):
+        self.configured()
+        linked = self.root / "linked"
+        fixture_git(self.repo, "worktree", "add", "--detach", str(linked), self.revision)
+        self.assertTrue((linked / ".git").is_file())
+        self.assertEqual(self.run_check(repo=linked)[0], 0)
+        symlink = self.root / "symlink"
+        symlink.symlink_to(self.repo, target_is_directory=True)
+        bare = self.root / "bare"
+        bare.mkdir()
+        fixture_git(bare, "init", "--bare", "-q", "--template=")
+        for path in [symlink, self.repo / ".github", bare, self.root / "missing"]:
+            with self.subTest(path=path):
+                self.refuses("TOOLING_CHECKOUT_ROOT", repo=path)
+
+    def test_revision_tree_repository_and_object_kind_are_bound(self):
+        self.configured()
+        self.refuses("TOOLING_SOURCE_PIN_MISMATCH", revision=self.product_revision)
+        self.refuses("LOCAL_GIT_READ_FAILED", repo=self.product)
+        self.modify(lambda d: d.update(sourceTree=self.product_tree))
+        self.refuses("TOOLING_SOURCE_TREE_MISMATCH")
+        blob = fixture_git(self.repo, "rev-parse", "HEAD:.github/workflows/ci.yml")
+        self.modify(lambda d: d.update(sourceRevision=blob))
+        self.refuses("SOURCE_NOT_COMMIT", revision=blob)
+
+    def test_tooling_revision_mismatch_with_identical_tree(self):
+        self.configured()
+        fixture_git(self.repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "--allow-empty", "-qm", "different commit with the same tree")
+        other = fixture_git(self.repo, "rev-parse", "HEAD")
+        self.assertNotEqual(other, self.revision)
+        self.assertEqual(fixture_git(self.repo, "rev-parse", "HEAD^{tree}"), self.tree)
+        self.refuses("TOOLING_SOURCE_PIN_MISMATCH", revision=other)
+
+    def test_coherent_forged_hashes_cannot_replace_anchored_blob_bytes(self):
+        self.configured()
+        def forge(doc):
+            doc["files"][0]["fileSha256"] = "0" * 64
+            for row in doc["requirements"]:
+                row["sources"][0]["fileSha256"] = "0" * 64
+        self.modify(forge)
+        self.refuses("TOOLING_FILE_HASH_MISMATCH")
+
+    def test_tooling_regular_blob_required(self):
+        self.configured()
+        path = self.repo / ".github/workflows/ci.yml"
+        path.unlink()
+        path.symlink_to("../../elsewhere")
+        fixture_git(self.repo, "add", ".")
+        fixture_git(self.repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                 "commit", "-qm", "nonregular")
+        revision = fixture_git(self.repo, "rev-parse", "HEAD")
+        tree = fixture_git(self.repo, "rev-parse", "HEAD^{tree}")
+        self.modify(lambda d: d.update(sourceRevision=revision, sourceTree=tree))
+        self.refuses("MISSING_PINNED_BLOB", revision=revision)
+
+    def test_tooling_declaration_and_closed_authoring_bindings(self):
+        self.configured()
+        checks = [
+            ("SCHEMA_VERSION", lambda d: d.update(schemaVersion=True)),
+            ("UNKNOWN_FIELD", lambda d: d.update(fallback=True)),
+            ("TOOLING_DOMAIN_SCOPE", lambda d: d.update(sourceDomain="product")),
+            ("TOOLING_DOMAIN_SCOPE", lambda d: d.update(owner="runtime")),
+            ("TOOLING_PATH_SCOPE", lambda d: d["files"][0].update(path="code.go")),
+            ("DUPLICATE_TOOLING_PATH", lambda d: d["files"].append(d["files"][0])),
+            ("TOOLING_FILE_HASH_MISMATCH", lambda d: d["files"][0].update(fileSha256="0" * 64)),
+            ("TOOLING_AUTHORING_SCOPE", lambda d: d["requirements"][0].update(id="KMS-EX-001")),
+            ("TOOLING_AUTHORING_SCOPE", lambda d: d["requirements"][0].update(capability="runtime/example")),
+            ("TOOLING_AUTHORING_SCOPE", lambda d: d["requirements"][0].update(status="IMPLEMENTED")),
+            ("UNKNOWN_FIELD", lambda d: d["requirements"][0].update(caseIds=[])),
+            ("DUPLICATE_AUTHORING_ID", lambda d: d["requirements"].append(d["requirements"][0])),
+            ("TOOLING_REQUIREMENT_SET", lambda d: d["requirements"].pop()),
+            ("EMPTY_TOOLING_LOCATORS", lambda d: d["requirements"][0].update(tests=[])),
+            ("UNDECLARED_TOOLING_PATH", lambda d: d["requirements"][0]["sources"][0].update(path="code.go")),
+            ("TOOLING_LOCATOR_HASH_MISMATCH", lambda d: d["requirements"][0]["sources"][0].update(fileSha256="0"*64)),
+            ("LINE_OUT_OF_RANGE", lambda d: d["requirements"][0]["sources"][0].update(line=2)),
+            ("ANCHOR_TEXT_MISMATCH", lambda d: d["requirements"][0]["sources"][0].update(text="actual tooling source")),
+            ("ANCHOR_LINE_HASH_MISMATCH", lambda d: d["requirements"][0]["sources"][0].update(lineSha256="0"*64)),
+            ("TOOLING_AUTHORING_SCOPE", lambda d: d["sourceAreas"][0].update(capabilities=["runtime/example"])),
+            ("TOOLING_AUTHORING_SCOPE", lambda d: d["knownGaps"][0].update(capabilities=["runtime/example"])),
+        ]
+        for code, edit in checks:
+            with self.subTest(code=code):
+                self.modify(edit)
+                self.refuses(code)
+
+    def test_adopted_ids_require_shard_and_reject_legacy_claim(self):
+        self.configured()
+        runtime = self.snapshot / COVERAGE / "runtime.json"
+        document = json.loads(runtime.read_bytes())
+        row = self.doc["requirements"][0]
+        document["requirements"].append({**row, "sources": [{"path": "code.go", "line": 1}], "tests": []})
+        write_local_json(runtime, document)
+        self.refuses("TOOLING_LEGACY_AUTHORING")
+        (self.snapshot / TOOLING_AUTHORING).unlink()
+        self.refuses("TOOLING_DOMAIN_REQUIRED", use_pair=False)
+
+    def test_partial_adoption_refuses(self):
+        self.configured(ids=[9])
+        self.refuses("TOOLING_REQUIREMENT_SET")
 
 
 if __name__ == "__main__":
