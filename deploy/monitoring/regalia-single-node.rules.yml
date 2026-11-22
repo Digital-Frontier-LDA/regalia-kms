@@ -1,0 +1,59 @@
+# External target metadata outlives a failed scrape. Each up series provides
+# the alert identity. Only fresh affirmative evidence from that target can
+# suppress a page, including when no exporter or readiness series exists.
+groups:
+  - name: regalia-single-node
+    rules:
+      - alert: RegaliaSingleNodeDown
+        expr: |
+          (up{job="regalia-node",topology_profile="single-node"} == 0)
+          or
+          ((up{job="regalia-node",topology_profile="single-node"} == 1)
+            unless on(job, instance)
+            ((regalia_admission_serving{job="regalia-node"} == 1)
+             and on(job, instance)
+             ((node_textfile_mtime_seconds{job="regalia-node",file=~"(.*/)?lease\\.prom"} >= time() - 120)
+              and (node_textfile_mtime_seconds{job="regalia-node",file=~"(.*/)?lease\\.prom"} <= time()))))
+          or
+          (up{job="regalia-kms",topology_profile="single-node"} == 0)
+          or
+          ((up{job="regalia-kms",topology_profile="single-node"} == 1)
+            unless on(job, instance)
+            ((regalia_ready{job="regalia-kms"} == 1)
+             and on(job, instance)
+             ((regalia_readiness_last_check_seconds{job="regalia-kms"} >= time() - 120)
+              and (regalia_readiness_last_check_seconds{job="regalia-kms"} <= time()))))
+        labels:
+          severity: critical
+        annotations:
+          summary: "Single-node service unavailable or health unconfirmed at {{ $labels.instance }} ({{ $labels.job }})."
+      - alert: RegaliaTopologyProfileInvalid
+        expr: |
+          up{job="regalia-node",topology_profile!~"single-node|multi-node"}
+          or up{job="regalia-kms",topology_profile!~"single-node|multi-node"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} has missing or invalid external topology metadata."
+      - alert: RegaliaTopologyMetricMissing
+        expr: |
+          (up{job="regalia-node",topology_profile=~"single-node|multi-node"} == 1)
+          unless on(job, instance) regalia_topology_nodes{job="regalia-node"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but its verified topology metric is absent."
+      - alert: RegaliaTopologyProfileMismatch
+        expr: |
+          ((up{job="regalia-node",topology_profile="single-node"} == 1)
+            and on(job, instance) (regalia_topology_nodes{job="regalia-node"} != 1))
+          or
+          ((up{job="regalia-node",topology_profile="multi-node"} == 1)
+            and on(job, instance) (regalia_topology_nodes{job="regalia-node"} <= 1))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} reports a verified topology that disagrees with its external topology metadata."

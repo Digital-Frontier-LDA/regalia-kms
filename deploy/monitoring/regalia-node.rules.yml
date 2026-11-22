@@ -43,7 +43,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The freshness heartbeat has under half its lifetime left; no quorum of the nodes has signed a newer one.
+          summary: The freshness heartbeat has under half its lifetime left; this node has not accepted a newer one.
       # The held heartbeat's AGE, not a fraction of its life (#69): with the production lifetime (6 h, renewed every 15 min)
       # "under half left" would wait 3 h; two hours without a renewal is already eight missed rounds of the nodes' signing (#199).
       - alert: RegaliaHeartbeatNotRenewed
@@ -51,7 +51,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The freshness heartbeat this peer holds was issued over two hours ago; no quorum of the nodes has signed a newer one.
+          summary: The freshness heartbeat this peer holds was issued over two hours ago; this node has not accepted a newer one.
       - alert: RegaliaHeartbeatAboutToExpire
         expr: regalia_heartbeat_live == 1 and regalia_heartbeat_seconds_left < 0.25 * regalia_heartbeat_lifetime_seconds
         labels:
@@ -66,14 +66,16 @@ groups:
         annotations:
           summary: This peer holds no usable heartbeat and authorizes nothing.
       - alert: RegaliaNotServing
-        expr: regalia_admission_serving == 0
+        expr: regalia_admission_serving{topology_profile!="single-node"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: This node holds no runtime lease; the KMS daemon does not serve.
       - alert: RegaliaSurvivorRecoveryActive
-        expr: regalia_admission_recovery == 1
+        expr: |
+          (regalia_admission_recovery == 1)
+          unless on(job, instance) (regalia_topology_nodes == 1)
         labels:
           severity: critical
         annotations:
@@ -117,9 +119,16 @@ groups:
       # ACROSS THE NODES (regalia-kms-48 on #410): a node whose held epoch stays below the highest its peers hold is cut off
       # from them or WITHHOLDING (a compromised sync that stops publishing, which no rule on that node alone can see).
       # Compared within one job (one cluster). Thirty minutes is many pull rounds (60 s) and ESP advances (seconds). A
-      # node retired or revoked stops receiving epochs by design: take it out of the scrape.
+      # node retired or revoked stops receiving epochs by design. Update the inventory when decommissioning it.
+      # Neither operand includes a statically single target or a verified size-one series, even when metadata disagrees.
       - alert: RegaliaMembershipBehindFleet
-        expr: regalia_membership_epoch < on(job) group_left max by (job) (regalia_membership_epoch)
+        expr: |
+          (regalia_membership_epoch{topology_profile!="single-node"}
+            unless on(job, instance) (regalia_topology_nodes == 1))
+          < on(job) group_left max by (job) (
+            regalia_membership_epoch{topology_profile!="single-node"}
+            unless on(job, instance) (regalia_topology_nodes == 1)
+          )
         for: 30m
         labels:
           severity: warning
@@ -130,7 +139,13 @@ groups:
       # cannot hide it by writing a higher epoch in membership.prom than it anchored, and no peer's sync can make every
       # honest node fire by writing an inflated one. The reference lags membership by the ESP advance (seconds).
       - alert: RegaliaAnchorBehindFleet
-        expr: regalia_esp_anchor_epoch < on(job) group_left max by (job) (regalia_esp_anchor_epoch)
+        expr: |
+          (regalia_esp_anchor_epoch{topology_profile!="single-node"}
+            unless on(job, instance) (regalia_topology_nodes == 1))
+          < on(job) group_left max by (job) (
+            regalia_esp_anchor_epoch{topology_profile!="single-node"}
+            unless on(job, instance) (regalia_topology_nodes == 1)
+          )
         for: 30m
         labels:
           severity: warning
@@ -157,11 +172,19 @@ groups:
           summary: "{{ $labels.instance }}'s site configuration does not match the site document it booted with (or that document cannot be read): its tunnels are not brought up."
           description: "`journalctl -u regalia-site-check` names the differing keys and both files. After a move, replace /etc/regalia's site configuration with the new site's, then `systemctl restart regalia-site-check regalia-wg-apply`."
       - alert: RegaliaNextBootNeedsRecoveryKey
-        expr: regalia_esp_boot_renderable == 0
+        expr: |
+          (regalia_esp_boot_renderable == 0)
+          unless on(job, instance) (regalia_topology_nodes == 1)
         labels:
           severity: warning
         annotations:
           summary: "The chain on this node's ESP leaves the initrd nothing to render (no peer, or the node gone from the manifest): its next boot asks for the recovery key. update.py apply refuses to reboot it."
+      - alert: RegaliaOwnerAssistedReboot
+        expr: regalia_topology_nodes == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "Owner presence is required at each boot of this single-node installation, including the next reboot."
       - alert: RegaliaNodeMetricsStale
         expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease|membership)\\.prom"} > 120
         labels:
@@ -245,7 +268,7 @@ groups:
         annotations:
           summary: "node_exporter on {{ $labels.instance }} could not read a textfile: its series are missing, and the rules above go blind for it."
       - alert: RegaliaNodeExporterDown
-        expr: up{job="regalia-node"} == 0
+        expr: up{job="regalia-node",topology_profile!="single-node"} == 0
         for: 2m
         labels:
           severity: critical

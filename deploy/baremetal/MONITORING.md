@@ -1,7 +1,7 @@
 # Monitoring: the contract with the external service (#351)
 
 The owner decided (2026-10-04, ADR-0002 D28.6, #351) that monitoring is an **external service** the owner
-chooses: no Prometheus or Alertmanager runs on the three KMS servers. Each server exposes its metrics; the
+chooses: no Prometheus or Alertmanager runs on the KMS servers. Each server exposes its metrics; the
 outside service scrapes them, evaluates the alert rules shipped here, and tells the owner. This page is what
 that service must provide and what it gets. It reads alike with `AUDIT-COLLECTOR.md` (regalia-kms-1e, being
 written for #351), the same contract for the audit collector.
@@ -14,13 +14,13 @@ written for #351), the same contract for the audit collector.
 - **The alert rules, loaded as files:** `deploy/monitoring/regalia-node.rules.yml` (the node's services:
   time, heartbeat, leases, audit shipping, the metrics files themselves) and
   `deploy/monitoring/regalia-kms.rules.yml` (the KMS daemon: [OBSERVABILITY.md](../../OBSERVABILITY.md) is
-  their contract). Both are standard Prometheus rule files; any service that evaluates PromQL rules can load
-  them. Severity: `critical` pages, `warning` is looked at within hours.
+  their contract), plus `deploy/monitoring/regalia-single-node.rules.yml` (availability and topology
+  metadata across both scrape jobs). All three are standard Prometheus rule files. Route `critical` to
+  the pager, `warning` for investigation within hours, and `info` without paging.
 - **Delivery to the owner** of every firing alert, through a channel the owner chooses (mail, a push
   service). The channel carries the alert's name, its labels and its summary, nothing else (section 6).
-- **Its own availability**, watched from outside the three servers: if the service stops, nothing on the
-  servers notices. A scrape that fails is itself an alert (`RegaliaNodeExporterDown`), but only a running
-  service raises it.
+- **Its own availability**, watched independently from the KMS servers. Only a running monitoring service
+  can detect and report a failed scrape.
 
 ## 2. What each node gives it
 
@@ -29,24 +29,34 @@ written for #351), the same contract for the audit collector.
 | node_exporter | `https://<host_ipv4>:9100/metrics` | the host's own series, and the textfile series every Regalia service writes (`deploy/baremetal/metrics.py`'s registry, `METRICS`: time, heartbeat, unlock refusals, lease, audit shipping) |
 | the KMS daemon | `https://<host_ipv4>:<kms_port>/v1/metrics` | the daemon's operational series ([OBSERVABILITY.md](../../OBSERVABILITY.md)) |
 
-A scrape interval of 15 to 60 s suits both. The textfiles are written at their writers' own pace (every 5 to
-60 s); the rules carry their own staleness checks (`RegaliaNodeMetricsStale`, `RegaliaAuditShipMetricsStale`),
-so a scrape interval does not hide a writer that stopped.
+Scrape both endpoints every 15 to 60 s and evaluate rules on a comparable interval. Also send a separate
+**`GET /v1/health/ready`** probe over HTTPS to the daemon every 30 to 60 s so readiness is reevaluated well
+inside the 120 s evidence window. Readiness returns 200 or 503 and does not require a KMS client identity.
+Validate the server's TLS certificate. The metrics endpoint does require an allowlisted workload identity.
+Scraping `/v1/metrics` reads the recorded readiness result; it does not run the readiness checks. See
+[API.md](../../API.md) for the health and metrics routes.
 
 `regalia_topology_nodes` in sync's `membership.prom` reports the designed cluster size from the verified
-membership manifest: one for a single-node topology, three for legacy manifests, and the declared size for
-a v5 multi-node topology. Retired entries and revocation do not change that genesis-fixed size. This is
-context, not a count of available nodes. It disappears with an unavailable scrape; it cannot by itself
-identify a down single-node target. Profile-specific outage and collector-relative alerts, and the
-single-node collector configuration policy, remain separate work in regalia-kms-dx7.9. The rules below
-retain their existing behavior in this telemetry slice.
+membership manifest. It is one for a single-node topology, three for legacy manifests, and the declared size for
+a v5 multi-node topology. Retired entries and revocation do not change the genesis-fixed size. This gauge
+describes the topology of the last verified manifest. Use external target metadata to detect an outage when
+the target's live samples are unavailable.
 
-**The scrape job is `regalia-node`.** Scrape the three nodes' node_exporter in one job of exactly that name
-(`job_name: regalia-node`). The rules that tell a node missing a writer from a node that is down (every
-`Regalia…Missing` alert, and `RegaliaNodeExporterDown` itself) select `up{job="regalia-node"}`: under any other
-name they never fire, and nothing reports that they cannot. The fleet comparisons (`RegaliaMembershipBehindFleet`,
-`RegaliaAnchorBehindFleet`) compare the nodes of one job, so the job holds one cluster's nodes and nothing else.
-`tests/test_scrape_job_contract.py` holds every rule's `job` matcher to the name in this paragraph.
+**The scrape job is `regalia-node`.** Configure `job_name: regalia-node` for node_exporter.
+**The daemon scrape job is `regalia-kms`.** Configure `job_name: regalia-kms` with
+`metrics_path: /v1/metrics` for the daemon. Use `scheme: https` and the respective TLS configuration on
+each job. Use these exact names and keep one cluster per rule evaluation environment. Fleet comparisons
+group on `job`, so combining multiple clusters under the name would skew those comparisons.
+
+As a commissioning prerequisite, register **both** endpoints for every node in persistent external scrape
+inventory. Set the target label `topology_profile` to the fixed value `single-node` or `multi-node` on both jobs.
+Set `honor_labels: false` on both jobs so an endpoint cannot override inventory labels. Keep both targets
+registered during reboots, failed scrapes and outages, including before their first successful scrape. A
+profile is an external label for monitoring, not an admission decision. The two endpoints can have different
+`instance` values. Keep each `job`, `instance` pair unique so that no other endpoint supplies its health evidence.
+
+The rule tests hold job matchers to these names. New registrations require the profile label on both jobs. Older
+unlabeled targets keep the legacy multi-node alert behavior while the metadata warning is active.
 
 ## 3. Configuration on the node
 
@@ -70,7 +80,23 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
 
 ## 4. Failure behaviour and alerts
 
-- **A node that cannot be scraped** raises `RegaliaNodeExporterDown` (critical, after 2 minutes).
+- **A registered single-node endpoint** raises `RegaliaSingleNodeDown` (critical) at the first rule
+  evaluation that observes a failed scrape or cannot confirm health from a successful scrape. For
+  node_exporter, health needs `regalia_admission_serving == 1` and the mtime of `lease.prom` (typically
+  `/run/regalia-metrics/admission/lease.prom`). For the daemon, health needs `regalia_ready == 1` and
+  `regalia_readiness_last_check_seconds`. Each timestamp must be no more than 120 s old and must not be in
+  the future. A false or missing signal is enough to page. The alert can identify an endpoint that has never
+  responded or has stayed down past scrape lookback. Its latency includes the scrape/probe and evaluation
+  schedules; the rule adds no delay. A failed scrape means service is unavailable or unconfirmed to the
+  monitor. Investigate the endpoint, network and TLS as well as the machine.
+- **Topology metadata** warns after five minutes for missing or invalid profiles on either job, or for
+  missing or conflicting live topology on a successfully scraped exporter with valid metadata. Verified
+  size-one series and targets explicitly labeled single-node are excluded from both sides of the two fleet
+  comparisons. Verified size one suppresses survivor and recovery-key alerts and emits informational
+  `RegaliaOwnerAssistedReboot`: an owner must be present on each boot. It does not page.
+- **Other targets** that cannot be scraped still raise `RegaliaNodeExporterDown` (critical, after 2 minutes).
+  The delayed `RegaliaNotServing` and `RegaliaNotReady` rules also retain legacy coverage. The three shared
+  alerts exclude explicitly registered single-node targets, which have the earlier composite page.
 - **A writer that stopped** leaves its file to age: `RegaliaNodeMetricsStale` (2 minutes),
   `RegaliaAuditShipMetricsStale` (5 minutes for a shipper's).
 - **A writer that never wrote** (after a boot, `/run` is empty) leaves no series at all, which no value rule
@@ -78,16 +104,17 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   fire when a scraped node has no such file for 5 minutes; `RegaliaAuditShipMetricsMissing` when it lacks the
   shipper's file of any trail in `trails.py`'s registry (an instance never enabled, or refused its trail's path).
 - **A file node_exporter cannot read** drops its series: `RegaliaNodeTextfileUnreadable`.
-- **Silence is not health.** The rules above make a missing signal an alert; the one thing they cannot see is
-  the service itself having stopped (section 1).
+- **Limits.** No rule can detect an endpoint omitted from scrape inventory, and an offline monitoring service
+  cannot send a page. Collector configuration enforcement and comparison against the collector's observed
+  epoch remain separate work (regalia-kms-dx7.9).
 - On the node, nothing waits for the service: the metrics are written whether or not anyone scrapes them,
   and no node behaviour depends on monitoring.
 
 ## 5. How to check a candidate service
 
-- **The rules evaluate as intended:** `tests/test_node_alert_firing.py` and `tests/test_alert_firing.py` drive a
-  fault at every rule under `promtool test rules` and require each to fire, and to stay silent when healthy.
-  A service that loads Prometheus rule files evaluates them the same way.
+- **The rules evaluate as intended:** the node, daemon and single-node firing tests use `promtool test rules`
+  to exercise faults and healthy controls. Validate that the service loads all three files, sees both
+  persistent target entries, and regularly probes `/v1/health/ready`.
 - **The scrape path:** from one of the service's addresses, a request to `https://<host_ipv4>:9100/metrics`
   with its client certificate is answered; the same request without a certificate, or with one from another
   CA, is refused; and from any address outside `monitoring_cidrs` the port does not answer at all

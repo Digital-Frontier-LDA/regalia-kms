@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "deploy" / "monitoring" / "regalia-node.rules.yml"
 # series a node writes for context, with no alert of their own (each says why)
 CONTEXT = {
-    "regalia_topology_nodes": "the genesis-fixed designed size; context for topology-aware monitoring, not live availability",
     "regalia_heartbeat_max_lifetime_seconds": "what the manifest allows",
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
@@ -193,6 +192,9 @@ SCENARIOS = {
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
+    "RegaliaOwnerAssistedReboot": {
+        "fault": [("regalia_topology_nodes", NODE_A, "1+0x5")],
+        "healthy": [("regalia_topology_nodes", NODE_A, "3+0x5")], "at": 120},
     "RegaliaNodeMetricsStale": {
         "fault": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+0x10")],
         "healthy": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+60x10")], "at": 600},
@@ -241,7 +243,8 @@ class Structure(unittest.TestCase):
         found = rules()
         self.assertEqual(set(found), set(SCENARIOS))
         for name, rule in found.items():
-            self.assertIn(rule["labels"]["severity"], ("critical", "warning"))
+            allowed = ("info",) if name == "RegaliaOwnerAssistedReboot" else ("critical", "warning")
+            self.assertIn(rule["labels"]["severity"], allowed)
             self.assertTrue(rule["annotations"]["summary"])
 
 

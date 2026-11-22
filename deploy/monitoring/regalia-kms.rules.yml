@@ -125,7 +125,7 @@ groups:
         annotations:
           summary: Operations are being refused for exceeding a daily quota; a workload hit its cap or something is retrying into one.
       - alert: RegaliaNotReady
-        expr: regalia_ready == 0
+        expr: regalia_ready{topology_profile!="single-node"} == 0
         for: 2m
         labels:
           severity: critical
