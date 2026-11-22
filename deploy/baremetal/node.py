@@ -1097,11 +1097,13 @@ class Sync:
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
     def membership_metrics(self):
-        """The held epoch and the TPM anchor's (#66 B3: sync never anchors; regalia-esp-advance does, after the ESP): a gap
+        """The verified topology's designed size, held epoch and TPM anchor (#66 B3: sync never anchors): a gap
         that lasts is an ESP advance that keeps failing, and rollback protection frozen at the anchor (regalia-kms-48's
         read; RegaliaMembershipAnchorBehind). Never raises: metrics do not stop sync; a file that stops moving alerts."""
         try:
-            metrics.publish("sync", [("regalia_membership_epoch", {}, self.manifest()["epoch"]),
+            manifest = self.manifest()
+            metrics.publish("sync", [("regalia_membership_epoch", {}, manifest["epoch"]),
+                                     ("regalia_topology_nodes", {}, membership.designed_nodes(manifest)),
                                      ("regalia_membership_anchor_epoch", {}, self.node.anchor().value())],
                             metrics.path("sync", "membership.prom"))
         except Exception:                       # noqa: BLE001 - see above

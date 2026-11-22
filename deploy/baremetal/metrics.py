@@ -77,6 +77,8 @@ METRICS = {
                                      {"cause": UNLOCK_CAUSES}, "sync"),
     # #66 B3: sync holds and publishes the chain, the ESP advance anchors it; a lasting gap is an ESP advance that fails
     "regalia_membership_epoch": ("gauge", "The epoch of the membership chain this node's sync holds and publishes.", {}, "sync"),
+    "regalia_topology_nodes": ("gauge", "The genesis-fixed designed size of this node's verified membership topology, not its live population.",
+                               {}, "sync"),
     "regalia_membership_anchor_epoch": ("gauge", "The epoch of the TPM anchor: the last chain regalia-esp-advance wrote to the ESP "
                                         "and anchored. Rollback protection stands at this epoch.", {}, "sync"),
     # #66 B3, written by regalia-esp-advance itself (root) at every run, success or not
