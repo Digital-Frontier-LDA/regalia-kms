@@ -13,6 +13,7 @@ on:
     paths:
       - deploy/baremetal/**
       - e2e/node-units-systemd.py
+      - e2e/lib/node_units_esp.py
       - .github/workflows/node-units.yml
       - internal/admission/**
       - internal/config/**
@@ -43,6 +44,7 @@ on:
     paths:
       - deploy/baremetal/**
       - e2e/node-units-systemd.py
+      - e2e/lib/node_units_esp.py
       - .github/workflows/node-units.yml
       - internal/admission/**
       - internal/config/**

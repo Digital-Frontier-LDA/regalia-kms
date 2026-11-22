@@ -56,9 +56,10 @@ HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
   * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
     exercised here (part 1 does that), and tabrmd keeps a disconnected client's sessions reclaimable where
     the kernel flushes them, so nothing that uses a session across processes is proven by it (#65).
-  * the ESP is a disposable VFAT loopback mount at /efi: the unit's
-    RequiresMountsFor= and the write are exercised, not a vfat mount nor a boot from it (that is
-    tests/test_baremetal_unlock_boot.py, boots 10-12).
+  * the fixture mounts a disposable VFAT image at /efi. The shipped site-check guard checks the mount before
+    reading the site document, and regalia-esp-advance writes and reads back the chain on that same mount.
+    This exercises the ESP's data path only. The QEMU boot coverage is in
+    tests/test_baremetal_unlock_boot.py, boots 10-12. Physical boot remains outside this fixture.
   * the KMS daemon runs as the invoking user through systemd-run, not as the shipped regalia-kms.service
     (its user, sandbox, AppArmor profile and credentials): what is proven is the admission contract
     between the units and the daemon, not the daemon's own confinement (that is e2e/kms-hardened-serve.sh).
