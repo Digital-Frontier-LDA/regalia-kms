@@ -16,7 +16,7 @@
 Run from the repository root:
 
 ```sh
-python3 tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3
+python3 -BEs tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3
 ```
 
 This checks the declared catalog, authoring, current case links and byte-bound product/candidate/external references. It reports `verificationAuthority: not-assessed` and `coverageComplete: false`. It does not validate evidence truth, approve N/A, enforce a legacy budget, preserve deleted obligations, or compare changed public behavior. The earlier checker reviews and findings remain unresolved. Its [CLI inventory proposal](reference-integrity-cli-proposal.json) is outside the frozen product interface inventory pending explicit tooling integration.

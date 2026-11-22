@@ -14,7 +14,7 @@ curl -fsSL --proto '=https' --proto-redir '=https' --max-time 120 \
     https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.xz -o "$node_archive"
 printf '%s  %s\n' 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb "$node_archive" |
     sha256sum --check --strict
-python3 -BEs -m tarfile -e "$node_archive" "$runtime" --filter data
+python3 -BI -m tarfile -e "$node_archive" "$runtime" --filter data
 mv "$runtime/node-v24.22.3-linux-x64" "$runtime/node"
 node_version="$("$node" --version)"
 [[ "$node_version" == v24.22.3 ]] || { echo 'OpenSpec Node version mismatch' >&2; exit 1; }

@@ -331,5 +331,28 @@
       "tools/openspec-ci/package.json": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621",
       "tools/openspec-ci/wiring.test.cjs": "64729f202350ddce3b5743d31f13dfa531be60c01c5a89bb25999a0ec6d87e9c"
     }
+  },
+  "currentSupportingFileBindings": {
+    "sourceDomain": "local-tooling-candidate-worktree",
+    "baseDocsRevision": "81d4f0452bf6b9fec5b349e364680fa083d3a8ad",
+    "scope": "Current invocation-policy corrections only. testedCandidate keeps the earlier run's byte bindings.",
+    "files": {
+      "tools/openspec-ci/install-runtime.sh": {
+        "fileSha256": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760",
+        "anchor": {
+          "line": 17,
+          "text": "python3 -BI -m tarfile -e \"$node_archive\" \"$runtime\" --filter data",
+          "lineSha256": "dfd6959dc9c4261055cacb454e75d3b0070d339f36915f4023b2872281c81855"
+        }
+      },
+      "openspec/coverage/RATCHET.md": {
+        "fileSha256": "c617349776475d590c5da75fd5da481b6c98daa65c04ba7585c7b385b944deba",
+        "anchor": {
+          "line": 19,
+          "text": "python3 -BEs tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3",
+          "lineSha256": "2eb924272d64d0887fe8a5a6872d7c8914f9d44d7196a77cad912abc7ad50a78"
+        }
+      }
+    }
   }
 }
