@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "active": false,
-  "status": "locally wired and functionally tested on the documentation branch; hosted proof pending",
+  "status": "finite non-draft hosted proof accepted at PR 764 head 91151a4d; tooling-domain integration and merge review pending",
   "id": "TOOLS.openspec-reference-checker",
   "candidateDocsRevision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
   "candidateDocsTree": "5aeb6c3d1b3c18865e9f3611f91027b3c1c0ceb9",
@@ -214,7 +214,15 @@
   },
   "verificationAuthority": "not-assessed",
   "coverageComplete": false,
-  "hostedEvidence": [],
+  "hostedEvidence": [
+    {
+      "path": "openspec/coverage/reference-ci-hosted-observation.json",
+      "sha256": "2ab2d471345fc725e417c9311fbdeba9871eff8b41b29d4dc994518ed01226e8",
+      "executedHead": "91151a4d0ed7871ac517d895cf7bcfd3b56fdbaa",
+      "evaluatedTree": "a72280d606bf22cd215ba9e0c7331745a0933509",
+      "qualification": "finite hosted tooling observation only"
+    }
+  ],
   "implementationTasksCompleted": 6,
   "testedCandidate": {
     "baseDocsRevision": "848874d587e3cc356025605fdc67ccdf3928fb1f",
@@ -334,8 +342,8 @@
   },
   "currentSupportingFileBindings": {
     "sourceDomain": "local-tooling-candidate-worktree",
-    "baseDocsRevision": "81d4f0452bf6b9fec5b349e364680fa083d3a8ad",
-    "scope": "Current invocation-policy corrections only. testedCandidate keeps the earlier run's byte bindings.",
+    "baseDocsRevision": "91151a4d0ed7871ac517d895cf7bcfd3b56fdbaa",
+    "scope": "Current local bindings. The hosted observation fixes the earlier executed RATCHET bytes; testedCandidate retains its earlier run bindings.",
     "files": {
       "tools/openspec-ci/install-runtime.sh": {
         "fileSha256": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760",
@@ -346,7 +354,7 @@
         }
       },
       "openspec/coverage/RATCHET.md": {
-        "fileSha256": "c617349776475d590c5da75fd5da481b6c98daa65c04ba7585c7b385b944deba",
+        "fileSha256": "9690b3191d8a299cde75a4e0f858710e89fbccabb766f9985f6997648ad29b67",
         "anchor": {
           "line": 19,
           "text": "python3 -BEs tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3",

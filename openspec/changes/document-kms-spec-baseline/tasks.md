@@ -38,10 +38,10 @@ This documentation baseline remains active. Completed drafting or reference chec
 ## 5. Coverage ratchet and final readiness
 
 - [ ] 5.1 Finish independent verification of the authorization/ratchet prototype. Its initial refusal/control exercise ran, but the N/A review and case-deletion findings and interrupted reviews remain unresolved; no accepted full-ratchet checker is claimed.
-- [x] 5.2a Implement and functionally verify the local reference-only helper against the current aggregate: 31 tests, earlier reference-guard controls and actual snapshot pass; evidence authority remains unassessed. The finite CI wiring is local and hosted enforcement remains unproven.
+- [x] 5.2a Implement and functionally verify the local reference-only helper against the current aggregate: 31 tests, earlier reference-guard controls and actual snapshot pass; evidence authority remains unassessed. Finite hosted enforcement is recorded under 5.4; the full coverage ratchet remains open.
 - [ ] 5.2 Integrate a reviewed checker against the stable aggregate schema; verify its success means integrity only when coverage is incomplete, and require-complete fails on open cases.
 - [ ] 5.3 Review the exact legacy gap/exclusion baseline and change-disposition rules; verify added gaps and broader exclusions fail while genuine closures pass without hiding existing gaps.
-- [ ] 5.4 Complete CI enforcement: the finite strict/reference slice is wired locally under add-openspec-reference-integrity-ci. Verify its hosted evaluated commit/tree and PR head, complete the separately reviewed coverage ratchet, and observe forge-required checks separately from workflow declarations.
+- [ ] 5.4 Complete CI enforcement. The finite strict/reference slice recorded here now has [accepted non-draft tooling proof](../../coverage/reference-ci-hosted-observation.json) on the evaluated PR #764 tree, including build-test and all 18 aggregate needs. Complete the separately reviewed coverage ratchet, and keep dated forge policy observations separate from workflow declarations.
 - [ ] 5.5 Reconcile release milestones and both Gantts with the discovered blockers and measured work; verify no software-only evidence closes physical or authority gates and that owner-required hardware steps remain correctly sequenced.
 - [ ] 5.6 Complete normal independent documentation/tooling review and handoff; verify no product/limits changes, no pending blocking finding and all remaining gaps honestly documented. Exhaustive coverage requires closed discovery and complete accepted traces, not spec counts.
 

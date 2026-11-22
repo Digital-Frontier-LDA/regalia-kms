@@ -1,6 +1,6 @@
 # CI ratchet design and implementation gates
 
-**Current state: the local documentation branch wires strict OpenSpec validation and non-authorizing reference checks into build-test; hosted enforcement and the full ratchet remain unproven.** The interface inventory and ledger are the first discovery snapshot, with legacy traces still open. Do not enable a gate that falsely labels those traces verified or makes all existing work impossible.
+**Current state: the finite strict OpenSpec and reference-only build-test checks passed on the evaluated PR #764 ready-run tree. The full coverage ratchet remains open.** The interface inventory and ledger are the first discovery snapshot, with legacy traces still open. Do not enable a gate that falsely labels those traces verified or makes all existing work impossible.
 
 ## Required checks
 
@@ -29,7 +29,7 @@ This checks the declared catalog, authoring, current case links and byte-bound p
 - [ ] Establish the exact legacy gap baseline after review. Pass: adding one gap fails, closing one passes and unrelated capability additions cannot hide an old gap.
 - [ ] Exercise changed-interface enforcement. Pass: new route/subcommand/config field, removed contract, changed registration and persistent-version migration each fail without reconciliation; reviewed internal-only/no-contract-change controls pass.
 - [x] Wire the finite reference checker and pinned strict OpenSpec validation into the local build-test workflow. Local controls cover immutable product inputs, pinned tools, malformed specs/references/schema, and actual check-step status propagation.
-- [ ] Prove hosted reference enforcement. Pass: actual workflow run logs show enforcement on the evaluated commit/tree and its PR head, including tool preparation, phase results, timings and aggregate participation; no branch-protection/settings change is silently implied.
+- [x] Record finite hosted reference enforcement. The [ready-run observation](reference-ci-hosted-observation.json) binds run 44988104217 attempt 1 to head `91151a4d`, its evaluated merge/tree, the tool preparation and phase results, and the non-draft aggregate. Later documentation updates have a separate source identity.
 - [ ] Verify current forge required checks separately from workflow declarations. Pass: record their actual source and observation time. A job named 'gate' or a locally declared workflow is not proof of required branch protection.
 
-Start reconciliation with enrol/restore/startup/admission and owner unlock, then runtime API and remaining public surfaces. Discovery/source-change and gap/evidence authority checks and hosted workflow proof remain later deliverables. The local workflow does not establish complete coverage, accepted evidence authority or merge authorization.
+Start reconciliation with enrol/restore/startup/admission and owner unlock, then runtime API and remaining public surfaces. Discovery, changed-source comparison, legacy-gap and deletion preservation, reviewed non-applicability, and evidence authority remain open. The cited forge-policy observation is dated and separate from the workflow result. Tooling-domain integration, main/delta synchronization, and merge review remain separate gates.

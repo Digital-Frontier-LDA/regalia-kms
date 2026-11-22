@@ -17,8 +17,8 @@
 
 ## 4. Verify hosted execution
 
-- [ ] 4.1 After authorized publication, record the exact evaluated commit and tree, PR head if distinct, workflow run/attempt and build-test job ID, all phase results and timings, tool/pin output and the checker JSON boundary. Verify the aggregate consumes build-test. Retain hosted proof as tooling evidence, with coverage gaps and separate review obligations open.
+- [x] 4.1 Record the accepted [finite hosted tooling observation](../../coverage/reference-ci-hosted-observation.json) for ready run 44988104217, attempt 1. The exact evaluated tree passed all six build-test steps, all 18 aggregate needs and ci-gate with `IS_DRAFT=false`. This observation applies to head `91151a4d` and its evaluated merge. Review and coverage gates remain open.
 
 ## Workflow follow-up
 
-- Keep the change separate from the frozen baseline. Any later baseline synchronization or archive that changes main/delta parity needs coordinated authoring and source-trace review.
+- Keep KMS-CI-009 and KMS-CI-010 in this active delta. Synchronization and archive require coordinated tooling-domain inventory, authoring, and main/delta parity review against the frozen product baseline.

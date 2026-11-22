@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "kind": "finite-hosted-tooling-observation",
+  "scope": "Accepted observation of the executed PR head and evaluated merge only. Later documentation bytes were not part of this run.",
+  "source": {
+    "pullRequest": "https://github.com/Digital-Frontier-LDA/regalia-kms/pull/764",
+    "head": "91151a4d0ed7871ac517d895cf7bcfd3b56fdbaa",
+    "tree": "a72280d606bf22cd215ba9e0c7331745a0933509",
+    "evaluatedMerge": "3f7db36192d7ac758f9bc938596bba75b971c4a5",
+    "evaluatedParents": [
+      "0a32a901d1240eec51ddff323274e2ad935116f3",
+      "91151a4d0ed7871ac517d895cf7bcfd3b56fdbaa"
+    ],
+    "productRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+    "productTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+    "executedSourceSha256": {
+      ".github/workflows/ci.yml": "83b5371169c5137f115a5712943256dc7a323b820e4f6151502a157e8fbd5e69",
+      "tools/check_openspec_references.py": "31a7da1fb601d2928388bbbaf3420955e98b03813b8315a2cf1085f7363fd3bc",
+      "tests/test_check_openspec_references.py": "31a91dcdc25b75d860255dfa5bcce6747e6cc92b5847168b226d3a9692f93ea5",
+      "tools/openspec-ci/check-source.sh": "fafaf705f32275f4d186351f8e5dba9db96567d5f3c660d3a18c124934e4a897",
+      "tools/openspec-ci/install-runtime.sh": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760",
+      "tools/openspec-ci/package.json": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621",
+      "tools/openspec-ci/package-lock.json": "73308b1729ed26821ebbb86f60348e94a03c3206d511cca8c766ee78e8f0acca",
+      "tools/openspec-ci/check-lock.cjs": "8bd521601116fcab317a854853e5fd972e52d61faee2b0a59155339ce01cd594",
+      "tools/openspec-ci/check-result.py": "f6b794ddeff6ced2929a2702c9b70d106c72223b77d2a47d4fd08be6d63e97b5",
+      "tools/openspec-ci/wiring.test.cjs": "64729f202350ddce3b5743d31f13dfa531be60c01c5a89bb25999a0ec6d87e9c",
+      "openspec/coverage/RATCHET.md": "c617349776475d590c5da75fd5da481b6c98daa65c04ba7585c7b385b944deba"
+    }
+  },
+  "run": {
+    "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44988104217/attempts/1",
+    "id": 44988104217,
+    "attempt": 1,
+    "event": "pull_request",
+    "readyForReviewObserved": true,
+    "conclusion": "success",
+    "jobExecutionsSucceeded": 20,
+    "build": {
+      "id": 137103013597,
+      "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44988104217/job/137103013597",
+      "conclusion": "success",
+      "startedAt": "2026-11-22T05:08:41Z",
+      "completedAt": "2026-11-22T05:24:18Z",
+      "durationSeconds": 937,
+      "tail": [
+        {
+          "step": 18,
+          "name": "Reserve OpenSpec product source directory",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:00Z",
+          "completedAt": "2026-11-22T05:24:00Z",
+          "durationSeconds": 0
+        },
+        {
+          "step": 19,
+          "name": "Fetch immutable OpenSpec product source",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:00Z",
+          "completedAt": "2026-11-22T05:24:02Z",
+          "durationSeconds": 2
+        },
+        {
+          "step": 20,
+          "name": "Verify local OpenSpec product source",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:02Z",
+          "completedAt": "2026-11-22T05:24:02Z",
+          "durationSeconds": 0
+        },
+        {
+          "step": 21,
+          "name": "Select pinned Python for OpenSpec checks",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:02Z",
+          "completedAt": "2026-11-22T05:24:08Z",
+          "durationSeconds": 6
+        },
+        {
+          "step": 22,
+          "name": "Install pinned OpenSpec toolchain",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:08Z",
+          "completedAt": "2026-11-22T05:24:12Z",
+          "durationSeconds": 4
+        },
+        {
+          "step": 23,
+          "name": "Validate OpenSpec syntax and reference integrity",
+          "conclusion": "success",
+          "startedAt": "2026-11-22T05:24:12Z",
+          "completedAt": "2026-11-22T05:24:15Z",
+          "durationSeconds": 3
+        }
+      ]
+    },
+    "gate": {
+      "id": 137108957007,
+      "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44988104217/job/137108957007",
+      "conclusion": "success",
+      "loggedDraftFlag": false,
+      "loggedDraftFlagAt": "2026-11-22T05:35:32.6115593Z",
+      "needs": {
+        "build-test": "success",
+        "e2e-swtpm": "success",
+        "e2e-netns-disk": "success",
+        "e2e-sandbox-policy": "success",
+        "known-polkit-rules-debian13": "success",
+        "govulncheck": "success",
+        "pkcs11-e2e": "success",
+        "privileged-and-fuzz": "success",
+        "cosmos-node": "success",
+        "unlock-boot-qemu": "success",
+        "verity-boot-qemu": "success",
+        "initrd-reproducible": "success",
+        "rootfs-reproducible": "success",
+        "initrd-reproducible-debian": "success",
+        "initrd-reproducible-compare": "success",
+        "peer-unlock-swtpm": "success",
+        "pcrlock-luks-swtpm": "success",
+        "uki-build": "success"
+      }
+    },
+    "unlock": {
+      "id": 137103013558,
+      "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44988104217/job/137103013558",
+      "conclusion": "success",
+      "finalLoggedOkAt": "2026-11-22T05:35:28.2934614Z"
+    }
+  },
+  "runtime": {
+    "runnerImage": "ubuntu-26.04",
+    "imageVersion": "20261116.202.1",
+    "python": "3.14.7",
+    "node": "24.22.3",
+    "npm": "11.19.1",
+    "openspec": "2.1.1",
+    "nodeArchiveSha256": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb"
+  },
+  "checks": {
+    "strictSpecsPassed": 31,
+    "strictChangesPassed": 3,
+    "pythonTestsPassed": 31,
+    "nodeTestsPassed": 18,
+    "snapshotInputHashesMatched": 101,
+    "canonicalCases": 463,
+    "referenceIntegrity": true,
+    "verificationAuthority": "not-assessed",
+    "coverageComplete": false
+  },
+  "artifactsSha256": {
+    "buildJobLog": "b8847a442f918c863d79b09336b7a287d843b89b747cd3eb4b8401cc1754bf88",
+    "gateJobLog": "a1182a67d4cebad02257b1e01c4a27b55b344d2dac40e3cfc30641b886787a9d",
+    "unlockJobLog": "cf3b4fb739109cf86b8de0e7fb2a9073b94c50233efd75594bad782b8b5d81b0",
+    "checkerStdoutJson": "8a0b6f970722cd87160b073fa5d16e003734ee04a059e8321568d4e8a4620d6e",
+    "acceptedHostedProofRecord": "0b3977e7e63426ad64a248de9a6b20e42200d4546df1ed9c9277c8e49d10f84e"
+  },
+  "forgePolicyObservation": {
+    "observedAt": "2026-11-22T05:39:28.602783+00:00",
+    "branch": "main",
+    "branchHead": "0a32a901d1240eec51ddff323274e2ad935116f3",
+    "requiredStatusContexts": [
+      "secrets",
+      "build-test",
+      "govulncheck"
+    ],
+    "branchProtectionUrl": "https://api.github.com/repos/Digital-Frontier-LDA/regalia-kms/branches/main/protection",
+    "effectiveRulesUrl": "https://api.github.com/repos/Digital-Frontier-LDA/regalia-kms/rules/branches/main",
+    "scope": "Read-only, non-atomic main branch policy observations; no actor bypass or approval assessment."
+  },
+  "acceptanceBoundary": "Finite CI tooling only. Review, evidence qualification, coverage, synchronization with the frozen baseline, full ratchet, commissioning and hardware acceptance remain separate."
+}
