@@ -1,0 +1,2810 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "owner": "baremetal",
+  "requirements": [
+    {
+      "id": "KMS-MEM-001",
+      "capability": "baremetal/membership-and-topology",
+      "title": "Pinned chain continuity",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 880,
+          "symbol": "def transition(",
+          "supports": "Enforces epoch, predecessor digest and signer transition; accept verifies the envelope."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_membership.py",
+          "line": 169,
+          "symbol": "CONFLICT",
+          "supports": "An independently signed conflicting epoch is refused."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-MEM-002",
+      "capability": "baremetal/membership-and-topology",
+      "title": "Topology set at genesis",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 523,
+          "symbol": "def designed_nodes(",
+          "supports": "Derives the floor from signed topology with a fixed legacy default."
+        },
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 920,
+          "symbol": "topology is set at genesis and never changes",
+          "supports": "Refuses any later topology change."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_membership_v5.py",
+          "line": 120,
+          "symbol": "a multi-node topology of 5 nodes is not supported yet",
+          "supports": "Schema refuses unsupported topology."
+        },
+        {
+          "path": "tests/test_baremetal_membership_v5.py",
+          "line": 150,
+          "symbol": "self.assertEqual((m.designed_nodes(man), m.node_floor(man)), (3, 2))",
+          "supports": "Asserts fixed floor despite two terminal members."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-MEM-003",
+      "capability": "baremetal/membership-and-topology",
+      "title": "Profile-specific signer rules",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 583,
+          "symbol": "def _single_node_rules(",
+          "supports": "Requires the sole named node and owner-only revocation."
+        },
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 598,
+          "symbol": "floor = node_floor(manifest)",
+          "supports": "Applies designed majority to signer-rule validation."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_membership_v5.py",
+          "line": 176,
+          "symbol": "the owner in the heartbeat rule",
+          "supports": "Exercises refusal of an owner in the heartbeat rule."
+        },
+        {
+          "path": "tests/test_baremetal_membership_v5.py",
+          "line": 134,
+          "symbol": "an activation threshold of 1",
+          "supports": "Exercises refusal of below-floor activation."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-MEM-004",
+      "capability": "baremetal/membership-and-topology",
+      "title": "Limits acknowledgement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/manifest.py",
+          "line": 198,
+          "symbol": "ACKNOWLEDGEMENT =",
+          "supports": "Binds acknowledgement to the pinned digest."
+        },
+        {
+          "path": "deploy/baremetal/manifest.py",
+          "line": 658,
+          "symbol": "another text, nothing is signed",
+          "supports": "Refuses signing any other digest."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_genesis_topology.py",
+          "line": 166,
+          "symbol": "self.assertIn(LIMITS_FILE.read_text(), out)",
+          "supports": "Asserts complete text was displayed."
+        },
+        {
+          "path": "tests/test_baremetal_genesis_topology.py",
+          "line": 249,
+          "symbol": "def test_a_digest_other_than_the_shipped_text_s_signs_nothing",
+          "supports": "Asserts no signing output for another digest."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-MEM-005",
+      "capability": "baremetal/membership-and-topology",
+      "title": "Durable terminal identities",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/membership.py",
+          "line": 838,
+          "symbol": "def _tombstones(",
+          "supports": "Enforces retained fields and terminal states independently of signer."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_membership.py",
+          "line": 302,
+          "symbol": "tombstone:",
+          "supports": "Checks refusal when terminal entries are removed or changed."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TPM-001",
+      "capability": "baremetal/tpm-identity-and-attestation",
+      "title": "Bind the AK to the recorded TPM",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 487,
+          "symbol": "the AK offered is not the one the manifest names",
+          "supports": "Checks AK identity before wrapping."
+        },
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 508,
+          "symbol": "save()   # one attempt per challenge",
+          "supports": "Consumes the pending challenge before validation."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 262,
+          "symbol": "def test_the_ak_offered_must_be_the_one_the_manifest_names",
+          "supports": "Challenges the wrong AK and checks refusal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TPM-002",
+      "capability": "baremetal/tpm-identity-and-attestation",
+      "title": "Bind every quote to a single-use transcript",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 586,
+          "symbol": "consumed by the first attempt, whatever its outcome",
+          "supports": "Consumes nonce under verifier state lock."
+        },
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 598,
+          "symbol": "the quote is not bound to this transcript",
+          "supports": "Binds the qualification to the request."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 332,
+          "symbol": "self.refused(\"nonce is not outstanding\", nonce=nonce)",
+          "supports": "Rejects replay after a valid attempt."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TPM-003",
+      "capability": "baremetal/tpm-identity-and-attestation",
+      "title": "Keep verified session history",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 621,
+          "symbol": "self.check_counters(record, q, session_id, ephemeral_public)",
+          "supports": "Updates history only after cryptographic and measurement checks."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 506,
+          "symbol": "self.refused(\"from an earlier boot\", reset=2)",
+          "supports": "Asserts rejection after the reset count changes."
+        },
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 559,
+          "symbol": "def test_a_refused_quote_does_not_advance_the_counters",
+          "supports": "Proves a refused high count does not preclude a later valid lower count."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TPM-004",
+      "capability": "baremetal/tpm-identity-and-attestation",
+      "title": "Qualify physical TPM and its custody",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 482,
+          "symbol": "the EK is not the one recorded for this node at intake",
+          "supports": "Matches recorded intake identity."
+        }
+      ],
+      "tests": [],
+      "rationale": "Verifier checks do not demonstrate acceptance of the physical host under the intended custody procedure.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-ion"
+      ]
+    },
+    {
+      "id": "KMS-TPM-005",
+      "capability": "baremetal/tpm-identity-and-attestation",
+      "title": "Verify vendor endorsement chains at intake",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ekchain.py",
+          "line": 272,
+          "symbol": "openssl's chain is not EK -> CA -> the pinned root",
+          "supports": "Requires the complete expected chain."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_ekchain.py",
+          "line": 196,
+          "symbol": "def test_partial_chain_a_ca_pinned_as_the_anchor_is_refused",
+          "supports": "Exercises refusal when a CA is treated as the anchor."
+        },
+        {
+          "path": "tests/test_baremetal_ekchain.py",
+          "line": 259,
+          "symbol": "def test_an_ek_public_area_that_is_not_the_certificates_is_refused",
+          "supports": "Tests disagreement between certificate and presented public area."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-BOOT-001",
+      "capability": "baremetal/measured-boot-and-pcr-policy",
+      "title": "Match phase and firmware as one set",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 607,
+          "symbol": "matched = [s for s in on_pcrs",
+          "supports": "Requires firmware and PCR values from the same set."
+        },
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 614,
+          "symbol": "the node is in the %s phase of %s",
+          "supports": "Refuses the other phase."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 588,
+          "symbol": "def test_each_phase_of_an_image_is_accepted_for_its_own_request_only",
+          "supports": "Asserts acceptance in each phase and refusal across phases."
+        },
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 387,
+          "symbol": "digest=attest.expected_pcr_digest(NEXT_PCRS))",
+          "supports": "Checks mixed PCR and firmware refusal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-BOOT-002",
+      "capability": "baremetal/measured-boot-and-pcr-policy",
+      "title": "Treat unverified PCR values as diagnostic only",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 603,
+          "symbol": "reported = check_reported_values(pcr_values, selected, q[\"pcr_digest\"])",
+          "supports": "Checks consistency before reporting differences."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_attest.py",
+          "line": 785,
+          "symbol": "self.refused(\"the reported PCR values do not match the quote\"",
+          "supports": "Proves altered values are refused."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-BOOT-003",
+      "capability": "baremetal/measured-boot-and-pcr-policy",
+      "title": "Show what a PCR survey has proved",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/pcr_survey.py",
+          "line": 136,
+          "symbol": "stable\" if same_boots else",
+          "supports": "Requires the repeat boot before calling a PCR stable."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_pcr_survey.py",
+          "line": 51,
+          "symbol": "self.assertEqual(t[\"7\"][\"class\"], \"unproven",
+          "supports": "Asserts explicit unproven classification."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-BOOT-004",
+      "capability": "baremetal/measured-boot-and-pcr-policy",
+      "title": "Verify the installed operating-system image",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/image/install-host.sh",
+          "line": 195,
+          "symbol": "under the root hash $ROOTHASH: nothing was written",
+          "supports": "Runs verity verification before disk writes."
+        },
+        {
+          "path": "deploy/baremetal/image/install-host.sh",
+          "line": 288,
+          "symbol": "and $USR_A_VERITY after writing",
+          "supports": "Verifies target readback."
+        }
+      ],
+      "tests": [
+        {
+          "path": "e2e/install-host-loop.sh",
+          "line": 112,
+          "symbol": "is refused by veritysetup verify BEFORE the disk is touched",
+          "supports": "Asserts refusal despite matching file digest."
+        },
+        {
+          "path": "e2e/install-host-loop.sh",
+          "line": 192,
+          "symbol": "verify passes from the partitions",
+          "supports": "Checks actual installed partitions."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-BOOT-005",
+      "capability": "baremetal/measured-boot-and-pcr-policy",
+      "title": "Expose TEST slot diagnostic results",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "tests/test_baremetal_unlock_boot.py",
+          "line": 1752,
+          "symbol": "HOST SLOT B VERITY VERIFY FAILED",
+          "supports": "Runs host readback with the recorded root."
+        },
+        {
+          "path": "tests/test_baremetal_unlock_boot.py",
+          "line": 1749,
+          "symbol": "HOST SLOT B PARTUUID MISMATCH",
+          "supports": "Checks both identifiers before verity verification."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_verity_slot_diagnostics.py",
+          "line": 70,
+          "symbol": "def test_wrong_data_or_hash_partuuid_fails_by_name_without_verifying_or_repairing_and_detaches",
+          "supports": "Asserts named failure, no verification/repair and detach."
+        },
+        {
+          "path": "tests/test_verity_slot_diagnostics.py",
+          "line": 87,
+          "symbol": "def test_corrupt_pair_verification_fails_with_the_devices_root_and_stderr_and_detaches",
+          "supports": "Checks actual command-failure propagation and cleanup."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENROL-001",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Check host identity and the attended root pin",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 852,
+          "symbol": "def check_manifest(directory, chain, root_key, typed, document, replace=None)",
+          "supports": "Performs signed-chain and enrolled-host validation."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 127,
+          "symbol": "def test_the_fingerprint_typed_must_be_the_root_keys",
+          "supports": "Exercises mismatch in the attended fingerprint."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 153,
+          "symbol": "def test_the_measurements_must_be_the_ones_the_manifest_commits_to",
+          "supports": "Exercises mismatched measurements."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 159,
+          "symbol": "self.assertEqual(sorted(os.listdir(self.d)), before)",
+          "supports": "Verifies the check writes nothing."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENROL-002",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Publish checked files without clobbering",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 970,
+          "symbol": "require(_same(target, digest)",
+          "supports": "Will only resume against matching content."
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 957,
+          "symbol": "which fails if the target exists (a rename would replace it silently)",
+          "supports": "Explains exclusive publication."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 52,
+          "symbol": "self.assertFalse(os.path.lexists(self.prefix + \"/etc\")",
+          "supports": "Asserts persistent store is used instead of writing under /etc."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 115,
+          "symbol": "def test_a_file_that_appears_before_the_publish_is_not_replaced",
+          "supports": "Asserts concurrent publication refusal."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 100,
+          "symbol": "def test_a_link_is_not_followed",
+          "supports": "Checks symlink refusal and no destination write."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENROL-003",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Initialize heartbeat from verified history",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1117,
+          "symbol": "def first_heartbeat(config_path, run=subprocess.run, bootstrap=False",
+          "supports": "Reads and adopts peer heartbeat during enrolment."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 33,
+          "symbol": "self.assertEqual(self.counter.value(), sequence,",
+          "supports": "Verifies adopted sequence."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 39,
+          "symbol": "def test_nobody_answering_is_a_refusal_that_writes_nothing",
+          "supports": "Proves absent heartbeat fails without advancing state."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 73,
+          "symbol": "def test_bootstrap_is_refused_above_epoch_1",
+          "supports": "Asserts explicit upper bound."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENROL-004",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Refuse unsafe TPM counter resume",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1141,
+          "symbol": "nothing to do (a heartbeat held, or the counter defined already)",
+          "supports": "Reuses defined counter only through checked paths."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 87,
+          "symbol": "def test_a_half_defined_counter_is_recounts_case",
+          "supports": "Asserts half-pair refusal."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 57,
+          "symbol": "def test_an_existing_counter_far_behind_the_network_is_refused",
+          "supports": "Verifies jump bound on an existing pair."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UNLOCK-001",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Require both halves of one disk path",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 1077,
+          "symbol": "the credential derived with %s's contribution does not open keyslot",
+          "supports": "Requires the candidate credential to open its path's keyslot."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 735,
+          "symbol": "self.assertEqual(self.unlock(session=self.boot(), transports={\"b\": self.down",
+          "supports": "Asserts eligible peer failover."
+        },
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 743,
+          "symbol": "def test_neither_half_alone_nor_another_path_opens_a_keyslot",
+          "supports": "Exercises each half and a mismatched pair."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UNLOCK-002",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Authorize and consume a boot exchange",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 547,
+          "symbol": "this boot session has already accepted a response",
+          "supports": "Rejects another response after first acceptance."
+        },
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 558,
+          "symbol": "nothing was asked of %s in this boot session",
+          "supports": "Requires an outstanding request for that peer."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 163,
+          "symbol": "self.refused(\"this boot session has already accepted a response\"",
+          "supports": "Confirms the second valid sender cannot deliver a second key."
+        },
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 315,
+          "symbol": "self.denied(\"heartbeat\")",
+          "supports": "Verifies refusal audit when the peer heartbeat expires."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UNLOCK-003",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Keep console recovery independent",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/initrd/regalia-unlock.service",
+          "line": 35,
+          "symbol": "[Service]",
+          "supports": "Defines the initrd agent separately from root cryptsetup."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 952,
+          "symbol": "def test_the_client_is_an_agent_beside_the_console_never_in_front_of_it",
+          "supports": "Checks console-independent unit wiring."
+        },
+        {
+          "path": "tests/test_baremetal_unlock.py",
+          "line": 1455,
+          "symbol": "def test_systemd_cryptsetup_asks_the_client_answers_and_the_console_is_never_taken_away",
+          "supports": "Asserts cryptsetup interaction in boot fixture."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UNLOCK-004",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Require the topology's boot network shape",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/bootnet.py",
+          "line": 84,
+          "symbol": "owner = {\"node_id\": membership.OWNER, \"wg_service_pub\": manifest[\"owner_wg_pub\"]}",
+          "supports": "Uses the manifest's owner key."
+        },
+        {
+          "path": "deploy/baremetal/bootnet.py",
+          "line": 100,
+          "symbol": "a single-node host is nobody's unlock peer: no wg-unlock",
+          "supports": "Forbids responder configuration on the node."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_single_node_network.py",
+          "line": 130,
+          "symbol": "self.assertEqual(bootnet.unlock_endpoints(self.cfg, self.single), {\"owner\":",
+          "supports": "Asserts only the owner endpoint."
+        },
+        {
+          "path": "tests/test_baremetal_single_node_network.py",
+          "line": 81,
+          "symbol": "def test_a_single_node_host_has_no_service_mesh",
+          "supports": "Tests rejection of a service mesh."
+        },
+        {
+          "path": "tests/test_baremetal_single_node_network.py",
+          "line": 150,
+          "symbol": "def test_multi_node_still_needs_its_node_peers",
+          "supports": "Checks sorted topology refusal under each renderer."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OWNER-001",
+      "capability": "baremetal/single-node-owner-unlock",
+      "title": "Use only the pinned owner responder",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 685,
+          "symbol": "a single-node boot configuration lists exactly one peer",
+          "supports": "Constrains boot trust to one owner responder."
+        },
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 289,
+          "symbol": "the response is not signed by one of the owner_keys",
+          "supports": "Verifies the configured owner key."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 409,
+          "symbol": "def test_the_disk_never_opens_on_the_tpm_alone",
+          "supports": "Asserts that loss of the owner responder keeps the disk locked."
+        },
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 318,
+          "symbol": "def test_the_node_takes_a_response_only_signed_by_an_owner_key_its_configuration_holds",
+          "supports": "Exercises signature and response binding controls."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OWNER-002",
+      "capability": "baremetal/single-node-owner-unlock",
+      "title": "Keep the owner contribution separately controlled",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ownerunlock.py",
+          "line": 89,
+          "symbol": "the two recipients are one card",
+          "supports": "Requires distinct recipients."
+        },
+        {
+          "path": "deploy/baremetal/ownerunlock.py",
+          "line": 284,
+          "symbol": "the node asks for path epoch %d",
+          "supports": "Checks path epoch during response."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 277,
+          "symbol": "def test_a_repair_gets_a_new_path_epoch_and_the_old_envelope_is_refused_unsigned",
+          "supports": "Verifies old envelope refusal before signing."
+        },
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 267,
+          "symbol": "def test_the_owner_answers_only_its_node_its_path_epoch_and_its_tpm",
+          "supports": "Restricts target and TPM."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OWNER-003",
+      "capability": "baremetal/single-node-owner-unlock",
+      "title": "Stop on a latched owner card",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ownerunlock.py",
+          "line": 233,
+          "symbol": "the owner key's token refused its PIN before",
+          "supports": "Checks the latch before using the signer."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 706,
+          "symbol": "self.assertEqual(wire[-1], {\"v\": 1, \"error\": \"DENIED\"})",
+          "supports": "Asserts detailed PIN error stays off the wire."
+        },
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 761,
+          "symbol": "def test_no_exchange_starts_after_the_window",
+          "supports": "Exercises expiry and absence of exchanges."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OWNER-004",
+      "capability": "baremetal/single-node-owner-unlock",
+      "title": "Qualify the attended card procedure on TEST hardware",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "Physical TEST staging acceptance is tracked separately from these owner-unlock source assertions.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-ion"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-001",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Separate local self-issuance from peer leases",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 890,
+          "symbol": "conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED",
+          "supports": "Identifies caller using kernel credentials."
+        },
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 918,
+          "symbol": "require(source == local_source(self.admission_uid)",
+          "supports": "Enforces admission UID before loading the manifest."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 87,
+          "symbol": "self.assertEqual((self.issued, self.attested), ([], []))",
+          "supports": "Confirms no issuance or attestation for foreign UID."
+        },
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 97,
+          "symbol": "def test_under_multi_node_it_issues_nothing_and_says_why",
+          "supports": "Asserts exact profile check and no lease."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-LEASE-002",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Bound issuance to current attested state",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/lease.py",
+          "line": 478,
+          "symbol": "binding=request_binding(request)",
+          "supports": "Binds the system-phase quote to the request."
+        },
+        {
+          "path": "deploy/baremetal/lease.py",
+          "line": 482,
+          "symbol": "_stamp(min(now + MAX_LIFETIME, fresh_until))",
+          "supports": "Caps expiry at both limits."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_lease.py",
+          "line": 340,
+          "symbol": "def test_a_lease_never_outlives_the_issuer_s_heartbeat(self):",
+          "supports": "Exercises the named behavior and asserts its expected acceptance or refusal."
+        },
+        {
+          "path": "tests/test_baremetal_lease.py",
+          "line": 871,
+          "symbol": "def test_under_single_node_the_node_holds_its_own_thirty_second_lease_bound_to_quote_and_state(self):",
+          "supports": "Exercises the named behavior and asserts its expected acceptance or refusal."
+        },
+        {
+          "path": "tests/test_baremetal_lease.py",
+          "line": 726,
+          "symbol": "def test_a_quote_that_binds_another_state_or_key_is_refused(self):",
+          "supports": "Exercises the named behavior and asserts its expected acceptance or refusal."
+        }
+      ],
+      "rationale": "Pinned assertions cover heartbeat expiry, signed single-node boot and state facts, and refusal for altered state or key binding. Execution was not checked.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-LEASE-003",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Refuse mismatched or untrusted admission",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/admission/admission.go",
+          "line": 568,
+          "symbol": "func readTrustedStat(path string",
+          "supports": "Controls trusted admission reads."
+        },
+        {
+          "path": "internal/admission/admission.go",
+          "line": 539,
+          "symbol": "an admission in mode single is served only",
+          "supports": "Requires a verified profile for single mode."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/admission/single_test.go",
+          "line": 83,
+          "symbol": "func TestTheModeMustFitTheChainsProfile",
+          "supports": "Exercises mismatches in both directions."
+        },
+        {
+          "path": "internal/admission/admission_test.go",
+          "line": 515,
+          "symbol": "func TestALinkAboveTheDirectoryIsNotTrusted",
+          "supports": "Exercises rejection of an untrusted ancestor."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ACT-001",
+      "capability": "baremetal/activation-and-fencing",
+      "title": "Apply the signed topology's normal activation rule",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/activation.py",
+          "line": 111,
+          "symbol": "len(node_parties) >= rule[\"threshold\"]",
+          "supports": "Checks normal quorum."
+        },
+        {
+          "path": "deploy/baremetal/activation.py",
+          "line": 316,
+          "symbol": "\"signatures\": [signer(lease, manifest, now)]",
+          "supports": "Routes sole-node grant through its signer."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_activation.py",
+          "line": 79,
+          "symbol": "self.assertEqual(act.verify(signed(body, \"a\", \"b\"), self.m1), body)",
+          "supports": "Asserts two eligible signatures pass and one fails in the same case."
+        },
+        {
+          "path": "tests/test_baremetal_single_node_serving.py",
+          "line": 145,
+          "symbol": "def test_under_single_node_the_node_activates_itself_one_of_one_and_asks_no_one(self):",
+          "supports": "Exercises the named behavior and asserts its expected acceptance or refusal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ACT-002",
+      "capability": "baremetal/activation-and-fencing",
+      "title": "Restrict owner-backed multi-node activation",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/activation.py",
+          "line": 120,
+          "symbol": "the recovery path needs every other node party",
+          "supports": "Requires current exclusions."
+        },
+        {
+          "path": "deploy/baremetal/activation.py",
+          "line": 116,
+          "symbol": "the owner alone never activates a site",
+          "supports": "Requires an independent node signature."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_activation.py",
+          "line": 98,
+          "symbol": "self.refused(\"b is not\", act.verify",
+          "supports": "Shows the same recovery request fails when b is still eligible."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ACT-003",
+      "capability": "baremetal/activation-and-fencing",
+      "title": "Verify a fenced host remains powered off",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/fence.py",
+          "line": 146,
+          "symbol": "something turned it back on; not fenced",
+          "supports": "Requires the second Off observation."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_fence.py",
+          "line": 228,
+          "symbol": "self.refused(\"read Off, then 'On' 10 s later",
+          "supports": "Exercises refusal after power returns."
+        },
+        {
+          "path": "tests/test_baremetal_fence.py",
+          "line": 183,
+          "symbol": "def test_each_box_bound_forced_off_and_read_off_twice",
+          "supports": "Checks binding, action and repeated observations with the transport fixture."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ACT-004",
+      "capability": "baremetal/activation-and-fencing",
+      "title": "Recover the single-node activation floor safely",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "deploy/baremetal/activation.py",
+          "line": 261,
+          "symbol": "so it signs no activation until the owner re-establishes the floor",
+          "supports": "Enforces refusal and names the missing recovery procedure."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_single_node_serving.py",
+          "line": 175,
+          "symbol": "def test_a_lost_grant_record_signs_nothing(self):",
+          "supports": "Exercises the named behavior and asserts its expected acceptance or refusal."
+        }
+      ],
+      "rationale": "Published code refuses activation. The conditional owner floor-repair procedure is outstanding.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.24"
+      ]
+    },
+    {
+      "id": "KMS-ETCD-001",
+      "capability": "baremetal/etcd-and-operational-state",
+      "title": "Render topology-specific membership and trust",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 255,
+          "symbol": "clients connect only over the unix socket",
+          "supports": "Restricts the client transport."
+        },
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 266,
+          "symbol": "is not the single-node member's loopback peer URL",
+          "supports": "Checks the single-node peer transport."
+        },
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 271,
+          "symbol": "peer-transport-security must require certificates",
+          "supports": "Requires explicit peer authentication."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 96,
+          "symbol": "self.assertEqual((doc[\"heartbeat-interval\"], doc[\"election-timeout\"]), (100, 1000))",
+          "supports": "Checks single-node timings and paired loopback assertions."
+        },
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 82,
+          "symbol": "self.assertNotIn(\"c=\", json.loads(config)[\"initial-cluster\"])",
+          "supports": "Checks quarantined member excluded."
+        },
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 180,
+          "symbol": "def test_multi_node_still_requires_the_mesh_prefix",
+          "supports": "Asserts loopback refusal under multi-node."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ETCD-002",
+      "capability": "baremetal/etcd-and-operational-state",
+      "title": "Authenticate the peer certificate bundle",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 139,
+          "symbol": "no certificate of %s is bound by its signing key",
+          "supports": "Requires a valid binding for each member."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 56,
+          "symbol": "def test_a_binding_by_another_key_or_for_another_certificate_is_not_counted",
+          "supports": "Exercises swapped keys and certificate bodies."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ETCD-003",
+      "capability": "baremetal/etcd-and-operational-state",
+      "title": "Serve stateful operations from current watched history",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/opstate/gate.go",
+          "line": 83,
+          "symbol": "func (g *StateGate) evaluate",
+          "supports": "Compares session, admission and cache evidence at request time."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/opstate/gate_test.go",
+          "line": 71,
+          "symbol": "refused(\"last confirmed 30s ago",
+          "supports": "Asserts deadline refusal and checks readiness once the time bound is met."
+        },
+        {
+          "path": "internal/opstate/gate_test.go",
+          "line": 60,
+          "symbol": "refused(\"names state epoch 1, this server holds 0\")",
+          "supports": "Asserts refusal for a different state epoch."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RESTORE-001",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Require an attended signed restore statement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 173,
+          "symbol": "the collector's highest state epoch is an integer",
+          "supports": "Takes the off-host collector epoch as part of issuance."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 323,
+          "symbol": "the restore statement is valid from",
+          "supports": "Checks the window before stopping services."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 361,
+          "symbol": "is not the one the statement names",
+          "supports": "Checks the copied snapshot digest."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 663,
+          "symbol": "self.assertEqual(self.ledger.read()[\"clusters\"][m.digest(self.chain[0])], [5, 6, 10])",
+          "supports": "Asserts strictly increasing issued epochs above both floors."
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 396,
+          "symbol": "def test_a_window_that_ends_before_the_entry_is_written_is_refused",
+          "supports": "Asserts late write refusal and cleanup."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RESTORE-002",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Verify staged and live history before serving",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 382,
+          "symbol": "the restored store holds state epoch %d",
+          "supports": "Refuses a non-increasing proposed epoch in staging."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 403,
+          "symbol": "host.exchange(STAGING + \"/member\", MEMBER)",
+          "supports": "Publishes verified staging atomically."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 425,
+          "symbol": "live is not None and live[\"state_epoch\"] == epoch",
+          "supports": "Checks the new store before starting the daemon."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_restore_etcd.py",
+          "line": 171,
+          "symbol": "self.assertEqual(entry[\"state_epoch\"], 1)",
+          "supports": "Verifies actual etcd readback and signed state."
+        },
+        {
+          "path": "tests/test_baremetal_restore_etcd.py",
+          "line": 197,
+          "symbol": "self.assertNotIn(\"a\", self.host.procs)",
+          "supports": "Asserts no replacement live etcd after failed lost-disk restore."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RESTORE-003",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Keep normal services blocked while restore is unresolved",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 11,
+          "symbol": "ConditionPathExists=/etc/regalia/etcd.conf.yml",
+          "supports": "Published normal etcd condition checks configuration presence only."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 223,
+          "symbol": "whether the rename survives a power",
+          "supports": "Transaction fails closed on inconclusive exchange persistence while still running."
+        }
+      ],
+      "tests": [],
+      "rationale": "The published transaction has process-local stop and staging controls. Persistent pending, no-history and replacement pre-publication protection are open. Local candidates provide no delivery evidence.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.26",
+        "regalia-kms-dx7.19"
+      ]
+    },
+    {
+      "id": "KMS-RESTORE-004",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Recover missing single-node anchor and counter history",
+      "status": "MISSING",
+      "sources": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 187,
+          "symbol": "takes its floor from the owner's statement and the collector",
+          "supports": "Accepted single-node recovery design."
+        }
+      ],
+      "tests": [],
+      "rationale": "The published multi-node peer paths do not implement this single-node recovery.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.7"
+      ]
+    },
+    {
+      "id": "KMS-RESTORE-005",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Preserve multi-node history during authorized take-over",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/takeover.py",
+          "line": 250,
+          "symbol": "the backend on disk is at revision %r, below the %d this node",
+          "supports": "Rejects an older backend while deciding whether to force."
+        },
+        {
+          "path": "deploy/baremetal/takeover.py",
+          "line": 116,
+          "symbol": "etcd answers as cluster %s; this node applied cluster %s",
+          "supports": "Checks live cluster identity."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_takeover_etcd.py",
+          "line": 182,
+          "symbol": "self.assertEqual((entry[\"cluster_id\"], entry[\"state_epoch\"]), (self.cluster, 2))",
+          "supports": "Verifies identity and signed raised epoch in real-etcd test source."
+        },
+        {
+          "path": "tests/test_baremetal_takeover_etcd.py",
+          "line": 195,
+          "symbol": "def test_a_store_behind_what_was_applied_is_refused_and_both_started_again",
+          "supports": "Exercises rollback refusal before forcing."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REPLACE-001",
+      "capability": "baremetal/replacement-and-revocation",
+      "title": "Keep revoked identities terminal",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/replacement.py",
+          "line": 109,
+          "symbol": "reuses an identity the manifest already lists",
+          "supports": "Compares candidate identities against listed ones."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_replacement.py",
+          "line": 76,
+          "symbol": "self.refused(\"tombstone: a is %s and must stay",
+          "supports": "Checks terminal identity retention."
+        },
+        {
+          "path": "tests/test_baremetal_replacement.py",
+          "line": 134,
+          "symbol": "def test_no_identity_of_retired_hardware_is_ever_enrolled_again",
+          "supports": "Exercises key, TPM and HSM identity reuse."
+        },
+        {
+          "path": "tests/test_baremetal_replacement.py",
+          "line": 65,
+          "symbol": "(False,) * 3",
+          "supports": "Checks that terminal node has none of the three capabilities."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REPLACE-002",
+      "capability": "baremetal/replacement-and-revocation",
+      "title": "Require the exact attended replacement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/replacement.py",
+          "line": 116,
+          "symbol": "a replacement does not change %s",
+          "supports": "Refuses unrelated changes."
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 852,
+          "symbol": "def check_manifest(directory, chain, root_key, typed, document, replace=None)",
+          "supports": "Enforces signed-chain and typed replacement checks."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 200,
+          "symbol": "self.assertEqual(check(\"x\")[\"epoch\"], 2)",
+          "supports": "Asserts the typed identity works and missing/wrong values fail."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 204,
+          "symbol": "def test_a_replacement_that_changes_anything_else_is_refused",
+          "supports": "Asserts a changed unrelated node causes refusal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REPLACE-003",
+      "capability": "baremetal/replacement-and-revocation",
+      "title": "Restore the sole profile after owner theft revocation",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 94,
+          "symbol": "the KMS stays stopped until a root-signed manifest enrols a replacement",
+          "supports": "Accepted owner revocation and root replacement sequence."
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 891,
+          "symbol": "a single-node manifest enrols its node only at epoch 1 for now",
+          "supports": "Published restriction prevents later enrolment."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 100,
+          "symbol": "def test_a_single_node_manifest_enrols_its_node_at_genesis_only",
+          "supports": "Asserts current refusal only; no post-revocation success proof."
+        }
+      ],
+      "rationale": "Membership rules allow the terminal history, but the published enrolment rejects later single-node epochs. Local replacement work is unpublished.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.19",
+        "regalia-kms-dx7.26"
+      ]
+    },
+    {
+      "id": "KMS-UPDATE-001",
+      "capability": "baremetal/update-and-site-advance",
+      "title": "Approve an overlapping rollout before retirement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/measurements.py",
+          "line": 319,
+          "symbol": "require(emergency,",
+          "supports": "Refuses dropping the only currently acceptable set during ordinary rollout."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_rollout.py",
+          "line": 258,
+          "symbol": "self.assertEqual(measurements.transition(CURRENT, BOTH), \"approve\")",
+          "supports": "Asserts overlap followed by retirement."
+        },
+        {
+          "path": "tests/test_baremetal_rollout.py",
+          "line": 290,
+          "symbol": "def test_dropping_current_with_no_overlap_is_refused_unless_it_is_an_emergency",
+          "supports": "Checks refusal and explicit emergency classification."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UPDATE-002",
+      "capability": "baremetal/update-and-site-advance",
+      "title": "Require evidence of the booted target before retirement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/rollout.py",
+          "line": 276,
+          "symbol": "def retire_ready(manifest, document, states)",
+          "supports": "Checks peer convergence on the intended set."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_rollout.py",
+          "line": 754,
+          "symbol": "def test_current_is_not_retired_for_a_node_that_never_came_up_on_next",
+          "supports": "Checks retire success only after system-phase observations."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UPDATE-003",
+      "capability": "baremetal/update-and-site-advance",
+      "title": "Require a signed compatible site measurement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/siteadvance.py",
+          "line": 42,
+          "symbol": "def target(sets, booted, pcr12)",
+          "supports": "Selects the site value for the current booted set."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_siteadvance.py",
+          "line": 27,
+          "symbol": "self.assertEqual(siteadvance.target(sets, \"current\", NEW_SITE), \"moved\")",
+          "supports": "Checks approved site advance selection."
+        },
+        {
+          "path": "tests/test_baremetal_siteadvance.py",
+          "line": 57,
+          "symbol": "def test_an_image_update_in_flight_is_refused_even_when_pcr_12_matches",
+          "supports": "Checks refusal despite a matching site PCR."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-UPDATE-004",
+      "capability": "baremetal/update-and-site-advance",
+      "title": "Require an explicit single-node planned outage",
+      "status": "MISSING",
+      "sources": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 168,
+          "symbol": "the operator passes `--planned-outage`",
+          "supports": "Accepted planned-outage requirement."
+        }
+      ],
+      "tests": [],
+      "rationale": "The published multi-node rollout and PCR helpers do not deliver the single-node planned-outage workflow.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.8"
+      ]
+    },
+    {
+      "id": "KMS-CUSTODY-001",
+      "capability": "baremetal/offline-authorities-and-credentials",
+      "title": "Use the authorized TPM owner record",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ownerauth.py",
+          "line": 321,
+          "symbol": "require(given == current",
+          "supports": "Checks the held record digest."
+        },
+        {
+          "path": "deploy/baremetal/ownerauth.py",
+          "line": 216,
+          "symbol": "hmac.compare_digest(auth.check(node_id), entry[\"check\"])",
+          "supports": "Checks the node-specific value."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_ownerauth.py",
+          "line": 371,
+          "symbol": "def test_the_value_must_be_the_node_s_before_the_tpm_is_touched",
+          "supports": "Checks refusal before TPM use."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CUSTODY-002",
+      "capability": "baremetal/offline-authorities-and-credentials",
+      "title": "Deliver TPM authorization without an argument value",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ownerauth.py",
+          "line": 381,
+          "symbol": "def owner_call(auth)",
+          "supports": "Provides the authorized child invocation."
+        },
+        {
+          "path": "deploy/baremetal/ownerauth.py",
+          "line": 366,
+          "symbol": "def _value_fd(auth)",
+          "supports": "Creates the descriptor carrying the value."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_ownerauth.py",
+          "line": 196,
+          "symbol": "def test_a_memfd_never_the_command_line_and_closed_after",
+          "supports": "Checks sealed descriptor contents, lack of argument value and closure."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CUSTODY-003",
+      "capability": "baremetal/offline-authorities-and-credentials",
+      "title": "Generate only the host's sealed credential names",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/generators/regalia-kms-credentials",
+          "line": 33,
+          "symbol": "[ -L \"$f\" ] || [ ! -f \"$f\" ]",
+          "supports": "Refuses linked or non-regular PIN files."
+        },
+        {
+          "path": "deploy/baremetal/generators/regalia-kms-credentials",
+          "line": 40,
+          "symbol": "LoadCredentialEncrypted=$id.pin:",
+          "supports": "Emits only credential-loading entries."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_per_host_units.py",
+          "line": 370,
+          "symbol": "only credential lines: nothing else comes from /var",
+          "supports": "Checks generated keys and forbids unrelated settings."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CUSTODY-004",
+      "capability": "baremetal/offline-authorities-and-credentials",
+      "title": "Qualify the physical custody and commissioning ceremony",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "PIN-CUSTODY.md",
+          "line": 429,
+          "symbol": "## Which tier verifies each rule",
+          "supports": "Separates evidence tiers for custody decisions."
+        }
+      ],
+      "tests": [],
+      "rationale": "Production witnesses, hardware credential acceptance and commissioning authority were not supplied or exercised for this baseline.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-2jd",
+        "regalia-kms-1h7"
+      ]
+    },
+    {
+      "id": "KMS-HOST-001",
+      "capability": "baremetal/appliance-and-service-hardening",
+      "title": "Require AppArmor before KMS startup",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+          "line": 5,
+          "symbol": "AssertSecurity=apparmor",
+          "supports": "Requires AppArmor availability."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+          "line": 16,
+          "symbol": "AppArmorProfile=regalia-kms",
+          "supports": "Requires the named profile without optional semantics."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_apparmor.py",
+          "line": 91,
+          "symbol": "self.assertEqual(c.get(\"Unit\", \"AssertSecurity\", fallback=None), \"apparmor\")",
+          "supports": "Checks generated unit requirements and naming."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-HOST-002",
+      "capability": "baremetal/appliance-and-service-hardening",
+      "title": "Default-deny appliance network traffic",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/firewall.py",
+          "line": 105,
+          "symbol": "type filter hook input priority filter; policy drop;",
+          "supports": "Provides input default drop; adjacent chains implement forwarding and output."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_firewall.py",
+          "line": 120,
+          "symbol": "def test_every_chain_defaults_to_drop",
+          "supports": "Checks all three chain defaults."
+        },
+        {
+          "path": "tests/test_baremetal_firewall.py",
+          "line": 124,
+          "symbol": "def test_each_port_only_from_its_zones",
+          "supports": "Checks address scopes for each service port."
+        },
+        {
+          "path": "tests/test_baremetal_firewall.py",
+          "line": 128,
+          "symbol": "def test_outbound_only_to_declared_sinks",
+          "supports": "Checks destination scopes."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-HOST-003",
+      "capability": "baremetal/appliance-and-service-hardening",
+      "title": "Build factory configuration before consuming it",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/units/regalia-etc-factory.service",
+          "line": 29,
+          "symbol": "ExecStart=/usr/bin/systemd-tmpfiles --create --boot --prefix=/etc",
+          "supports": "Implements factory configuration creation."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_etc_inventory.py",
+          "line": 141,
+          "symbol": "self.assertEqual(lines[0][:2], [\"C+\", \"/etc\"])",
+          "supports": "Asserts the factory copy comes before links."
+        },
+        {
+          "path": "tests/test_baremetal_etc_inventory.py",
+          "line": 181,
+          "symbol": "def test_the_factory_unit_runs_before_sysusers_tmpfiles_and_apparmor",
+          "supports": "Checks boot ordering constraints."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-HOST-004",
+      "capability": "baremetal/appliance-and-service-hardening",
+      "title": "Order TEST staging network consumption after publication",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/image/staging/networkd.conf",
+          "line": 9,
+          "symbol": "After=systemd-tmpfiles-setup.service",
+          "supports": "Orders TEST networkd after configuration publication."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 492,
+          "symbol": "self.assertIn(\"systemd-tmpfiles-setup.service\", dropin[\"Unit\"][\"After\"].split())",
+          "supports": "Checks ordering and both staging conditions."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-HW-001",
+      "capability": "delivery/hardware-qualification",
+      "title": "Refuse incomplete or contradictory commissioning evidence",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/host_probe.py",
+          "line": 1580,
+          "symbol": "ok = all(v[\"value\"] for v in measured.values()) and not problems",
+          "supports": "Combines measured outcomes with evidence and image status."
+        },
+        {
+          "path": "deploy/baremetal/evidence.py",
+          "line": 131,
+          "symbol": "the evidence is older than 24 hours",
+          "supports": "Applies the commissioning evidence freshness bound."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_host_probe.py",
+          "line": 2105,
+          "symbol": "self.assertEqual(rc, 0, report.get(\"evidence_problems\"))",
+          "supports": "Asserts a complete agreeing record is accepted."
+        },
+        {
+          "path": "tests/test_baremetal_host_probe.py",
+          "line": 2132,
+          "symbol": "def test_evidence_mode_still_requires_every_control",
+          "supports": "Asserts failed measured control is fatal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-HW-002",
+      "capability": "delivery/hardware-qualification",
+      "title": "Qualify the scheduled boot and its physical custody",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/README.md",
+          "line": 601,
+          "symbol": "It does not verify the",
+          "supports": "Documents the scheduled image probe limit."
+        },
+        {
+          "path": "LIMITATIONS.md",
+          "line": 31,
+          "symbol": "Every three-node scenario so far runs on a software TPM",
+          "supports": "Separates software evidence from production commissioning."
+        }
+      ],
+      "tests": [],
+      "rationale": "No actual boot or physical commissioning was observed by this author.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.13",
+        "regalia-kms-dx7.35",
+        "regalia-kms-1h7"
+      ]
+    },
+    {
+      "id": "KMS-HW-003",
+      "capability": "delivery/hardware-qualification",
+      "title": "Test disks and failure domains before production",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/ETCD.md",
+          "line": 86,
+          "symbol": "99th percentile WAL fdatasync under 10 ms",
+          "supports": "Names the target storage measurement."
+        },
+        {
+          "path": "THREE-SITE-THREAT-MODEL.md",
+          "line": 52,
+          "symbol": "## Failure domains",
+          "supports": "Defines upstream failure domains for qualification."
+        }
+      ],
+      "tests": [],
+      "rationale": "TEST hardware and an independent production-site pilot are different release gates.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-2k9",
+        "regalia-kms-1h7"
+      ]
+    },
+    {
+      "id": "KMS-RELEASE-001",
+      "capability": "delivery/release-milestones",
+      "title": "Enforce the pinned software scenario result",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 238,
+          "symbol": "grep -q '^one-node: 26 passed, 0 failed$'",
+          "supports": "Enforces the exact pinned outcome."
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 244,
+          "symbol": "expected exactly one regalia-kms-dx7.${step} TODO line",
+          "supports": "Enforces each outstanding step separately."
+        }
+      ],
+      "tests": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 482,
+          "symbol": "ok(owner_connection_refused(alone, before)",
+          "supports": "Asserts same-transport owner-off refusal with no key."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 591,
+          "symbol": "the collector holds a's own lease refusal under epoch 2",
+          "supports": "Asserts named collector refusal for the terminal epoch."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RELEASE-002",
+      "capability": "delivery/release-milestones",
+      "title": "Complete TEST staging restore and owner acceptance",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 335,
+          "symbol": "and a 72 h burn-in. Owner-run",
+          "supports": "Documents the hardware gate for single-node."
+        }
+      ],
+      "tests": [],
+      "rationale": "The frozen tree does not demonstrate physical restore, sustained burn-in or formal staging acceptance.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-ion",
+        "regalia-kms-dx7.13",
+        "regalia-kms-dx7.19",
+        "regalia-kms-dx7.26"
+      ]
+    },
+    {
+      "id": "KMS-RELEASE-003",
+      "capability": "delivery/release-milestones",
+      "title": "Require the matching production qualification",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "docs/single-node-limits.md",
+          "line": 16,
+          "symbol": "deployment becomes a three-node one only through a new genesis",
+          "supports": "Documents the topology transition boundary."
+        },
+        {
+          "path": "LIMITATIONS.md",
+          "line": 13,
+          "symbol": "Neither this software nor a key ceremony has run on the production hardware",
+          "supports": "Records the commissioning evidence gap."
+        }
+      ],
+      "tests": [],
+      "rationale": "The selected path goes to three-node production. The independent single-node production gate is optional for that path.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-2jd",
+        "regalia-kms-2k9",
+        "regalia-kms-1h7"
+      ]
+    },
+    {
+      "id": "KMS-SEC-001",
+      "capability": "security/threat-model-and-limitations",
+      "title": "Bind the canonical limitations to single-node genesis",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/manifest.py",
+          "line": 240,
+          "symbol": "hmac.compare_digest(digest, SINGLE_NODE_LIMITS_SHA256)",
+          "supports": "Verifies the text shipped by the tool."
+        },
+        {
+          "path": "deploy/baremetal/manifest.py",
+          "line": 657,
+          "symbol": "the acknowledgement is of",
+          "supports": "Refuses signing a genesis that commits to a different digest."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_genesis_topology.py",
+          "line": 163,
+          "symbol": "def test_the_text_is_printed_verbatim_and_the_typed_phrase_records_its_digest",
+          "supports": "Asserts verbatim text and recorded digest."
+        },
+        {
+          "path": "tests/test_baremetal_genesis_topology.py",
+          "line": 181,
+          "symbol": "def test_a_wrong_or_absent_phrase_writes_nothing",
+          "supports": "Asserts no output on a bad phrase."
+        },
+        {
+          "path": "tests/test_baremetal_genesis_topology.py",
+          "line": 249,
+          "symbol": "def test_a_digest_other_than_the_shipped_text_s_signs_nothing",
+          "supports": "Checks signing refusal for other digest."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-SEC-002",
+      "capability": "security/threat-model-and-limitations",
+      "title": "Reject survivor authority on the single-node profile",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/opstate/state_epoch.go",
+          "line": 428,
+          "symbol": "a survivor authorization is refused under the %s profile",
+          "supports": "Enforces profile before survivor validation."
+        },
+        {
+          "path": "deploy/baremetal/owner.py",
+          "line": 417,
+          "symbol": "a fence is refused under the single-node profile",
+          "supports": "Requires signed chain for owner fencing decisions."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/opstate/single_node_test.go",
+          "line": 19,
+          "symbol": "if err == nil || !strings.Contains(err.Error(), \"a survivor authorization is refused under the single-node profile",
+          "supports": "Checks profile-specific refusal."
+        },
+        {
+          "path": "tests/test_baremetal_single_node_serving.py",
+          "line": 89,
+          "symbol": "def test_every_rejoin_command_is_refused_by_profile_and_recorded",
+          "supports": "Asserts no host calls and recorded refusal."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-SEC-003",
+      "capability": "security/threat-model-and-limitations",
+      "title": "Require independent single-node audit evidence",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "docs/single-node-limits.md",
+          "line": 58,
+          "symbol": "Q4. The external audit collector is mandatory",
+          "supports": "Defines the single-node collector requirement."
+        },
+        {
+          "path": "LIMITATIONS.md",
+          "line": 664,
+          "symbol": "Not built: the collector made mandatory (dx7.9)",
+          "supports": "Records the open mandatory collector gate."
+        }
+      ],
+      "tests": [],
+      "rationale": "General remote acknowledgement paths exist. The profile-wide collector requirement and collector-relative monitoring are outstanding.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.9"
+      ]
+    },
+    {
+      "id": "KMS-SEC-004",
+      "capability": "security/threat-model-and-limitations",
+      "title": "Disclose failure-domain and running-node limits",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "docs/single-node-limits.md",
+          "line": 30,
+          "symbol": "Any node failure, reboot or maintenance is a full outage",
+          "supports": "Canonical availability limitation."
+        },
+        {
+          "path": "docs/single-node-limits.md",
+          "line": 34,
+          "symbol": "a revocation does not reach a stolen node that is no longer reachable",
+          "supports": "Canonical hot theft limitation."
+        },
+        {
+          "path": "THREE-SITE-THREAT-MODEL.md",
+          "line": 52,
+          "symbol": "## Failure domains",
+          "supports": "Defines where redundancy assumptions apply."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_single_node_limits.py",
+          "line": 108,
+          "symbol": "def test_every_lost_or_degraded_row_is_an_accepted_limitation_citing_dx7",
+          "supports": "Requires risk entries to stay acknowledged."
+        },
+        {
+          "path": "tests/test_single_node_limits.py",
+          "line": 97,
+          "symbol": "def test_each_copy_equals_the_canonical_table",
+          "supports": "Checks user-facing copies retain the canonical table."
+        }
+      ],
+      "rationale": "The pinned source enforces the stated behavior and the cited assertion exercises it.",
+      "executionEvidence": [],
+      "beads": []
+    }
+  ],
+  "sourceAreas": [
+    {
+      "paths": [
+        "deploy/baremetal/beat.py",
+        "deploy/baremetal/convergence.py",
+        "deploy/baremetal/heartbeat.py",
+        "deploy/baremetal/heartbeat_watch.py",
+        "deploy/baremetal/manifest.py",
+        "deploy/baremetal/membership.py"
+      ],
+      "capabilities": [
+        "baremetal/membership-and-topology"
+      ],
+      "rationale": "Signed membership, topology, freshness, peer convergence and published chain."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/attest.py",
+        "deploy/baremetal/ekchain.py",
+        "deploy/baremetal/ekroots/PINS",
+        "deploy/baremetal/ekroots/SOURCES.md",
+        "deploy/baremetal/ekroots/infineon-optiga-ecc-root-ca.der",
+        "deploy/baremetal/ekroots/infineon-optiga-rsa-root-ca.der",
+        "deploy/baremetal/ekroots/servers/server-1.json",
+        "deploy/baremetal/ekroots/servers/server-2.json",
+        "deploy/baremetal/ekroots/servers/server-3.json",
+        "deploy/baremetal/signkey.py",
+        "deploy/baremetal/tpm-lockout.sh"
+      ],
+      "capabilities": [
+        "baremetal/tpm-identity-and-attestation"
+      ],
+      "rationale": "TPM proof, attestation and measured hardware trust inputs. DER roots and retained public intake metadata are trust and qualification artifacts."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/anchorpolicy.py",
+        "deploy/baremetal/bootcreds.py",
+        "deploy/baremetal/bootnext.py",
+        "deploy/baremetal/generators/regalia-boot-esp",
+        "deploy/baremetal/image/install-host.sh",
+        "deploy/baremetal/image/usr-verity.sh",
+        "deploy/baremetal/initrd_drift.py",
+        "deploy/baremetal/pcr_survey.py",
+        "deploy/baremetal/uki.py"
+      ],
+      "capabilities": [
+        "baremetal/measured-boot-and-pcr-policy"
+      ],
+      "rationale": "Measured boot, PCR control, UKI selection, installed verity and early ESP publication."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/enrol.py",
+        "deploy/baremetal/enrolpeer.py",
+        "deploy/baremetal/hostpaths.py",
+        "deploy/baremetal/node.example.json"
+      ],
+      "capabilities": [
+        "baremetal/enrolment-and-config-publication"
+      ],
+      "rationale": "Enrolment and durable per-host publication."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/bootnet.py",
+        "deploy/baremetal/initrd/build-initrd.sh",
+        "deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab",
+        "deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh",
+        "deploy/baremetal/initrd/initrd-inventory.txt",
+        "deploy/baremetal/initrd/inventory-check.sh",
+        "deploy/baremetal/initrd/regalia-boot-render.service",
+        "deploy/baremetal/initrd/regalia-unlock.service",
+        "deploy/baremetal/initrd/regalia-wg-boot.service",
+        "deploy/baremetal/initrd/repo-git.sh",
+        "deploy/baremetal/initrd/tree-retry.sh",
+        "deploy/baremetal/initrd/wg-boot",
+        "deploy/baremetal/unlock.py"
+      ],
+      "capabilities": [
+        "baremetal/boot-network-and-unlock"
+      ],
+      "rationale": "Initrd, boot-network setup, authorized disk paths and recovery interaction."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/ownerunlock.py"
+      ],
+      "capabilities": [
+        "baremetal/single-node-owner-unlock"
+      ],
+      "rationale": "Attended owner-only boot response and path custody."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/admission.py",
+        "deploy/baremetal/authtime.py",
+        "deploy/baremetal/lease.py",
+        "deploy/baremetal/node.py",
+        "deploy/baremetal/sync.py",
+        "deploy/baremetal/units/regalia-admission.service",
+        "deploy/baremetal/units/regalia-admission.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-authtime.service",
+        "deploy/baremetal/units/regalia-authtime.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-boot-session.service",
+        "deploy/baremetal/units/regalia-boot-session.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-sync.service",
+        "deploy/baremetal/units/regalia-sync.service.d/per-host.conf"
+      ],
+      "capabilities": [
+        "baremetal/runtime-leases-and-admission"
+      ],
+      "rationale": "Admission-facing kernel identity, signed state and authenticated time, runtime service ordering, and local or peer lease issuance."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/activation.py",
+        "deploy/baremetal/fence.py",
+        "deploy/baremetal/redfish.py"
+      ],
+      "capabilities": [
+        "baremetal/activation-and-fencing"
+      ],
+      "rationale": "Scoped activation, physical fence verification, pinned controller transport and operator authority."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/ETCD.md",
+        "deploy/baremetal/etcdconf.py",
+        "deploy/baremetal/image/etcd.pin",
+        "deploy/baremetal/opstate.py",
+        "deploy/baremetal/units/regalia-etcd.service",
+        "deploy/baremetal/units/regalia-etcd.service.d/per-host.conf"
+      ],
+      "capabilities": [
+        "baremetal/etcd-and-operational-state"
+      ],
+      "rationale": "Pinned etcd runtime, topology-specific templates and clients, signed operational state and state floors."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/MEMBERSHIP-RECOVERY.md",
+        "deploy/baremetal/RECOVERY-RECONCILIATION.md",
+        "deploy/baremetal/reanchor.py",
+        "deploy/baremetal/recount.py",
+        "deploy/baremetal/recover.py",
+        "deploy/baremetal/recovery-key.sh",
+        "deploy/baremetal/recovery-reconcile.py",
+        "deploy/baremetal/recovery_state.py",
+        "deploy/baremetal/rejoin.py",
+        "deploy/baremetal/restore.py",
+        "deploy/baremetal/survivor.py",
+        "deploy/baremetal/takeover.py"
+      ],
+      "capabilities": [
+        "baremetal/recovery-and-restoration"
+      ],
+      "rationale": "Recovery procedures, staging and exchange, lost-history detection and restricted operator paths."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/replacement.py",
+        "deploy/baremetal/revoke.py"
+      ],
+      "capabilities": [
+        "baremetal/replacement-and-revocation"
+      ],
+      "rationale": "Terminal transitions, fresh identities and operator revocation."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/espcreds.py",
+        "deploy/baremetal/measurements.py",
+        "deploy/baremetal/rollout.py",
+        "deploy/baremetal/siteadvance.py",
+        "deploy/baremetal/units/regalia-esp-advance.path",
+        "deploy/baremetal/units/regalia-esp-advance.path.d/per-host.conf",
+        "deploy/baremetal/units/regalia-esp-advance.service",
+        "deploy/baremetal/units/regalia-esp-advance.service.d/per-host.conf",
+        "deploy/baremetal/update.py"
+      ],
+      "capabilities": [
+        "baremetal/update-and-site-advance"
+      ],
+      "rationale": "Measured policy lifecycle, PCR site advance and ESP chain publication."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/cardrecord.py",
+        "deploy/baremetal/generators/regalia-kms-credentials",
+        "deploy/baremetal/keyfd.py",
+        "deploy/baremetal/owner.py",
+        "deploy/baremetal/ownerauth.py",
+        "deploy/baremetal/p11sign.py",
+        "deploy/baremetal/p11uri.py"
+      ],
+      "capabilities": [
+        "baremetal/offline-authorities-and-credentials"
+      ],
+      "rationale": "Offline authorization, card records, narrow token access and protected credential channels."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/README.md",
+        "deploy/baremetal/drill.py",
+        "deploy/baremetal/evidence.py",
+        "deploy/baremetal/host_probe.py",
+        "deploy/baremetal/network_probe.py",
+        "deploy/baremetal/os_probe.py"
+      ],
+      "capabilities": [
+        "delivery/hardware-qualification"
+      ],
+      "rationale": "Physical target commissioning, host/wire probes and signed claims or fault-control tooling. Runbook evidence does not establish a current physical run."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/SSH.md",
+        "deploy/baremetal/apparmor/local/usr.sbin.chronyd",
+        "deploy/baremetal/apparmor/usr.sbin.regalia-kms",
+        "deploy/baremetal/debverify.py",
+        "deploy/baremetal/elfclosure.py",
+        "deploy/baremetal/firewall.py",
+        "deploy/baremetal/hostpaths.py",
+        "deploy/baremetal/image/build-rootfs.sh",
+        "deploy/baremetal/image/etc-inventory.txt",
+        "deploy/baremetal/image/packages.txt",
+        "deploy/baremetal/image/regalia-kms.preset",
+        "deploy/baremetal/image/staging/banner",
+        "deploy/baremetal/image/staging/issue",
+        "deploy/baremetal/image/staging/journald.conf",
+        "deploy/baremetal/image/staging/networkd.conf",
+        "deploy/baremetal/image/staging/packages.txt",
+        "deploy/baremetal/image/staging/regalia-staging-sshd.service",
+        "deploy/baremetal/image/staging/regalia-staging.tmpfiles.conf",
+        "deploy/baremetal/image/staging/sshd-dropins-check.sh",
+        "deploy/baremetal/image/staging/sshd_config",
+        "deploy/baremetal/image/units-enabled.txt",
+        "deploy/baremetal/imagevariant.py",
+        "deploy/baremetal/regalia-kms-hardening.conf.example",
+        "deploy/baremetal/regalia-kms.sysctl.conf",
+        "deploy/baremetal/site.example.json",
+        "deploy/baremetal/sitecfg.py",
+        "deploy/baremetal/ssh_trust.py",
+        "deploy/baremetal/sshd-regalia-kms.conf.example",
+        "deploy/baremetal/units/00-regalia-etc.tmpfiles.conf",
+        "deploy/baremetal/units/apparmor.service.d/regalia-etc.conf",
+        "deploy/baremetal/units/chrony.service.d/regalia.conf",
+        "deploy/baremetal/units/nftables.service.d/regalia.conf",
+        "deploy/baremetal/units/regalia-etc-factory.service",
+        "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+        "deploy/baremetal/units/regalia-kms.service.d/firewall.conf",
+        "deploy/baremetal/units/regalia-kms.service.d/memlock.conf",
+        "deploy/baremetal/units/regalia-site-check.service",
+        "deploy/baremetal/units/regalia-site-check.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-wg-apply.path",
+        "deploy/baremetal/units/regalia-wg-apply.path.d/per-host.conf",
+        "deploy/baremetal/units/regalia-wg-apply.service",
+        "deploy/baremetal/units/regalia-wg-apply.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia.sysusers.conf",
+        "deploy/baremetal/units/regalia.tmpfiles.conf",
+        "deploy/baremetal/units/systemd-firstboot.service.d/regalia-etc.conf",
+        "deploy/baremetal/units/systemd-sysusers.service.d/regalia-etc.conf",
+        "deploy/baremetal/units/systemd-tmpfiles-setup.service.d/regalia-etc.conf",
+        "deploy/baremetal/wgsvc.py"
+      ],
+      "capabilities": [
+        "baremetal/appliance-and-service-hardening"
+      ],
+      "rationale": "Factory image, deployment paths, network boundaries, per-service hardening and measured systemd wiring."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/AUDIT-COLLECTOR.md",
+        "deploy/baremetal/MONITORING.md",
+        "deploy/baremetal/metrics.py",
+        "deploy/baremetal/node-exporter/web.yml",
+        "deploy/baremetal/spendaudit.py",
+        "deploy/baremetal/trails.py",
+        "deploy/baremetal/units/prometheus-node-exporter.service.d/regalia.conf",
+        "deploy/baremetal/units/regalia-audit-prune@.service",
+        "deploy/baremetal/units/regalia-audit-prune@.timer",
+        "deploy/baremetal/units/regalia-audit-prune@.timer.d/per-host.conf",
+        "deploy/baremetal/units/regalia-audit-prune@admission.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@enrol.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@esp-advances.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@reanchor.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recount.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recovery-key.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recovery-reconcile.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@survivor.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@sync.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@time.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@update.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-ship.sysusers.conf",
+        "deploy/baremetal/units/regalia-audit-ship.tmpfiles.conf",
+        "deploy/baremetal/units/regalia-audit-ship@.service",
+        "deploy/baremetal/units/regalia-audit-ship@.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-audit-ship@admission.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@enrol.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@esp-advances.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@reanchor.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recount.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recovery-key.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recovery-reconcile.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@survivor.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@sync.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@time.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@update.service.d/reader.conf"
+      ],
+      "capabilities": [
+        "security/threat-model-and-limitations"
+      ],
+      "rationale": "Host audit and monitoring policy, escalation/witness boundary and per-trail privileges. Mandatory collector and collector-relative alerts have separate open status."
+    },
+    {
+      "paths": [
+        "deploy/baremetal/deliver.py"
+      ],
+      "capabilities": [
+        "delivery/release-milestones"
+      ],
+      "rationale": "Release-bound asset delivery and deployment evidence handoff."
+    },
+    {
+      "paths": [
+        "cmd/regalia-unlock/membership/highwater.go",
+        "cmd/regalia-unlock/membership/json.go",
+        "cmd/regalia-unlock/membership/membership.go",
+        "cmd/regalia-unlock/membership/pcrkey.go",
+        "cmd/regalia-unlock/membership/typed.go",
+        "cmd/regalia-unlock/membership/v4.go",
+        "cmd/regalia-unlock/membership/v5.go"
+      ],
+      "capabilities": [
+        "baremetal/membership-and-topology"
+      ],
+      "rationale": "Initrd signed topology, history and high-water checks."
+    },
+    {
+      "paths": [
+        "cmd/regalia-unlock/agent.go",
+        "cmd/regalia-unlock/askpass/askpass.go",
+        "cmd/regalia-unlock/attest.go",
+        "cmd/regalia-unlock/backoff.go",
+        "cmd/regalia-unlock/bootcfg/bootcfg.go",
+        "cmd/regalia-unlock/client.go",
+        "cmd/regalia-unlock/config.go",
+        "cmd/regalia-unlock/disk.go",
+        "cmd/regalia-unlock/main.go",
+        "cmd/regalia-unlock/nv.go",
+        "cmd/regalia-unlock/pregenesis.go",
+        "cmd/regalia-unlock/render.go",
+        "cmd/regalia-unlock/tpm.go",
+        "cmd/regalia-unlock/wire.go"
+      ],
+      "capabilities": [
+        "baremetal/boot-network-and-unlock"
+      ],
+      "rationale": "Initrd command, boot config renderer, agents and protocol clients (non-test Go files)."
+    },
+    {
+      "paths": [
+        "internal/admission/admission.go",
+        "internal/admission/directives.go"
+      ],
+      "capabilities": [
+        "baremetal/runtime-leases-and-admission"
+      ],
+      "rationale": "Daemon admission gating and trusted admission/state evidence."
+    },
+    {
+      "paths": [
+        "FENCING.md",
+        "cmd/regalia-fence/main.go",
+        "internal/fencing/authority.go",
+        "internal/fencing/gate.go",
+        "internal/fencing/issue.go",
+        "internal/fencing/runner.go",
+        "internal/fencing/standby.go"
+      ],
+      "capabilities": [
+        "baremetal/activation-and-fencing"
+      ],
+      "rationale": "Fencing CLI, signed authorization and serving gate."
+    },
+    {
+      "paths": [
+        "internal/opstate/cache.go",
+        "internal/opstate/etcd.go",
+        "internal/opstate/gate.go",
+        "internal/opstate/judge.go",
+        "internal/opstate/publish.go",
+        "internal/opstate/reserve.go",
+        "internal/opstate/session.go",
+        "internal/opstate/session_entry.go",
+        "internal/opstate/state_epoch.go",
+        "internal/opstate/verify.go"
+      ],
+      "capabilities": [
+        "baremetal/etcd-and-operational-state"
+      ],
+      "rationale": "Consistent state gate, replay refusal and stateful operation reservations."
+    },
+    {
+      "paths": [
+        "IDENTITY.md",
+        "PIN-CUSTODY.md",
+        "PIN-IMPORT-DESIGN.md",
+        "deploy/opensc/ignore-yubikey.conf",
+        "deploy/opensc/yubikey-openpgp.conf",
+        "deploy/polkit/50-regalia-kms-pcscd.rules",
+        "deploy/seal-hsm-pin.sh",
+        "deploy/systemd/regalia-kms-credentials.conf.example"
+      ],
+      "capabilities": [
+        "baremetal/offline-authorities-and-credentials"
+      ],
+      "rationale": "Named sealed credentials, card drivers and authoritative custody limits."
+    },
+    {
+      "paths": [
+        ".github/workflows/initrd-drift.yml",
+        "POLICY-ANCHOR.md"
+      ],
+      "capabilities": [
+        "baremetal/measured-boot-and-pcr-policy"
+      ],
+      "rationale": "TPM policy anchoring design and reproducibility check."
+    },
+    {
+      "paths": [
+        "KERNEL-UPDATE.md"
+      ],
+      "capabilities": [
+        "baremetal/update-and-site-advance"
+      ],
+      "rationale": "Measured update operational contract."
+    },
+    {
+      "paths": [
+        "deploy/monitoring/regalia-kms.rules.yml",
+        "deploy/monitoring/regalia-node.rules.yml",
+        "deploy/systemd/regalia-kms.service",
+        "deploy/systemd/regalia-kms.sysusers.conf"
+      ],
+      "capabilities": [
+        "baremetal/appliance-and-service-hardening"
+      ],
+      "rationale": "Shared measured deployment fixture and configured daemon/monitoring units."
+    },
+    {
+      "paths": [
+        ".github/workflows/abrmd-probe.yml",
+        ".github/workflows/vtpm-probe.yml",
+        "CONFIGURATIONS.md",
+        "e2e/COSMOS-HARDWARE-RUN.md",
+        "e2e/DUAL-YUBIKEY-QUALIFICATION.md",
+        "e2e/NITROKEY-QUALIFICATION.md",
+        "e2e/YUBIKEY-OPENPGP-PKCS11.md"
+      ],
+      "capabilities": [
+        "delivery/hardware-qualification"
+      ],
+      "rationale": "Hardware profile qualifications and probe gates. Published claims remain subject to distinct execution and physical evidence."
+    },
+    {
+      "paths": [
+        "LIMITATIONS.md",
+        "SECURITY.md",
+        "THREE-SITE-THREAT-MODEL.md",
+        "cmd/regalia-audit-collector/main.go",
+        "cmd/regalia-audit-ship/check.go",
+        "cmd/regalia-audit-ship/main.go",
+        "docs/design/single-node-inventory.md",
+        "docs/design/single-node.md",
+        "docs/single-node-limits.md"
+      ],
+      "capabilities": [
+        "security/threat-model-and-limitations"
+      ],
+      "rationale": "Accepted limitations and independent collector role; audit CLI cross-reference with the audit owner."
+    },
+    {
+      "paths": [
+        ".github/workflows/node-units.yml",
+        ".github/workflows/recovery-matrix.yml",
+        ".github/workflows/recovery-reconcile.yml",
+        "e2e/lib/threenode.py",
+        "e2e/one-node.py",
+        "e2e/rolling-threenode.py",
+        "e2e/three-node-leases.py",
+        "e2e/three-node-netns.py",
+        "e2e/three-node-outage.py",
+        "e2e/three-node-reanchor.py",
+        "e2e/three-node-recovery.py",
+        "e2e/three-node-replace.py",
+        "e2e/three-node-site-advance.py",
+        "e2e/three-node-theft.py",
+        "e2e/three-node-wan.py",
+        "e2e/unlock-boot-qemu.sh"
+      ],
+      "capabilities": [
+        "delivery/release-milestones"
+      ],
+      "rationale": "Behavior-bearing CI gate and scenario definitions. Recorded as assertion source, never as execution or hardware evidence."
+    }
+  ],
+  "knownGaps": [
+    {
+      "id": "DX7-19",
+      "capabilities": [
+        "baremetal/replacement-and-revocation",
+        "baremetal/enrolment-and-config-publication",
+        "baremetal/recovery-and-restoration"
+      ],
+      "description": "Post-revocation owner-to-root single-node replacement, exact target, fresh identity and first heartbeat are blocked by the epoch-one enrolment restriction. Frozen local replacement work is not delivered.",
+      "beads": [
+        "regalia-kms-dx7.19"
+      ],
+      "releaseGate": "Required for timed TEST restore-to-replacement and single-node restore sign-off."
+    },
+    {
+      "id": "DX7-26",
+      "capabilities": [
+        "baremetal/recovery-and-restoration",
+        "baremetal/etcd-and-operational-state",
+        "baremetal/appliance-and-service-hardening"
+      ],
+      "description": "Restore's scoped in-transaction staging is implemented. Durable pending/no-history blocking at normal boot, manual starts and replacement publication remains open. A first-store authority is only a proposal and confers no authority.",
+      "beads": [
+        "regalia-kms-dx7.26",
+        "regalia-kms-dx7.19"
+      ],
+      "releaseGate": "Required for safe lost-disk recovery and the TEST restore gate."
+    },
+    {
+      "id": "DX7-24",
+      "capabilities": [
+        "baremetal/activation-and-fencing",
+        "baremetal/recovery-and-restoration"
+      ],
+      "description": "A nonzero activation counter with absent or inconsistent grant history refuses. No owner-authorized floor repair is delivered. Never clear or reset the TPM to bypass this refusal.",
+      "beads": [
+        "regalia-kms-dx7.24"
+      ],
+      "releaseGate": "Conditional recovery gate if the activation grant history is missing."
+    },
+    {
+      "id": "DX7-7",
+      "capabilities": [
+        "baremetal/recovery-and-restoration",
+        "delivery/release-milestones"
+      ],
+      "description": "Single-node owner-chain recovery, anchor repair and collector-constrained heartbeat recount remain open; CI reports the explicit re-anchor TODO.",
+      "beads": [
+        "regalia-kms-dx7.7"
+      ],
+      "releaseGate": "Open capability with a distinct software acceptance assertion."
+    },
+    {
+      "id": "DX7-8",
+      "capabilities": [
+        "baremetal/update-and-site-advance",
+        "delivery/release-milestones"
+      ],
+      "description": "Single-node planned-outage and owner retirement evidence remain open; the multi-node live-peer proof does not cover them.",
+      "beads": [
+        "regalia-kms-dx7.8"
+      ],
+      "releaseGate": "Open capability with a distinct software acceptance assertion."
+    },
+    {
+      "id": "DX7-9",
+      "capabilities": [
+        "security/threat-model-and-limitations",
+        "baremetal/etcd-and-operational-state"
+      ],
+      "description": "Required collector policy for single-node stateful serving and collector-relative alerts are not independently established by the pinned source. Restore detection is not prevention of lost spends.",
+      "beads": [
+        "regalia-kms-dx7.9"
+      ],
+      "releaseGate": "Open mandatory collector and monitoring policy."
+    },
+    {
+      "id": "TEST-SINGLE",
+      "capabilities": [
+        "delivery/hardware-qualification",
+        "delivery/release-milestones",
+        "baremetal/single-node-owner-unlock",
+        "baremetal/offline-authorities-and-credentials"
+      ],
+      "description": "Qualified physical TEST image, owner-card initial/reboot, timed DKEK-backed replacement restore, 72-hour burn-in and owner acceptance remain open. Credential rendering and simulated checks do not grant TEST or production authority.",
+      "beads": [
+        "regalia-kms-ion",
+        "regalia-kms-dx7.13",
+        "regalia-kms-dx7.35"
+      ],
+      "releaseGate": "Single-node v0.1 TEST staging; still required when production destination is three-node."
+    },
+    {
+      "id": "PRODUCTION-PATHS",
+      "capabilities": [
+        "delivery/hardware-qualification",
+        "delivery/release-milestones",
+        "baremetal/offline-authorities-and-credentials",
+        "security/threat-model-and-limitations"
+      ],
+      "description": "Production destination is three-node with a new genesis and distinct ceremony/pilot, after the three-node TEST run. The single-node production gate applies only when that deployment is selected.",
+      "beads": [
+        "regalia-kms-2jd",
+        "regalia-kms-2k9",
+        "regalia-kms-1h7"
+      ],
+      "releaseGate": "Track separate TEST, physical-stack and owner commissioning decisions."
+    },
+    {
+      "id": "VERITY-4H4",
+      "capabilities": [
+        "baremetal/measured-boot-and-pcr-policy",
+        "delivery/hardware-qualification"
+      ],
+      "description": "TEST slot-B host PARTUUID and verity diagnostics are in source. Historical guest verity failure cause is open. Diagnostic coverage, a later software test result and physical qualification are distinct.",
+      "beads": [
+        "regalia-kms-4h4"
+      ],
+      "releaseGate": "Root-cause and qualification evidence remain separate from shipped diagnostics."
+    }
+  ]
+}

@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "owner": "runtime",
+  "sourceAreas": [],
+  "knownGaps": [],
+  "requirements": [
+    {
+      "id": "KMS-CI-008",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Workflow registration and scheduling",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 11,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 18,
+          "symbol": "schedule",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 10,
+          "symbol": "workflow_dispatch",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 9,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 21,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 24,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/abrmd-probe.yml",
+          "line": 29,
+          "symbol": "abrmd",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 5,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 4,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 10,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 16,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 7,
+          "symbol": "push",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 17,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 15,
+          "symbol": "push",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 14,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 23,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 29,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 19,
+          "symbol": "schedule",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/codeql.yml",
+          "line": 34,
+          "symbol": "analyze",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 18,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 14,
+          "symbol": "schedule",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 13,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 25,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 28,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 16,
+          "symbol": "workflow_dispatch",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 33,
+          "symbol": "build",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/initrd-drift.yml",
+          "line": 87,
+          "symbol": "file",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 12,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 41,
+          "symbol": "push",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 10,
+          "symbol": "schedule",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 6,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 72,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 78,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 83,
+          "symbol": "node-units-systemd",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 139,
+          "symbol": "audit-ship-systemd",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 167,
+          "symbol": "three-node-netns",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 293,
+          "symbol": "rolling-threenode",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 332,
+          "symbol": "three-node-site-advance",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 370,
+          "symbol": "three-node-outage",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 408,
+          "symbol": "three-node-reanchor",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 446,
+          "symbol": "three-node-replace",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 484,
+          "symbol": "three-node-theft",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 525,
+          "symbol": "three-node-leases",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 563,
+          "symbol": "three-node-wan",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 3,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 2,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 12,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 17,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 11,
+          "symbol": "workflow_dispatch",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 25,
+          "symbol": "matrix",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-matrix.yml",
+          "line": 58,
+          "symbol": "merge",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 3,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 2,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 12,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 17,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 11,
+          "symbol": "workflow_dispatch",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/recovery-reconcile.yml",
+          "line": 22,
+          "symbol": "reconcile",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 14,
+          "symbol": "pull_request",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 13,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 18,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 24,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 15,
+          "symbol": "push",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/secret-scan.yml",
+          "line": 29,
+          "symbol": "secrets",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/vtpm-probe.yml",
+          "line": 10,
+          "symbol": "workflow_dispatch",
+          "supports": "Literal event declared under the pinned workflow mapping"
+        },
+        {
+          "path": ".github/workflows/vtpm-probe.yml",
+          "line": 9,
+          "symbol": "on",
+          "supports": "Literal event registration"
+        },
+        {
+          "path": ".github/workflows/vtpm-probe.yml",
+          "line": 12,
+          "symbol": "permissions",
+          "supports": "Workflow-scoped permission declaration"
+        },
+        {
+          "path": ".github/workflows/vtpm-probe.yml",
+          "line": 15,
+          "symbol": "concurrency",
+          "supports": "Workflow-scoped scheduling declaration"
+        },
+        {
+          "path": ".github/workflows/vtpm-probe.yml",
+          "line": 20,
+          "symbol": "vtpm-proxy",
+          "supports": "Literal job declared under the pinned workflow mapping"
+        }
+      ],
+      "tests": [],
+      "rationale": "Literal workflow registration source is anchored. Partial structural assertions are recorded per case in the inactive proposal. Exact provider selection and execution are unverified.",
+      "executionEvidence": [],
+      "beads": []
+    }
+  ]
+}

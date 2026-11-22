@@ -1,0 +1,3252 @@
+{
+  "schemaVersion": 1,
+  "owner": "baremetal",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "originalLedger": "openspec/coverage/baremetal-interface-ledger.json",
+  "discoveryClosed": false,
+  "newRequirementCount": 15,
+  "newScenarioCount": 69,
+  "proposedTransitions": {
+    "test_gap": 70,
+    "spec_gap": 6,
+    "contract_conflict": 1
+  },
+  "reviewStatus": "proposed-parent-reconciliation",
+  "caseResolutions": [
+    {
+      "caseId": "BMCASE-enrol-commit-genesis-check",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-001",
+        "scenario": "Single-node genesis matches this host"
+      },
+      "reasoning": "The manifest-check fixture establishes validation only. It does not exercise full commit or store creation.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 852,
+          "symbol": "def check_manifest(directory, chain, root_key, typed, document, replace=None):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2212,
+          "symbol": "manifest = check_manifest(directory, chain, root_key, typed, document, replace)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 112,
+          "symbol": "self.assertEqual(self.check(self.envelope(first)), first)",
+          "sha256": "6295bc1e1acc9ab19865744e4dfb8618971bf5f69ef946873e6df08af73608ce",
+          "testSymbol": "test_a_single_node_manifest_enrols_its_node_at_genesis_only"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "python-signature-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-sync-active",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-005",
+        "scenario": "Sync already runs at anchor definition"
+      },
+      "reasoning": "The active-process helper assertion applies to the precheck. Configuration publication precedes it, and it provides no transaction-wide exclusion.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1316,
+          "symbol": "def _no_sync_process(run):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2231,
+          "symbol": "_no_sync_process(run)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 122,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"a process of regalia-sync is running\"):",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_one_running_or_no_answer"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "python-signature-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-published-files",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-002",
+        "scenario": "Checked configurations go to persistent storage"
+      },
+      "reasoning": "The publication fixture checks all three outputs, and checks that /etc was not created.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2221,
+          "symbol": "config = install_config(journal, journal.doc[\"node_id\"], root_key, example, site, prefix)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 52,
+          "symbol": "self.assertFalse(os.path.lexists(self.prefix + \"/etc\"), \"enrolment wrote under /etc\")",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e",
+          "testSymbol": "test_the_three_files_are_written_and_node_json_loads"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 47,
+          "symbol": "self.assertEqual(stat.S_IMODE(st.st_mode), 0o644, path)",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 54,
+          "symbol": "self.assertEqual(set(recorded) - {\"state\", \"at\"}, {enrol.stored(p) for p in (enrol.NODE_JSON, config[\"site\"], enrol.CHRONY_CONF)})",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "temporary-filesystem-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-matching-existing",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-002",
+        "scenario": "Identical configuration on retry"
+      },
+      "reasoning": "The publication fixture checks unchanged mtime on the identical retry.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 970,
+          "symbol": "require(_same(target, digest), \"%s already exists with other content. Enrolment does not overwrite a node's \"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 58,
+          "symbol": "self.assertEqual(os.stat(self.prefix + enrol.stored(enrol.NODE_JSON)).st_mtime_ns, before)",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e",
+          "testSymbol": "test_the_three_files_are_written_and_node_json_loads"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "temporary-filesystem-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-symbolic-link",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-002",
+        "scenario": "A configuration name is a symbolic link"
+      },
+      "reasoning": "The fixture checks refusal and absence of the destination of a dangling link.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 969,
+          "symbol": "require(os.path.isfile(target) and not os.path.islink(target), \"%s exists and is not a regular file\" % path)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 107,
+          "symbol": "self.assertFalse(os.path.exists(self.d + \"/elsewhere\"))",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e",
+          "testSymbol": "test_a_link_is_not_followed"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "temporary-filesystem-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-competing-file",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-002",
+        "scenario": "Another writer claims the destination"
+      },
+      "reasoning": "The publication failpoint exercises collision and asserts retained file contents.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 992,
+          "symbol": "os.link(tmp, target)          # no-clobber publish",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 128,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"already exists with other content\"):",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e",
+          "testSymbol": "test_a_file_that_appears_before_the_publish_is_not_replaced"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_config.py",
+          "line": 131,
+          "symbol": "self.assertEqual(f.read(), \"planted\\n\")",
+          "sha256": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "temporary-filesystem-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-live-adoption",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "Legacy enrolment adopts the verified sequence"
+      },
+      "reasoning": "The legacy fixture independently checks the selected envelope and counter sequence.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1117,
+          "symbol": "def first_heartbeat(config_path, run=subprocess.run, bootstrap=False, owner_auth=None):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1196,
+          "symbol": "left = freshness.accept_first(envelope, manifest)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 33,
+          "symbol": "self.assertEqual(self.counter.value(), sequence, \"the counter reads the sequence at once\")",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c",
+          "testSymbol": "test_the_highest_heartbeat_starts_the_counter_with_no_increment_loop"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 34,
+          "symbol": "self.assertEqual(self.late.held(), held_by_c)",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-genesis-zero",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "Explicit epoch-one heartbeat bootstrap"
+      },
+      "reasoning": "This is a heartbeat-counter action. First-store authority is outside its scope.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1181,
+          "symbol": "require(manifest[\"epoch\"] == 1, \"--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: \"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1312,
+          "symbol": "counter.define_at(0)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 48,
+          "symbol": "self.assertEqual(self.take(sources=(), bootstrap=True), (0, None))",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c",
+          "testSymbol": "test_bootstrap_starts_at_zero_only_when_nobody_holds_a_heartbeat_and_only_at_epoch_1"
+        },
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 97,
+          "symbol": "self.assertEqual(self.define(([], [\"c: holds none newer\"]), bootstrap=True), 0)",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-epoch-two-override",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "Bootstrap flag cannot initialize a later epoch"
+      },
+      "reasoning": "Both source paths limit the zero branch to epoch one. The direct negative assertion is for the legacy helper.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1181,
+          "symbol": "require(manifest[\"epoch\"] == 1, \"--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: \"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1310,
+          "symbol": "require(manifest[\"epoch\"] == 1, \"--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d\"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 75,
+          "symbol": "with self.assertRaisesRegex((enrol.Refused, m.Refused), \"--bootstrap is the first bring-up of a cluster, under epoch 1\"):",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c",
+          "testSymbol": "test_bootstrap_is_refused_above_epoch_1"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-bootstrap-resume",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-004",
+        "scenario": "Legacy bootstrap resumes with a complete zero counter"
+      },
+      "reasoning": "The legacy test controls with an unflagged retry, which refuses.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1172,
+          "symbol": "require(bootstrap and value == 0 and manifest[\"epoch\"] == 1,",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 52,
+          "symbol": "self.assertEqual(self.take(sources=(), bootstrap=True), (None, None), \"the bootstrap's own counter, still before any heartbeat\")",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c",
+          "testSymbol": "test_bootstrap_starts_at_zero_only_when_nobody_holds_a_heartbeat_and_only_at_epoch_1"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-counter-outside-jump",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-004",
+        "scenario": "Legacy counter is too far behind"
+      },
+      "reasoning": "The fixture reduces the jump bound to isolate the legacy refusal.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1168,
+          "symbol": "require(highest - value <= counter.MAX_JUMP, \"the TPM holds a heartbeat counter at %d with no heartbeat held, %d \"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+          "line": 64,
+          "symbol": "with self.assertRaisesRegex((enrol.Refused, m.Refused), \"more than the jump bound 0.*recount.py sets its floor\"):",
+          "sha256": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c",
+          "testSymbol": "test_an_existing_counter_far_behind_the_network_is_refused"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-production-vs-legacy",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "The two helpers have separate branch-specific traces. The original cross-dispatch case also requires the full production/legacy authority split to be observed through commit.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2252,
+          "symbol": "sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + stored(NODE_JSON), bootstrap=bootstrap, **owner)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [],
+      "originalEvidenceTier": "heartbeat/counter-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "A pinned integration assertion must trace the fetching identity, the verifying/defining identity and the legacy child under their respective commit invocations."
+    },
+    {
+      "caseId": "BMCASE-enrol-replace-typed-legacy",
+      "interfaceId": "IF-72e67b11d4e087e8",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/replacement-and-revocation/spec.md",
+        "requirementId": "KMS-REPLACE-002",
+        "scenario": "A supported multi-node replacement names the exact prior node"
+      },
+      "reasoning": "The signed-chain test exercises the manifest check only. It provides no acceptance for the later single-node path.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 822,
+          "symbol": "def _check_replacement_step(envelopes, root_key, node_id, replace):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 200,
+          "symbol": "self.assertEqual(check(\"x\")[\"epoch\"], 2)",
+          "sha256": "6295bc1e1acc9ab19865744e4dfb8618971bf5f69ef946873e6df08af73608ce",
+          "testSymbol": "test_a_replacement_is_enrolled_only_as_the_replacement_typed"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "python-signature-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-replace-missing-intent",
+      "interfaceId": "IF-72e67b11d4e087e8",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/replacement-and-revocation/spec.md",
+        "requirementId": "KMS-REPLACE-002",
+        "scenario": "A retirement accompanies enrolment without replacement intent"
+      },
+      "reasoning": "The test checks a missing selector and an exact selector as separate outcomes.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 838,
+          "symbol": "require(not retired, \"the manifest that first names %s (epoch %d) retires %s: it is a replacement, enrolled only with \"",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 198,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"it is a replacement, enrolled only with `commit --replace x`\"):",
+          "sha256": "6295bc1e1acc9ab19865744e4dfb8618971bf5f69ef946873e6df08af73608ce",
+          "testSymbol": "test_a_replacement_is_enrolled_only_as_the_replacement_typed"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "python-signature-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-replace-unrelated-mutation",
+      "interfaceId": "IF-72e67b11d4e087e8",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/replacement-and-revocation/spec.md",
+        "requirementId": "KMS-REPLACE-002",
+        "scenario": "A replacement also changes another node"
+      },
+      "reasoning": "The assertion changes another node's service identity and checks the refusal.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 822,
+          "symbol": "def _check_replacement_step(envelopes, root_key, node_id, replace):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_check.py",
+          "line": 208,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"the replacement of x by a is refused: a replacement does not change b\"):",
+          "sha256": "6295bc1e1acc9ab19865744e4dfb8618971bf5f69ef946873e6df08af73608ce",
+          "testSymbol": "test_a_replacement_that_changes_anything_else_is_refused"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "python-signature-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-foreign-key",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "A non-owner key requests a restore statement"
+      },
+      "reasoning": "The fixture checks the foreign key is refused and the ledger remains empty.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 179,
+          "symbol": "require(signer.public() in owners, \"the token's key %s... is not one of the manifest's owner_keys: nothing is signed\" % signer.public()[:16])",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 676,
+          "symbol": "self.assertEqual(self.ledger.read()[\"clusters\"], {})",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_key_that_is_not_the_owner_s_spends_no_epoch"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-confirmation-failed",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "A refused confirmation leaves its epoch issued"
+      },
+      "reasoning": "The test checks the refusal and next issued epoch.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 185,
+          "symbol": "\"the state epoch and digest typed are not this statement's: nothing is signed (epoch %d stays issued)\" % epoch)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 669,
+          "symbol": "self.assertEqual(self.make()[\"restore\"][\"state_epoch\"], 2)",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_mistyped_confirmation_signs_nothing_and_burns_its_epoch"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-parallel-issue",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-006",
+        "scenario": "Concurrent issuance uses distinct epochs"
+      },
+      "reasoning": "Two threads issue via the same actual file-lock boundary, with a scheduling failpoint.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 124,
+          "symbol": "fcntl.flock(lock, fcntl.LOCK_EX)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 703,
+          "symbol": "self.assertEqual(sorted(got), [5, 6])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_two_signers_at_once_never_issue_one_epoch_twice"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-multi-topology",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "A multi-node chain cannot obtain a single-node statement"
+      },
+      "reasoning": "The fixture asserts profile refusal and an empty issuance ledger.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 150,
+          "symbol": "require(membership.profile(tip) == membership.SINGLE_NODE, \"an etcd restore is the %s profile's; epoch %d is %s\"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 683,
+          "symbol": "self.assertEqual(self.ledger.read()[\"clusters\"], {})",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_the_owner_tool_refuses_a_multi_node_chain"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-malformed-ledger",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-006",
+        "scenario": "The retained issuance history is malformed"
+      },
+      "reasoning": "The test checks an out-of-order ledger is refused. The source applies the same check to duplicates.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 114,
+          "symbol": "require(isinstance(issued, list) and all(type(r) is int and r >= 1 for r in issued) and issued == sorted(set(issued)),",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 710,
+          "symbol": "self.assertIn(\"are not a rising list of epochs\", str(caught.exception))",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_ledger_that_is_not_one_is_refused"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-runs-on-node",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "The issuance CLI calls the off-node guard, but its refusal has no located assertion through this entrypoint.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 546,
+          "symbol": "owner.off_the_nodes()",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "Exercise restore sign-statement on a synthetic node with the protected marker and assert refusal before chain inputs, ledger allocation or token touch."
+    },
+    {
+      "caseId": "BMCASE-restore-sign-statement-replay-after-loss",
+      "interfaceId": "IF-59f67d725ee8750f",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "Issuance serialization does not prove a previously issued restore statement cannot be reused on a replacement with missing history. The published path expressly relies on single-use procedure.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 355,
+          "symbol": "\"ledger's) stands for its state epoch; the statement is single-use by procedure (module docstring)\" % MEMBER)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 203,
+          "symbol": "- The floor is the higher of the collector's highest recorded state epoch for the cluster and the owner tool's ledger of the restore epochs it has issued. The owner signs the restore statement that names the new epoch.",
+          "sha256": "93350d17b2e93f3db4c11c76f7ba07a57ad877d10f03fb470b1b43dd3ba18f89"
+        },
+        {
+          "path": "docs/design/single-node.md",
+          "line": 204,
+          "symbol": "- The owner's tool issues each restore epoch once, so restoring one snapshot twice gives two different epochs. Only one of the two nodes can be the cluster's live node (4.1).",
+          "sha256": "93350d17b2e93f3db4c11c76f7ba07a57ad877d10f03fb470b1b43dd3ba18f89"
+        }
+      ],
+      "originalEvidenceTier": "file-lock-and-signing-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "Trace a used statement across loss of local history with retained, unavailable and stale independent floors. Preserve the open durable guard and separate first-store proposal."
+    },
+    {
+      "caseId": "BMCASE-restore-run-verify-live-success",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Verified readback precedes the KMS start"
+      },
+      "reasoning": "The service fixture checks the exact sequence of calls and the signed state readback.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 425,
+          "symbol": "require(live is not None and live[\"state_epoch\"] == epoch, \"the live store holds state epoch %s, not %d: the daemon is not started\"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 421,
+          "symbol": "_start(host, UNIT, verb=\"restart\")",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 422,
+          "symbol": "require(not takeover.forcing(host) and not restoring(host), \"%s still carries a drop-in after its removal: the daemon is not started\" % UNIT)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 423,
+          "symbol": "live_cluster, _ = one_member(host, node_id)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 427,
+          "symbol": "_start(host, DAEMON)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 218,
+          "symbol": "self.assertEqual(self.host.calls, [",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 239,
+          "symbol": "self.assertEqual((live[\"state_epoch\"], live[\"revision_before\"]), (3, 4711))       # the snapshot's revision, then the raise",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded. Live service-manager, authenticated readback and physical crash/restart scope remain open as applicable."
+    },
+    {
+      "caseId": "BMCASE-restore-run-digest-mismatch",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Snapshot digest mismatch discards the temporary copy"
+      },
+      "reasoning": "The mismatch assertion checks refusal and successful cleanup; it does not promise recovery from a cleanup failure.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 361,
+          "symbol": "require(digest == statement[\"snapshot_sha256\"], \"the snapshot %s is not the one the statement names\" % snapshot)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 470,
+          "symbol": "self.assertNotIn(rs.VERIFIED_SNAPSHOT, self.host.files)",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_failed_digest_removes_the_copy_so_a_retry_is_not_blocked"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-expired-statement",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "Statement is outside its validity window at entry"
+      },
+      "reasoning": "The refusal matrix checks early and expiry-boundary starts and no host calls.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 323,
+          "symbol": "require(start <= now < end, \"the restore statement is valid from %s to %s, not now\" % (statement[\"not_before\"], statement[\"expires_at\"]))",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 491,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_refusals_before_the_store_is_touched_start_nothing_and_stop_nothing"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-live-floor-blocks",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Live state epoch is already high enough to reject the restore"
+      },
+      "reasoning": "The fixture exercises equal and higher live epochs with the daemon and etcd still active.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 350,
+          "symbol": "require(epoch > live_held, \"REFUSED: the live store holds state epoch %d, and the statement's %d does not raise it: nothing \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 298,
+          "symbol": "self.assertNotIn([\"systemctl\", \"stop\", rs.DAEMON], self.host.calls)",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_live_store_at_or_above_the_epoch_is_refused_before_anything_stops"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-window-expired-in-stage",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "Statement expires before the staged epoch write"
+      },
+      "reasoning": "The test injects the expiry boundary late and checks explicit refusal and no daemon start.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 385,
+          "symbol": "require(start <= issued < end, \"the restore statement's window (%s to %s) does not hold the entry's time %s: the owner \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 402,
+          "symbol": "self.assertNotIn(rs.DROPIN, self.host.files)",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_window_that_ends_before_the_entry_is_written_is_refused"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 399,
+          "symbol": "self.assertIn(\"the restore statement's window (2026-10-06T12:00:00Z to 2026-10-06T18:00:00Z) does not hold the entry's \"",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 401,
+          "symbol": "self.assertFalse(self.daemon_started_after_its_stop())",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-restore-lock",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-007",
+        "scenario": "Another restore holds the host transaction lock"
+      },
+      "reasoning": "The fixture holds a real advisory lock. Its stubbed mutation body is asserted uncalled.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 455,
+          "symbol": "fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 573,
+          "symbol": "run.assert_not_called()",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_second_run_while_one_holds_the_lock_is_refused_before_anything"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "actual-flock-with-stubbed-mutation",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-multi-profile-refusal",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "Single-node restore is requested on a multi-node cluster"
+      },
+      "reasoning": "The fixture verifies the profile-specific refusal and no host calls.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 314,
+          "symbol": "require(membership.profile(current) == membership.SINGLE_NODE, \"an etcd restore is refused under the %s profile (epoch %d): a \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 477,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_multi_node_cluster_is_refused_before_anything_stops"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-leftover-stage-override",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-007",
+        "scenario": "Earlier transaction left its runtime override"
+      },
+      "reasoning": "This is a present-time residue check. It cannot establish behavior after /run is lost.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 327,
+          "symbol": "require(not host.exists(DROPIN), \"%s is still in place: an earlier restore stopped part way. Put etcd back on its live store \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 316,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_drop_in_left_by_an_earlier_run_is_refused_before_anything_stops"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-lost-disk-failed-exchange",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Failed exchange has no live store to return to"
+      },
+      "reasoning": "The exchange fixture checks both services remain off inside the transaction. Reboot and manual starts are separate.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 413,
+          "symbol": "_off_staging(host, Refused(\"the exchange of %s/member and %s failed (%s): the live store is as it was; the daemon is not \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 455,
+          "symbol": "self.assertFalse(self.host.etcd)",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_a_failed_exchange_with_no_live_store_leaves_both_stopped"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 454,
+          "symbol": "self.refused(\"etcd is left stopped (there is no live store to put it back on)\")",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded. Live service-manager, authenticated readback and physical crash/restart scope remain open as applicable."
+    },
+    {
+      "caseId": "BMCASE-restore-run-exchange-fsync-unknown",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Exchange completed but durability is unknown"
+      },
+      "reasoning": "The injected NotDurable result checks diagnostic and start refusal. It does not prove how on-disk state survives real power loss.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 405,
+          "symbol": "raise Refused(\"the restored store is live (%s), but the fsync of its directory failed (%s): whether the rename survives a power \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 433,
+          "symbol": "self.assertFalse(self.daemon_started_after_its_stop())",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_an_exchange_whose_sync_failed_says_the_restored_store_is_live_and_starts_nothing"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 429,
+          "symbol": "self.assertIn(\"the restored store is live (%s), but the fsync of its directory failed\" % rs.MEMBER, str(caught.exception))",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 430,
+          "symbol": "self.assertIn(\"read the state epoch from the live etcd (it must be 3), and only then start %s\" % rs.DAEMON, str(caught.exception))",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded. Live service-manager, authenticated readback and physical crash/restart scope remain open as applicable."
+    },
+    {
+      "caseId": "BMCASE-restore-run-signed-epoch-readback",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-002",
+        "scenario": "Verified readback precedes the KMS start"
+      },
+      "reasoning": "The same scenario added for the ordered restore covers this generalized valid readback case. The separate real-etcd fixture validates the signed epoch and sole-member store without exercising real PID 1.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 425,
+          "symbol": "require(live is not None and live[\"state_epoch\"] == epoch, \"the live store holds state epoch %s, not %d: the daemon is not started\"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 423,
+          "symbol": "live_cluster, _ = one_member(host, node_id)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 427,
+          "symbol": "_start(host, DAEMON)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore_etcd.py",
+          "line": 171,
+          "symbol": "self.assertEqual(entry[\"state_epoch\"], 1)",
+          "sha256": "c2cf9485649582e3688ab5e6d9a16615655097d7418b9e3b2ed4edf16cffa419",
+          "testSymbol": "test_the_restored_history_is_live_at_the_raised_epoch_and_the_daemon_runs"
+        },
+        {
+          "path": "tests/test_baremetal_restore_etcd.py",
+          "line": 165,
+          "symbol": "self.assertTrue(self.host.daemon)",
+          "sha256": "c2cf9485649582e3688ab5e6d9a16615655097d7418b9e3b2ed4edf16cffa419"
+        },
+        {
+          "path": "tests/test_baremetal_restore_etcd.py",
+          "line": 174,
+          "symbol": "self.assertEqual([m[\"name\"] for m in members], [\"a\"])",
+          "sha256": "c2cf9485649582e3688ab5e6d9a16615655097d7418b9e3b2ed4edf16cffa419"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "real-etcd-test-definition-with-service-manager-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded. Live service-manager, authenticated readback and physical crash/restart scope remain open as applicable."
+    },
+    {
+      "caseId": "BMCASE-owner-unlock-attended-opens",
+      "interfaceId": "IF-ca602dbdcf96caa7",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/single-node-owner-unlock/spec.md",
+        "requirementId": "KMS-OWNER-001",
+        "scenario": "Approved boot opens the owner path"
+      },
+      "reasoning": "The reference and native fixtures assert owner keyslot opening using software TPM and software signer. Physical card qualification is separate.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/unlock.py",
+          "line": 1077,
+          "symbol": "require(rc == 0, \"the credential derived with %s's contribution does not open keyslot %s (exit %d)\" % (peer_id, slot, rc))",
+          "sha256": "3545eb8ecbe930984ec38bee8f57f99db584b054343efafd9360b1c782de1a4b"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 1008,
+          "symbol": "self.assertEqual(self.reference(self.serve()), (\"owner\", 1))",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82",
+          "testSymbol": "test_the_owner_unlocks_the_single_node_host_and_the_tpm_alone_never_does"
+        },
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 1003,
+          "symbol": "self.assertEqual((rc, slot), (0, 1), err)",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "software-TPM/LUKS scenario definition",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded in this pass. Approved-image and refusal fixtures are software-tier; the physical owner-card and target boot gate remains open."
+    },
+    {
+      "caseId": "BMCASE-owner-unlock-retired-image",
+      "interfaceId": "IF-ca602dbdcf96caa7",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/single-node-owner-unlock/spec.md",
+        "requirementId": "KMS-OWNER-001",
+        "scenario": "Retired image gets no owner contribution"
+      },
+      "reasoning": "The fixture checks that the local half still unseals and that a measurement DENY accompanies no keyslot.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/attest.py",
+          "line": 616,
+          "symbol": "require(on_pcrs, (\"the quoted PCR digest is not the expected PCR values\" if len(sets) == 1 else",
+          "sha256": "f69a6d39d35f459a1aeee8435748ecb853d48b3c16162546cdff8d5f218a207a"
+        },
+        {
+          "path": "deploy/baremetal/ownerunlock.py",
+          "line": 289,
+          "symbol": "may_unlock(self.manifest, requester, session_id, evidence, self.attester)",
+          "sha256": "c103f477eaee1adb41bddfc2ed5d8bb3581dc549b836b021bb7d3bef9a453751"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 1030,
+          "symbol": "self.assertIn(\"PCR 11 is\", denied[-1][\"reason\"])        # the native client's version 2 names the PCR that differs",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82",
+          "testSymbol": "test_the_owner_unlocks_the_single_node_host_and_the_tpm_alone_never_does"
+        },
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 1027,
+          "symbol": "self.assertEqual((rc, slot), (1, None), err)",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "software-TPM/LUKS scenario definition",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution was recorded in this pass. Approved-image and refusal fixtures are software-tier; the physical owner-card and target boot gate remains open."
+    },
+    {
+      "caseId": "BMCASE-owner-unlock-past-window",
+      "interfaceId": "IF-ca602dbdcf96caa7",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/single-node-owner-unlock/spec.md",
+        "requirementId": "KMS-OWNER-003",
+        "scenario": "A connection arrives after the serving window"
+      },
+      "reasoning": "The deterministic acceptance-time test checks no reply or timeout setup on the late connection.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/owner.py",
+          "line": 273,
+          "symbol": "if left <= 0:",
+          "sha256": "f971025d6aaca8508ba6ca0688bae4d4e5e5730cd8f7bc1bf68ff4caa164e97d"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 792,
+          "symbol": "self.assertEqual((answered, timeouts), ([], []), \"a connection after the window was touched\")",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82",
+          "testSymbol": "test_no_exchange_starts_after_the_window"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "responder-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-owner-unlock-near-deadline",
+      "interfaceId": "IF-ca602dbdcf96caa7",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/single-node-owner-unlock/spec.md",
+        "requirementId": "KMS-OWNER-003",
+        "scenario": "A connection has only the remaining serving time"
+      },
+      "reasoning": "The clock and scripted connection assert that the per-I/O wait never exceeds the remaining window.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/owner.py",
+          "line": 277,
+          "symbol": "deadline = time.monotonic() + min(unlock.IO_TIMEOUT, left)",
+          "sha256": "f971025d6aaca8508ba6ca0688bae4d4e5e5730cd8f7bc1bf68ff4caa164e97d"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_unlock.py",
+          "line": 828,
+          "symbol": "self.assertTrue(timeouts and max(timeouts) <= 0.5 + 1e-6, timeouts)",
+          "sha256": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82",
+          "testSymbol": "test_a_connection_near_the_end_gets_only_what_is_left_of_the_window"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "responder-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-local-lease-uid-can-request",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-001",
+        "scenario": "The admission account uses the local lease exchange"
+      },
+      "reasoning": "The Unix-socket fixture proves routing and exact call count with a stubbed issuer. It does not establish live TPM eligibility or lease issuance.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 918,
+          "symbol": "require(source == local_source(self.admission_uid), \"%s is not %s: the local lease listener answers it only\" % (",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        },
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 890,
+          "symbol": "pid, uid, gid = struct.unpack(\"3i\", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize(\"3i\")))",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 203,
+          "symbol": "self.assertEqual(len(self.issued), 1)",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9",
+          "testSymbol": "test_its_own_admission_gets_its_lease_through_the_renewer_a_peer_is_asked_with"
+        },
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 202,
+          "symbol": "self.assertEqual((got, quotes), (\"its own lease\", [\"22\" * 32]))",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unix-socket-test-with-stub-signer",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-local-lease-unknown-operation",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-001",
+        "scenario": "The local listener does not dispatch peer operations"
+      },
+      "reasoning": "The server fixture checks named refusals for two peer-only operations and no signing call.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 932,
+          "symbol": "require(isinstance(op, str) and op in LOCAL_OPS, \"the local lease listener answers %s only\" % \" and \".join(LOCAL_OPS))",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 93,
+          "symbol": "self.assertEqual(self.answer(ask(op, **fields)),",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9",
+          "testSymbol": "test_an_operation_other_than_the_lease_s_is_refused_by_name"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unix-socket-test-with-stub-signer",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-local-lease-legacy-multi",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-001",
+        "scenario": "The local path refuses a multi-node manifest"
+      },
+      "reasoning": "The local fixture checks both refusals. The remote peer issuance path remains separately tested.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 925,
+          "symbol": "require(membership.profile(manifest) == membership.SINGLE_NODE, \"the local lease listener answers only under the %s \"",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 103,
+          "symbol": "self.assertEqual((self.issued, self.attested), ([], []))",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9",
+          "testSymbol": "test_under_multi_node_it_issues_nothing_and_says_why"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unix-socket-test-with-stub-signer",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-local-lease-stale-socket",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-005",
+        "scenario": "A stale socket and an unexpected file are handled differently"
+      },
+      "reasoning": "The real filesystem/socket fixture rebinds a leftover socket and separately checks preservation of a regular file.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 961,
+          "symbol": "require(stat.S_ISSOCK(left.st_mode), \"%s is there and is not a socket: it is not removed, no local lease listener\" % path)",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        },
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 962,
+          "symbol": "os.unlink(path)",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 170,
+          "symbol": "self.assertEqual(pathlib.Path(self.path).read_text(), \"not a socket\")",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9",
+          "testSymbol": "test_a_stale_socket_is_replaced_and_anything_else_is_left_and_refused"
+        },
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 166,
+          "symbol": "self.bound()                                             # the leftover socket: removed, bound again",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "real-socket-path-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-local-lease-bounded-worker",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "The local socket reuses bounded listener machinery. Peer-server/load assertions and a single authorized local exchange do not establish local exhaustion behavior.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 894,
+          "symbol": "class LocalServer(Server):",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unix-socket-test-with-stub-signer",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "Exercise concurrent real AF_UNIX callers and assert the local per-source and worker limits with a successful control."
+    },
+    {
+      "caseId": "BMCASE-local-lease-untrusted-socket-directory",
+      "interfaceId": "BMIF-8ecf83f8d3f0a9cf",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-005",
+        "scenario": "The listener directory is writable by others"
+      },
+      "reasoning": "The fixture exercises group and other writable modes and checks no socket is created.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 954,
+          "symbol": "require(not held.st_mode & 0o022, \"%s is writable by its group or by others (%o): no local lease listener\" % (",
+          "sha256": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 162,
+          "symbol": "self.assertFalse(os.path.exists(self.path))",
+          "sha256": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9",
+          "testSymbol": "test_a_directory_its_group_or_others_can_write_is_refused"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "filesystem-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-live-single",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-003",
+        "scenario": "A current single-node admission carries serving state"
+      },
+      "reasoning": "Go gate assertions check admitted state, scope and token. They do not prove execution of the signing backend.",
+      "sourceSupport": [
+        {
+          "path": "internal/admission/admission.go",
+          "line": 139,
+          "symbol": "func modeFitsProfile(mode, profile string) error {",
+          "sha256": "7ee01c2157e6c8576602782c3a630ee3c7c783d26655c6460535154905e2de90"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "internal/admission/single_test.go",
+          "line": 75,
+          "symbol": "t.Fatalf(\"status %+v: the lease's state and request time are carried as under a peer's lease\", status)",
+          "sha256": "74c6ab8fb068a37a8fc4543a33ca9eb6b7588055beef667bbbb97c196e72355a",
+          "testSymbol": "TestSingleServesUnderTheSingleNodeProfileWithTheLeasesState"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-single-needs-chain",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-003",
+        "scenario": "Single mode requires a verified single-node chain"
+      },
+      "reasoning": "The specific no-chain fixture checks the named refusal.",
+      "sourceSupport": [
+        {
+          "path": "internal/admission/admission.go",
+          "line": 539,
+          "symbol": "return refuse(\"an admission in mode single is served only against the membership chain's single-node profile, and no \" +",
+          "sha256": "7ee01c2157e6c8576602782c3a630ee3c7c783d26655c6460535154905e2de90"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "internal/admission/single_test.go",
+          "line": 116,
+          "symbol": "w.refused(\"an admission in mode single is served only against the membership chain's single-node profile, and no membership chain is configured\")",
+          "sha256": "74c6ab8fb068a37a8fc4543a33ca9eb6b7588055beef667bbbb97c196e72355a",
+          "testSymbol": "TestSingleWithNoChainConfiguredIsRefused"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-survivor-not-permitted",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-003",
+        "scenario": "Recovery mode cannot admit the sole node"
+      },
+      "reasoning": "The Go control attempts admission after updating the recovery fields and asserts denied.",
+      "sourceSupport": [
+        {
+          "path": "internal/admission/admission.go",
+          "line": 139,
+          "symbol": "func modeFitsProfile(mode, profile string) error {",
+          "sha256": "7ee01c2157e6c8576602782c3a630ee3c7c783d26655c6460535154905e2de90"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "internal/admission/single_test.go",
+          "line": 107,
+          "symbol": "t.Fatal(\"recovery admitted under the single-node profile\")",
+          "sha256": "74c6ab8fb068a37a8fc4543a33ca9eb6b7588055beef667bbbb97c196e72355a",
+          "testSymbol": "TestRecoveryUnderTheSingleNodeProfileServesNothing"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-expiry",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-004",
+        "scenario": "The serving bound expires"
+      },
+      "reasoning": "The deterministic gate assertion checks immediately before the exact boundary and at it. Request-correlated audit is a separate harness assertion.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        },
+        {
+          "path": "internal/admission/admission.go",
+          "line": 509,
+          "symbol": "if now >= document.ServeUntilBoottimeMs {",
+          "sha256": "7ee01c2157e6c8576602782c3a630ee3c7c783d26655c6460535154905e2de90"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "internal/admission/admission_test.go",
+          "line": 145,
+          "symbol": "t.Fatal(\"refused one millisecond before serve_until\")",
+          "sha256": "4775a3c840875797ef5b11ea19d95445e9c0945f2d0eff596a4285759c7d3c25"
+        },
+        {
+          "path": "internal/admission/admission_test.go",
+          "line": 148,
+          "symbol": "w.refused(\"the admission ran out\")",
+          "sha256": "4775a3c840875797ef5b11ea19d95445e9c0945f2d0eff596a4285759c7d3c25"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-reacquire",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-006",
+        "scenario": "A new valid lease restores admission after an outage"
+      },
+      "reasoning": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 336,
+          "symbol": "self.holder.install(self.renew(request), manifest, prefer=waits)",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 395,
+          "symbol": "serve_until, reason = before + (left - MARGIN) * 1000, \"\"",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 416,
+          "symbol": "self.assertIn(\"EXPIRED: the runtime lease expired\", gone[\"reason\"])",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 419,
+          "symbol": "self.assertGreater(self.service.step()[\"serve_until_boottime_ms\"], self.ticks)",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-admission-expiry-versus-renew",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-007",
+        "scenario": "A stalled renewal does not delay admission lapse"
+      },
+      "reasoning": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 346,
+          "symbol": "def lapse(self):",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 351,
+          "symbol": "with self.lock:",
+          "sha256": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 758,
+          "symbol": "self.assertEqual(held, [True])",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 777,
+          "symbol": "self.assertFalse(seen[\"alive\"], \"lapse() waited for the round\")",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 778,
+          "symbol": "self.assertEqual(seen[\"written\"][\"serve_until_boottime_ms\"], 0)",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 779,
+          "symbol": "self.assertEqual([e[\"outcome\"] for e in self.trail], [\"ALLOW\", \"DENY\"])   # recorded at the bound, once",
+          "sha256": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "go-gate-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-etcd-start-configured-unit",
+      "interfaceId": "IF-847603a1f52ffdd2",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/etcd-and-operational-state/spec.md",
+        "requirementId": "KMS-ETCD-004",
+        "scenario": "Normal unit invokes etcd with the rendered configuration"
+      },
+      "reasoning": "The test reads the service declaration and checks the command and identity. It does not establish an actual PID 1 start or usable store.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 21,
+          "symbol": "ExecStart=/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 27,
+          "symbol": "User=regalia-etcd",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 293,
+          "symbol": "self.assertEqual((service[\"User\"], service[\"Group\"]), (\"regalia-etcd\", \"regalia-etcd\"))",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17",
+          "testSymbol": "test_it_runs_upstream_s_etcd_unprivileged_from_its_rendered_configuration"
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 290,
+          "symbol": "self.assertEqual(service[\"ExecStart\"], \"/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml\")",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "static-unit-assertion",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified Debian service-manager execution was recorded. Unit parsing does not prove start, sandbox, data history or credential execution."
+    },
+    {
+      "caseId": "BMCASE-etcd-start-config-missing",
+      "interfaceId": "IF-847603a1f52ffdd2",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/etcd-and-operational-state/spec.md",
+        "requirementId": "KMS-ETCD-004",
+        "scenario": "No rendered configuration before enrolment"
+      },
+      "reasoning": "The static unit test checks the precise condition. This case says nothing about whether existing files describe trustworthy live history.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 11,
+          "symbol": "ConditionPathExists=/etc/regalia/etcd.conf.yml",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 291,
+          "symbol": "self.assertEqual(u[\"Unit\"][\"ConditionPathExists\"], \"/etc/regalia/etcd.conf.yml\")      # skipped before enrolment",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17",
+          "testSymbol": "test_it_runs_upstream_s_etcd_unprivileged_from_its_rendered_configuration"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "static-unit-assertion",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified Debian service-manager execution was recorded. Unit parsing does not prove start, sandbox, data history or credential execution."
+    },
+    {
+      "caseId": "BMCASE-etcd-start-trusted-local-start",
+      "interfaceId": "IF-847603a1f52ffdd2",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/etcd-and-operational-state/spec.md",
+        "requirementId": "KMS-ETCD-004",
+        "scenario": "Peer credentials and writable locations are scoped to etcd"
+      },
+      "reasoning": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 27,
+          "symbol": "User=regalia-etcd",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 32,
+          "symbol": "LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 38,
+          "symbol": "StateDirectory=regalia-etcd",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 42,
+          "symbol": "ReadWritePaths=/run/regalia-etcd",
+          "sha256": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 293,
+          "symbol": "self.assertEqual((service[\"User\"], service[\"Group\"]), (\"regalia-etcd\", \"regalia-etcd\"))",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17",
+          "testSymbol": "test_it_runs_upstream_s_etcd_unprivileged_from_its_rendered_configuration"
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 298,
+          "symbol": "self.assertEqual((service[\"StateDirectory\"], service[\"StateDirectoryMode\"]), (\"regalia-etcd\", \"0700\"))",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17"
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 302,
+          "symbol": "self.assertEqual((service[\"ReadWritePaths\"], service[\"WorkingDirectory\"], service[\"UMask\"]),",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17"
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 316,
+          "symbol": "self.assertEqual([line for line in f.read().splitlines() if line.startswith(\"LoadCredentialEncrypted=\")],",
+          "sha256": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "static-unit-assertion",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified Debian service-manager execution was recorded. Unit parsing does not prove start, sandbox, data history or credential execution."
+    },
+    {
+      "caseId": "BMCASE-etcd-start-one-vs-three",
+      "interfaceId": "IF-847603a1f52ffdd2",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/etcd-and-operational-state/spec.md",
+        "requirementId": "KMS-ETCD-001",
+        "scenario": "A single-member loopback configuration is profile-specific"
+      },
+      "reasoning": "The profile fixture confirms both acceptance and cross-profile rejection. It tests the configuration validator, not process startup.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 194,
+          "symbol": "beat, election = DEFAULT_TIMINGS",
+          "sha256": "e092e6564edeaa91f92a695a37c7e7dfe1182b7032cc584b9d5d566b8b922ae2"
+        },
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 198,
+          "symbol": "url = {n: peer_url(nodes[n]) for n in nodes}",
+          "sha256": "e092e6564edeaa91f92a695a37c7e7dfe1182b7032cc584b9d5d566b8b922ae2"
+        },
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 266,
+          "symbol": "require(url == LOOPBACK_PEER_URL, \"%s %s is not the single-node member's loopback peer URL %s\" % (key, url, LOOPBACK_PEER_URL))",
+          "sha256": "e092e6564edeaa91f92a695a37c7e7dfe1182b7032cc584b9d5d566b8b922ae2"
+        },
+        {
+          "path": "deploy/baremetal/etcdconf.py",
+          "line": 269,
+          "symbol": "require(found is not None and found.group(1).startswith(\"fd72:6567:6c61:\"), \"%s %s is not on the service mesh over TLS\" % (key, url))",
+          "sha256": "e092e6564edeaa91f92a695a37c7e7dfe1182b7032cc584b9d5d566b8b922ae2"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 173,
+          "symbol": "self.assertEqual((doc[\"listen-peer-urls\"], doc[\"initial-advertise-peer-urls\"], doc[\"initial-cluster\"]),",
+          "sha256": "49d266571aa548f55a529004cd5edfac670b29622e4a423056421d495a974a42"
+        },
+        {
+          "path": "tests/test_baremetal_etcdconf.py",
+          "line": 185,
+          "symbol": "self.refused(\"is not on the service mesh over TLS\", etcdconf.check, config, m.MULTI_NODE)",
+          "sha256": "49d266571aa548f55a529004cd5edfac670b29622e4a423056421d495a974a42"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "static-unit-assertion",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the topology renderer and validator was recorded. Live unit startup is separate."
+    },
+    {
+      "caseId": "BMCASE-kms-start-configured-daemon",
+      "interfaceId": "IF-0c83b5373690395b",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/appliance-and-service-hardening/spec.md",
+        "requirementId": "KMS-HOST-005",
+        "scenario": "The appliance KMS unit selects its account and profile"
+      },
+      "reasoning": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions.",
+      "sourceSupport": [
+        {
+          "path": "deploy/systemd/regalia-kms.service",
+          "line": 9,
+          "symbol": "User=regalia-kms",
+          "sha256": "86ccec4707b300de14e01223678bba2d45961ef88c4e56b3c6fddea97e86b39a"
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+          "line": 16,
+          "symbol": "AppArmorProfile=regalia-kms",
+          "sha256": "ebec1e0d19d80fa1732492557c8d58be528661cbda8ba0295f4dbe1cc4cc95c8"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_apparmor.py",
+          "line": 91,
+          "symbol": "self.assertEqual(c.get(\"Unit\", \"AssertSecurity\", fallback=None), \"apparmor\")",
+          "sha256": "724da2393fcd0f8f319beaaa2e54e9724318fd5d3fc8711a23ebc114afdd729c",
+          "testSymbol": "test_the_images_kms_runs_confined_or_not_at_all"
+        },
+        {
+          "path": "tests/test_service_unit.py",
+          "line": 66,
+          "symbol": "self.assertNotEqual(user, \"root\", f\"{name} runs as root\")",
+          "sha256": "308196b6ad35b61c23a29adc423a4309641bab24321b32a195c4ec8338eaef39"
+        },
+        {
+          "path": "tests/test_service_unit.py",
+          "line": 75,
+          "symbol": "self.assertEqual(shared, {}, f\"units share a service account: {shared}\")",
+          "sha256": "308196b6ad35b61c23a29adc423a4309641bab24321b32a195c4ec8338eaef39"
+        },
+        {
+          "path": "tests/test_baremetal_apparmor.py",
+          "line": 88,
+          "symbol": "self.assertEqual(c.get(\"Service\", \"AppArmorProfile\", fallback=None), \"regalia-kms\")",
+          "sha256": "724da2393fcd0f8f319beaaa2e54e9724318fd5d3fc8711a23ebc114afdd729c"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unit-source-only",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified Debian service-manager execution was recorded. Unit parsing does not prove start, sandbox, data history or credential execution."
+    },
+    {
+      "caseId": "BMCASE-kms-start-runtime-not-admitted",
+      "interfaceId": "IF-0c83b5373690395b",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+        "requirementId": "KMS-LEASE-008",
+        "scenario": "A running daemon lacks required admission"
+      },
+      "reasoning": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard.",
+      "sourceSupport": [
+        {
+          "path": "internal/server/health.go",
+          "line": 230,
+          "symbol": "if dependencies.Admission != nil {",
+          "sha256": "a7ea223ee35ae42d2f8273e4a2dd885838624cfc0682f8df22ae4859e46f2e09"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 187,
+          "symbol": "coordinator.recordOrCount(ctx, request, registry.Route{}, \"deny\", \"not-admitted\", started, false, nil)",
+          "sha256": "6077e4ae6bf22ecde5b0350e1b823a0d2875a04dede500355de32e6b9d1cfea0"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-kms/admission_wiring_test.go",
+          "line": 188,
+          "symbol": "t.Fatal(\"a node that is not admitted reported ready: a load balancer would keep sending it work\")",
+          "sha256": "bab43a800f0016fc26deddbd0851ea642b337e9cc88cf8c23b989734b12a4798"
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 65,
+          "symbol": "wantNotAdmitted(t, result, err)",
+          "sha256": "aebb94966b79f5e3576f8699c568b6f35c6fe6d334e54a063bd264eb60cd0ffb"
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 66,
+          "symbol": "if semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {",
+          "sha256": "aebb94966b79f5e3576f8699c568b6f35c6fe6d334e54a063bd264eb60cd0ffb"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unit-source-only",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-verified-parent-floor",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "Root initializes a quorum counter from a verified heartbeat"
+      },
+      "reasoning": "The signed-input fixture asserts the parent computes the floor. A successful later sync pull is a separate observation.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1304,
+          "symbol": "start = max(max(verified) - 1, 0)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 62,
+          "symbol": "self.assertEqual(self.define(([{\"source\": \"b\", \"envelope\": hbt.beat(self.man, 7)}], [])), 6)",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_from_a_heartbeat_the_root_parent_verifies"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "root-parent policy with fake TPM assertions",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-forged-peer-heartbeat",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "A forged heartbeat cannot initialize the counter"
+      },
+      "reasoning": "The regression checks refusal and both indices absent.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1292,
+          "symbol": "beat = heartbeat.verify(item[\"envelope\"], manifest)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 70,
+          "symbol": "self.assertEqual(self.present(*self.counter_indices()), [])               # nothing defined",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_a_forged_heartbeat_counts_for_nothing"
+        },
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 68,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"no source gave a heartbeat that verifies under epoch 1 \\\\(b: \"):",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "root-parent policy with fake TPM assertions",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-expired-peer-heartbeat",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-003",
+        "scenario": "An expired heartbeat cannot initialize the counter"
+      },
+      "reasoning": "The regression asserts expiry refusal and both indices absent.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1299,
+          "symbol": "heartbeat.Freshness._live(beat, seconds)       # issued, and not expired: an old valid one does not count",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 80,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"EXPIRED\"):",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_an_old_valid_heartbeat_does_not_lower_the_start"
+        },
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 82,
+          "symbol": "self.assertEqual(self.present(*self.counter_indices()), [])",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "root-parent policy with fake TPM assertions",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-root-owner-authorization",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-004",
+        "scenario": "Counter definition lacks required owner authorization"
+      },
+      "reasoning": "The negative assertion invokes the root-owned counter helper using a fake TPM.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2246,
+          "symbol": "start = define_first_counter(prefix + stored(NODE_JSON), manifest, probed, directory, owner_auth, bootstrap, run)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 106,
+          "symbol": "with self.assertRaisesRegex(m.Refused, \"the TPM's owner authorization is set and none was given\"):",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_only_with_the_owner_authorization"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "root-parent policy with fake TPM assertions",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-enrol-bootstrap-existing-policy-pair",
+      "interfaceId": "IF-485c7020b33d04f8",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-004",
+        "scenario": "An existing pair has incompatible counter attributes"
+      },
+      "reasoning": "The planted ordinary writable indices are refused. The fixture does not parameterize every incompatible policy variant.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1285,
+          "symbol": "counter.value()                                    # a resumed commit: adopted only as defined here (see define_anchors)",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 90,
+          "symbol": "with self.assertRaises((m.Refused, m.Unusable)):",
+          "sha256": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797",
+          "testSymbol": "test_a_planted_counter_is_not_adopted"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "root-parent policy with fake TPM assertions",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-non-owner-signature",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "A node signature cannot authorize snapshot restore"
+      },
+      "reasoning": "The negative matrix presents a node signature and asserts no host calls.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 316,
+          "symbol": "statement = opstate.verify_restore(signed, chain, node_id)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 491,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_refusals_before_the_store_is_touched_start_nothing_and_stop_nothing"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-stale-manifest-epoch",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+        "requirementId": "KMS-RESTORE-001",
+        "scenario": "Membership moved after restore authorization"
+      },
+      "reasoning": "The negative matrix supplies an otherwise eligible statement after the chain moves and checks no host calls.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 317,
+          "symbol": "require(statement[\"manifest_epoch\"] == current[\"epoch\"], \"the restore statement is for epoch %d; this node's manifest is epoch %d: \"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 491,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "sha256": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a",
+          "testSymbol": "test_refusals_before_the_store_is_touched_start_nothing_and_stop_nothing"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    },
+    {
+      "caseId": "BMCASE-restore-run-already-exchanged-wrong-endpoint",
+      "interfaceId": "IF-0fa13aa1dfa73da0",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "Live checks compare the sole member and signed epoch after normal restart. Positive readback and staging failures do not establish refusal of a substituted post-exchange endpoint or independent authenticated lineage.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 423,
+          "symbol": "live_cluster, _ = one_member(host, node_id)",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 425,
+          "symbol": "require(live is not None and live[\"state_epoch\"] == epoch, \"the live store holds state epoch %s, not %d: the daemon is not started\"",
+          "sha256": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [],
+      "originalEvidenceTier": "restore-host-fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "Falsify wrong member, signed wrong epoch and same-identifiers wrong history at the normal endpoint, and prove no daemon start. End-to-end PID 1 and lineage remain open."
+    },
+    {
+      "caseId": "BMCASE-owner-unlock-late-harness-reply",
+      "interfaceId": "IF-ca602dbdcf96caa7",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/release-milestones/spec.md",
+        "requirementId": "KMS-RELEASE-004",
+        "scenario": "A test reply arrives while the client waits for the mapper"
+      },
+      "reasoning": "The fixture uses a real datagram, real child and synthetic mapper action. This is a harness case, not a real mapper proof.",
+      "sourceSupport": [
+        {
+          "path": "e2e/lib/threenode.py",
+          "line": 449,
+          "symbol": "def finish_unlock_client(client, reply, key, timeout, open_reply):",
+          "sha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 300,
+          "symbol": "self.assertEqual(env[\"result\"][\"stderr\"], \"client saw mapper\\n\")",
+          "sha256": "72298c115d71e180b976296eb558a192add2b3502ef47fef89964d59b7120cd4",
+          "testSymbol": "test_late_reply_opens_mapper_while_client_is_waiting_to_exit"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "harness subprocess/socket fixture; fake mapper",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution of the specific harness regression was recorded. Product and hardware behavior cannot be promoted from a fixture assertion."
+    },
+    {
+      "caseId": "BMCASE-admission-not-any-503",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/release-milestones/spec.md",
+        "requirementId": "KMS-RELEASE-005",
+        "scenario": "An unrelated 503 cannot prove admission shutdown"
+      },
+      "reasoning": "The fixture supplies an unrelated denial and a backend failure. The original admission case here is a proof predicate in the TEST harness.",
+      "sourceSupport": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 364,
+          "symbol": "def observe_shutdown(kms, read_admission, started, lifetime):",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 373,
+          "symbol": "return observed",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 392,
+          "symbol": "if status == 503 and isinstance(response, dict) and response.get(\"request_id\") == request_id and observed <= deadline:",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 322,
+          "symbol": "self.assertEqual(self.observe(), (None, 0))",
+          "sha256": "afafeb2df852c38173df6ec59899ff672c07ab4514d6e429a82e9b507effb26a",
+          "testSymbol": "test_unrelated_503_and_unrelated_audit_do_not_pass"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "deterministic harness fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution of the specific harness regression was recorded. Product and hardware behavior cannot be promoted from a fixture assertion."
+    },
+    {
+      "caseId": "BMCASE-admission-late-allow-invalidates",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "concurrency",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/release-milestones/spec.md",
+        "requirementId": "KMS-RELEASE-005",
+        "scenario": "A successful sign invalidates pending refusal evidence"
+      },
+      "reasoning": "The deterministic sequence returns 503, then 200 while the first record becomes visible and verifies rejection.",
+      "sourceSupport": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 391,
+          "symbol": "return None, stopped    # a later success invalidates any pending refusal evidence",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 303,
+          "symbol": "self.assertEqual(self.observe(), (None, 0))",
+          "sha256": "afafeb2df852c38173df6ec59899ff672c07ab4514d6e429a82e9b507effb26a",
+          "testSymbol": "test_pending_503_audit_cannot_hide_a_later_success"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "deterministic harness fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution of the specific harness regression was recorded. Product and hardware behavior cannot be promoted from a fixture assertion."
+    },
+    {
+      "caseId": "BMCASE-admission-late-audit-keeps-time",
+      "interfaceId": "IF-f7e1951435211a4a",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/release-milestones/spec.md",
+        "requirementId": "KMS-RELEASE-005",
+        "scenario": "A late audit retains the original refusal time"
+      },
+      "reasoning": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time.",
+      "sourceSupport": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 364,
+          "symbol": "def observe_shutdown(kms, read_admission, started, lifetime):",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 393,
+          "symbol": "candidates[request_id] = observed - started",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 401,
+          "symbol": "evidence = until(lambda: (observed,) if (observed := audited_denial()) is not None else None, 60, 1)",
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 310,
+          "symbol": "self.assertEqual(self.observe(lambda: self.read() if self.now >= 1 else None), (1, 1))",
+          "sha256": "afafeb2df852c38173df6ec59899ff672c07ab4514d6e429a82e9b507effb26a",
+          "testSymbol": "test_delayed_post_zero_audit_retains_the_response_observation_time"
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 311,
+          "symbol": "self.assertEqual(self.now, 5)",
+          "sha256": "afafeb2df852c38173df6ec59899ff672c07ab4514d6e429a82e9b507effb26a"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "deterministic harness fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution of the specific harness regression was recorded. Product and hardware behavior cannot be promoted from a fixture assertion."
+    },
+    {
+      "caseId": "BMCASE-kms-start-manual-restart-after-refusal",
+      "interfaceId": "IF-0c83b5373690395b",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "contract-conflict",
+      "proposedClassification": "contract_conflict",
+      "scenarioRef": null,
+      "reasoning": "The base unit's on-failure restart policy does not enforce the accepted fail-closed start barrier when single-node live history is missing or restore remains pending. Ordinary retry after an unrelated refusal is a different case.",
+      "sourceSupport": [
+        {
+          "path": "deploy/systemd/regalia-kms.service",
+          "line": 16,
+          "symbol": "Restart=on-failure",
+          "sha256": "86ccec4707b300de14e01223678bba2d45961ef88c4e56b3c6fddea97e86b39a"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [
+        {
+          "path": "docs/design/single-node.md",
+          "line": 202,
+          "symbol": "- **Mitigation:** an etcd restore under `single-node` must raise the state epoch above a floor that survives the loss of the node, so that a restored snapshot can never be mistaken for the live history. (Take-over, which raises it with three nodes, is refused here.)",
+          "sha256": "93350d17b2e93f3db4c11c76f7ba07a57ad877d10f03fb470b1b43dd3ba18f89"
+        }
+      ],
+      "originalEvidenceTier": "unit source only",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "dx7.26 requires deterministic live manager tests for manual restart and missing trusted history plus physical reboot evidence.",
+      "relatedScenarios": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+          "requirementId": "KMS-RESTORE-003",
+          "scenario": "Reboot loses volatile state during restore"
+        }
+      ]
+    },
+    {
+      "caseId": "BMCASE-kms-start-base-vs-appliance",
+      "interfaceId": "IF-0c83b5373690395b",
+      "facet": "compatibility",
+      "originalClassification": "spec_gap",
+      "disposition": "insufficient-contract-or-assertion",
+      "proposedClassification": "spec_gap",
+      "scenarioRef": null,
+      "reasoning": "The separate base-unit and appliance profile assertions justify the explicit appliance configuration scenario. They do not establish comparative startup, credential, or history semantics for both deployment forms.",
+      "sourceSupport": [
+        {
+          "path": "deploy/systemd/regalia-kms.service",
+          "line": 11,
+          "symbol": "ExecStart=/usr/sbin/regalia-kms -config /etc/regalia-kms/config.json",
+          "sha256": "86ccec4707b300de14e01223678bba2d45961ef88c4e56b3c6fddea97e86b39a"
+        }
+      ],
+      "assertionSupport": [],
+      "acceptedContext": [],
+      "originalEvidenceTier": "unit source only",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "Trace unit composition, credential source and readiness behavior for both deployment shapes using profile-specific assertions and live manager evidence."
+    },
+    {
+      "caseId": "BMCASE-render-check-expected-pre-genesis-skip",
+      "interfaceId": "BMIF-7c448850f60c73f2",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-005",
+        "scenario": "An expected pre-genesis render skip"
+      },
+      "reasoning": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 60,
+          "symbol": "fmt.Fprintln(diagnostics, \"regalia-unlock: no site credential: expected pre-genesis skip (ESP/stub enrolment state and TPM anchors absent)\")",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 52,
+          "symbol": "marker, err := os.OpenFile(preGenesisMarker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 213,
+          "symbol": "t.Fatal(\"skip requires successful ESP inspection and TPM inventory\")",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderCondition"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 111,
+          "symbol": "{\"pre_genesis\", func(*testing.T, *conditionFixture) {}, 1, \"no site credential: expected pre-genesis skip\"},",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 197,
+          "symbol": "t.Fatalf(\"%s consumer exit = %d, want %d after render exit %d\", name, got, wantConsumer, c.code)",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        }
+      ],
+      "acceptedContext": [
+        {
+          "path": "deploy/baremetal/README.md",
+          "line": 726,
+          "symbol": "Missing `regalia.site.cred` is an expected pre-genesis state **only if** the stub credentials",
+          "sha256": "7f7ccb5f2689f7cca0b10f63c3b581489cfb345cbf69f0ee39a48714d2d12c43"
+        }
+      ],
+      "originalEvidenceTier": "Go boot-condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-render-check-nv-not-readable",
+      "interfaceId": "BMIF-7c448850f60c73f2",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-005",
+        "scenario": "TPM inventory could not establish absence"
+      },
+      "reasoning": "The test has an explicit NV inventory error row with a hard-failure expectation.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 139,
+          "symbol": "return false, errors.New(\"missing site credential: TPM NV inventory cannot be read; pre-genesis is unproven\")",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 189,
+          "symbol": "t.Fatalf(\"condition exit = %d, want %d: %s\", got, c.code, diagnostics.String())",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderCondition"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 135,
+          "symbol": "{\"tpm_inventory_error\", func(t *testing.T, f *conditionFixture) { f.nv.err = os.ErrPermission }, 255, \"TPM NV inventory cannot be read; pre-genesis is unproven\"},",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        }
+      ],
+      "acceptedContext": [
+        {
+          "path": "deploy/baremetal/README.md",
+          "line": 732,
+          "symbol": "filesystem/TPM errors also return 255 because pre-genesis is unproven. A broken link counts as",
+          "sha256": "7f7ccb5f2689f7cca0b10f63c3b581489cfb345cbf69f0ee39a48714d2d12c43"
+        }
+      ],
+      "originalEvidenceTier": "Go boot-condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-render-check-already-enrolled-missing-site",
+      "interfaceId": "BMIF-7c448850f60c73f2",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-005",
+        "scenario": "An enrolled boot has lost the site credential"
+      },
+      "reasoning": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 142,
+          "symbol": "return false, errors.New(\"missing site credential on an enrolled node: TPM anchor state is present\")",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 117,
+          "symbol": "if chain {",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 124,
+          "symbol": "if credentials {",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 189,
+          "symbol": "t.Fatalf(\"condition exit = %d, want %d: %s\", got, c.code, diagnostics.String())",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderCondition"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 121,
+          "symbol": "}, 255, \"missing site credential on an enrolled node: ESP membership state is present\"},",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 127,
+          "symbol": "}, 255, \"missing site credential on an enrolled node: stub enrolment state is present\"},",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 129,
+          "symbol": "{\"nv_base_without_esp\", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex+1] = true }, 255, \"missing site credential on an enrolled node: TPM anchor state is present\"},",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+        }
+      ],
+      "acceptedContext": [
+        {
+          "path": "deploy/baremetal/README.md",
+          "line": 731,
+          "symbol": "skip`. Enrolment evidence returns 255 and logs `missing site credential on an enrolled node`;",
+          "sha256": "7f7ccb5f2689f7cca0b10f63c3b581489cfb345cbf69f0ee39a48714d2d12c43"
+        }
+      ],
+      "originalEvidenceTier": "Go boot-condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-render-check-invalidate-old-skip",
+      "interfaceId": "BMIF-7c448850f60c73f2",
+      "facet": "retry",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-006",
+        "scenario": "An enrolled retry replaces a stale skip decision"
+      },
+      "reasoning": "The test starts with expected skip, installs a test credential and verifies that a subsequent consumer no longer skips.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 37,
+          "symbol": "if err := os.Remove(preGenesisMarker); err != nil && !os.IsNotExist(err) {",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 294,
+          "symbol": "t.Fatalf(\"consumer exit = %d, want 0 after enrolled retry\", got)",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderConditionClearsPriorDecision"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "Go boot-condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-render-check-closed-varargs",
+      "interfaceId": "BMIF-7c448850f60c73f2",
+      "facet": "failure",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-005",
+        "scenario": "Invalid render condition invocation"
+      },
+      "reasoning": "Direct Go tests check malformed and empty-TPM argument forms. Service orchestration is a separate evidence tier.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 34,
+          "symbol": "fmt.Fprintln(diagnostics, \"regalia-unlock: usage: -render-check [-tpm DEVICE]\")",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 223,
+          "symbol": "t.Fatalf(\"bad arguments exit = %d, want hard failure 255\", got)",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderCheckBadArgumentsFailHard"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "Go boot-condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-consumer-check-untrusted-skip-marker",
+      "interfaceId": "BMIF-54d1d7a620d250a5",
+      "facet": "permission",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-006",
+        "scenario": "An invalid initrd skip marker is rejected"
+      },
+      "reasoning": "The Go control explicitly rejects the marker it creates and an inaccessible path. The trust predicate also checks type, mode, ownership and length; independent variation of all fields remains open.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 83,
+          "symbol": "if !ok || info.Mode() != 0o600 || info.Size() != 0 || stat.Uid != uint32(os.Geteuid()) {",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 329,
+          "symbol": "t.Fatalf(\"%v exit = %d, want hard failure: %s\", tc.args, got, diagnostics.String())",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestConsumerConditionErrors"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "Go condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-consumer-check-expected-skip",
+      "interfaceId": "BMIF-54d1d7a620d250a5",
+      "facet": "normal",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+        "requirementId": "KMS-UNLOCK-006",
+        "scenario": "Both initrd consumers honor the current trusted skip"
+      },
+      "reasoning": "The test drives both consumer conditions after render and checks each exact exit.",
+      "sourceSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 87,
+          "symbol": "fmt.Fprintf(diagnostics, \"%s: expected pre-genesis skip (verified by boot render)\\n\", unit)",
+          "sha256": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 197,
+          "symbol": "t.Fatalf(\"%s consumer exit = %d, want %d after render exit %d\", name, got, wantConsumer, c.code)",
+          "sha256": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508",
+          "testSymbol": "TestRenderCondition"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "Go condition fixture without PID 1",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualified execution of the assertion was recorded. Live initrd systemd sequencing and PID 1 interpretation remain separate evidence."
+    },
+    {
+      "caseId": "BMCASE-enrol-commit-esp-publish-interrupted",
+      "interfaceId": "IF-79df444eb7b67af4",
+      "facet": "recovery",
+      "originalClassification": "spec_gap",
+      "disposition": "scenario-added",
+      "proposedClassification": "test_gap",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+        "requirementId": "KMS-ENROL-006",
+        "scenario": "A crash interrupts seal before publication"
+      },
+      "reasoning": "The injected rename interruption checks final path absence and successful resealing with cleanup. Physical power loss is separate.",
+      "sourceSupport": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1973,
+          "symbol": "def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):",
+          "sha256": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+        }
+      ],
+      "assertionSupport": [
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 121,
+          "symbol": "self.assertEqual([n for n in os.listdir(self.esp + \"/loader\") if n.endswith(\".enrol-new\")], [])",
+          "sha256": "3ba71f482099865097ecb32d3381b26e540ad0b217a16e3bf1a1be9badd79938",
+          "testSymbol": "test_a_crash_before_the_rename_is_sealed_again_on_resume"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 116,
+          "symbol": "self.assertFalse(os.path.exists(self.creds + \"/regalia.unlock-local.cred\"))",
+          "sha256": "3ba71f482099865097ecb32d3381b26e540ad0b217a16e3bf1a1be9badd79938"
+        },
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 120,
+          "symbol": "self.assertEqual(len(files), 2)",
+          "sha256": "3ba71f482099865097ecb32d3381b26e540ad0b217a16e3bf1a1be9badd79938"
+        }
+      ],
+      "acceptedContext": [],
+      "originalEvidenceTier": "ESP filesystem/failpoint fixture",
+      "executionEvidence": [],
+      "remainingEvidenceGap": "No qualifying execution mapped to this exact case and assertion scope at the frozen source pin."
+    }
+  ],
+  "changedSpecs": [
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/appliance-and-service-hardening/spec.md",
+      "beforeSha256": "75f618b34424395868d39e13e395bf7b6690cc693ee296695cdce35b5e350ae6",
+      "afterSha256": "956e2aea6530bdb4eb75981cde9e7c5c8d91bde8d51a96b37a7885ea4f242e39",
+      "addedRequirements": [
+        "KMS-HOST-005"
+      ],
+      "addedScenarios": 1
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/boot-network-and-unlock/spec.md",
+      "beforeSha256": "720e6832765ac192e98a9d2993b6b7ce942e90a028d8ffc22e27d50cb0e59774",
+      "afterSha256": "50e3d3ac94e5cb7aeb184d69ff4377b1751ad0e2f7cbd49f9597a972b82f59f9",
+      "addedRequirements": [
+        "KMS-UNLOCK-005",
+        "KMS-UNLOCK-006"
+      ],
+      "addedScenarios": 7
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+      "beforeSha256": "33593f2bc1b9e2e646e8c1463c9094ff74798d531bca0cfc26c6b959e0dd6527",
+      "afterSha256": "3b7ef66c768c16060fbc671801355831be01fb859b9b0c5849d68745e155ae38",
+      "addedRequirements": [
+        "KMS-ENROL-005",
+        "KMS-ENROL-006"
+      ],
+      "addedScenarios": 17
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/etcd-and-operational-state/spec.md",
+      "beforeSha256": "3cdfa84b2199ac311505a4606ec34671e26904c983f45b749fc1d936fc3fd90b",
+      "afterSha256": "904c81c063d385da4650418033c1f2dfec4870481dea87d300b2d9a3654168e5",
+      "addedRequirements": [
+        "KMS-ETCD-004"
+      ],
+      "addedScenarios": 4
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+      "beforeSha256": "339d60bef98993f5dd84a437944397f4d34e1f8e2767cd38285ea6136df2fe33",
+      "afterSha256": "a1004de27167f10d29c046ca8e77d64d6c564bb64685a45b52816c3a9f1fa13c",
+      "addedRequirements": [
+        "KMS-RESTORE-006",
+        "KMS-RESTORE-007"
+      ],
+      "addedScenarios": 17
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/replacement-and-revocation/spec.md",
+      "beforeSha256": "1cd48b51c3887ee592ca500c129b42dca38e92c18161d89f43814a00684bb3a2",
+      "afterSha256": "568bf3c39df11ddab68e3e73291a5e1f32bb1cbf55fc318ca9e0a00f290cccdd",
+      "addedRequirements": [],
+      "addedScenarios": 3
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+      "beforeSha256": "a698607aea2d07cf92eb847406f99ddff72005b656b2df44b09e1b96f2187999",
+      "afterSha256": "8e8639238d20613b90ab4db1b3d7b95799566baff7aed581c6d6ba42179005ed",
+      "addedRequirements": [
+        "KMS-LEASE-004",
+        "KMS-LEASE-005",
+        "KMS-LEASE-006",
+        "KMS-LEASE-007",
+        "KMS-LEASE-008"
+      ],
+      "addedScenarios": 12
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/single-node-owner-unlock/spec.md",
+      "beforeSha256": "54a1757dd23687c4a98f934d7da9ca4b0436a45088acbc796d5413e5a8a3d495",
+      "afterSha256": "be20169210778bffbb55681986b35f1043bedf79c0251f6bb13a6d018c6f831b",
+      "addedRequirements": [],
+      "addedScenarios": 4
+    },
+    {
+      "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/release-milestones/spec.md",
+      "beforeSha256": "28a7e2093bdab0a75433a06682ad6a89f0393f7cc2f5b1ff73fe9b09763e924e",
+      "afterSha256": "061fce6e038f97aa19166697efb8f35d86bd66dbcbef8484e742955c91da7f06",
+      "addedRequirements": [
+        "KMS-RELEASE-004",
+        "KMS-RELEASE-005"
+      ],
+      "addedScenarios": 4
+    }
+  ],
+  "validation": {
+    "openSpecVersion": "2.1.1",
+    "statusCommand": "openspec status --change document-kms-spec-baseline --json",
+    "instructionsCommand": "openspec instructions specs --change document-kms-spec-baseline --json",
+    "strictCommand": "openspec validate document-kms-spec-baseline --strict",
+    "strictExitCode": 0,
+    "strictOutput": [
+      "(node:44816) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.",
+      "(Use `node --trace-warnings ...` to show where the warning was created)",
+      "Change 'document-kms-spec-baseline' is valid"
+    ],
+    "productTestsRun": false,
+    "immutableLimitsSha256": "5a496c71c57747ff86fa3596244a581fc401d6f0caf30a3cc31ae43a64885f54",
+    "readOnlyInputSha256": {
+      "openspec/coverage/baremetal-interface-ledger.json": "79a76a6e2dfe57dac9d426b4aeac6d5ae0fc5ae9ae704bf7fb2d6bd069ae818f",
+      "openspec/coverage/baremetal.json": "d9052b808217455ecf1305ee43ad2ae1c36660f9a2b2db17b1a1688dfe14d433",
+      "openspec/coverage/interface-inventory.json": "c548dd21ea845165bb8366a1f52dcb894202e3110024f1581ce37cc8d361173b",
+      "openspec/coverage/behavior-ledger.json": "1234de55b34475c2063aeba292957f401aa94be9898493099deaaa04f7cbc30d",
+      "docs/single-node-limits.md": "5a496c71c57747ff86fa3596244a581fc401d6f0caf30a3cc31ae43a64885f54"
+    }
+  }
+}

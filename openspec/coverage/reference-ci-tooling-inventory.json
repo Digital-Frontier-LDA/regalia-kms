@@ -1,0 +1,335 @@
+{
+  "schemaVersion": 1,
+  "active": false,
+  "status": "locally wired and functionally tested on the documentation branch; hosted proof pending",
+  "id": "TOOLS.openspec-reference-checker",
+  "candidateDocsRevision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
+  "candidateDocsTree": "5aeb6c3d1b3c18865e9f3611f91027b3c1c0ceb9",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "productSourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "productSourceLocatorForTool": null,
+  "existingCliProposal": {
+    "path": "openspec/coverage/reference-integrity-cli-proposal.json",
+    "sha256": "3a42d25167567e9eff9f34891d58160e4d0cad50bfde7f1465d3494756a6cb27"
+  },
+  "interface": {
+    "proposedId": "TOOLS.openspec-reference-checker",
+    "invocation": "python3 tools/check_openspec_references.py",
+    "requiredOptions": [
+      "--snapshot",
+      "--source-repo",
+      "--source-revision"
+    ],
+    "output": "Normal checks emit JSON on stdout; argparse help and usage output are separate.",
+    "statuses": {
+      "0": "reference check succeeds, or argparse help is requested",
+      "1": "reference integrity refuses",
+      "2": "argument parser usage error"
+    },
+    "implicitOptions": [
+      "-h",
+      "--help"
+    ],
+    "argumentAbbreviations": false
+  },
+  "source": {
+    "path": "tools/check_openspec_references.py",
+    "sourceDomain": "local-tooling-candidate",
+    "revision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
+    "fileSha256": "0f723e8ce68c9b950963e25c92512e9aff026d1e5edcae6d479b8e83a38e4644",
+    "anchors": [
+      {
+        "symbol": "strict version kind",
+        "line": 78,
+        "text": "    require(type(version) is int and version == 1, \"SCHEMA_VERSION\", where)",
+        "lineSha256": "5ac0155f77561521b4cb84dda8cdf934402184629905e752aa9bfc5b2a68cc7d"
+      },
+      {
+        "symbol": "strict JSON and duplicate keys",
+        "line": 140,
+        "text": "            return json.loads(self.read(name), object_pairs_hook=unique_pairs, parse_constant=reject_constant)",
+        "lineSha256": "a6b27e086c3ff86548a0e35645791a85326a94911915a8a64ff826e749a4d5e4"
+      },
+      {
+        "symbol": "local product object boundary",
+        "line": 159,
+        "text": "            \"GIT_NO_REPLACE_OBJECTS\": \"1\", \"GIT_NO_LAZY_FETCH\": \"1\",",
+        "lineSha256": "deec6bc2c11280a8e513fe3b4a61436d66ebca010e796d88403152b40fd72a49"
+      },
+      {
+        "symbol": "main/delta set",
+        "line": 263,
+        "text": "    def check_specs(self):",
+        "lineSha256": "a34dc6902d19a078e0ab945dea0a7cee0e9893561657105de78c4b5adabc7b1b"
+      },
+      {
+        "symbol": "candidate domain",
+        "line": 393,
+        "text": "    def check_candidates(self, records):",
+        "lineSha256": "fac97f7d98f5b6732c78f08b96add24924c0436ba8a8c13a6ca6ec1e9bf124cb"
+      },
+      {
+        "symbol": "scenario ownership",
+        "line": 509,
+        "text": "        require(name in index[requirement][1], \"SCENARIO_NOT_UNDER_REQUIREMENT\",",
+        "lineSha256": "8c2405ef920e94c450db5c5473a0861dc17b8892384c6c580a270eb8bcd5e5ac"
+      },
+      {
+        "symbol": "offline external domain",
+        "line": 546,
+        "text": "    def external_group(self, ref):",
+        "lineSha256": "04abacae8beddd232707cfe84b205bd71688714c16afbd48be2ba83bb33d4483"
+      },
+      {
+        "symbol": "non-authorizing output",
+        "line": 647,
+        "text": "    return {\"verificationAuthority\": \"not-assessed\", \"coverageComplete\": False}",
+        "lineSha256": "22bf9ca11951518f55fa8a6737fbab7b107add79242574457cf238242fa1ea9b"
+      },
+      {
+        "symbol": "main",
+        "line": 650,
+        "text": "def main(argv=None):",
+        "lineSha256": "315f290b730ad0207141775d07c6ede006feb63f84048378e159615915beb40b"
+      },
+      {
+        "symbol": "parser default abbreviation behavior",
+        "line": 651,
+        "text": "    parser = argparse.ArgumentParser(description=__doc__)",
+        "lineSha256": "ee3f8983e9134b3478c8f634dde74d40e4229bba0719c454b8f515d14e250a96"
+      },
+      {
+        "symbol": "snapshot option",
+        "line": 652,
+        "text": "    parser.add_argument(\"--snapshot\", required=True, help=\"Frozen local documentation directory\")",
+        "lineSha256": "f670e8cdbca7d306d98fe11d682acdfa419819b4cfe7a2ab4dba4f47c5b6fbcf"
+      },
+      {
+        "symbol": "source repo option",
+        "line": 653,
+        "text": "    parser.add_argument(\"--source-repo\", required=True, help=\"Explicit local Git repository with the product commit\")",
+        "lineSha256": "ff60417e40e72899799a66933b12be8f8ca76c93cbefef1153d1e66ddb102b8b"
+      },
+      {
+        "symbol": "full revision option",
+        "line": 654,
+        "text": "    parser.add_argument(\"--source-revision\", required=True, help=\"Full product commit ID\")",
+        "lineSha256": "2ce29499896507d95f928ec67860aa38e6406db5a1aaa29126f3170bab9fa266"
+      },
+      {
+        "symbol": "JSON boundary",
+        "line": 663,
+        "text": "    print(json.dumps(result, sort_keys=True))",
+        "lineSha256": "9701773ad7702d71501de2064cde92bea34c8d01a3c806af7b697432b181791f"
+      },
+      {
+        "symbol": "exit check result",
+        "line": 664,
+        "text": "    return 0 if result[\"referenceIntegrity\"] else 1",
+        "lineSha256": "775e5b510406e7a6cf12b37f466294a9e188ca14d03ee5c929eb4ddf8b15591d"
+      }
+    ]
+  },
+  "testsInspected": {
+    "path": "tests/test_check_openspec_references.py",
+    "sourceDomain": "local-tooling-candidate",
+    "revision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
+    "fileSha256": "64f312ec8500d65da41761349ab37c83ef7ff74e0038ae8eb0c149d9434d34b7",
+    "anchors": [
+      {
+        "symbol": "test_reference_integrity_has_no_authority",
+        "line": 167,
+        "text": "    def test_reference_integrity_has_no_authority(self):",
+        "lineSha256": "57eb02d6c6d5ac779c2ceb1d5060e771cb745962d45b5f0232b41559e668d71d"
+      },
+      {
+        "symbol": "test_proposal_cannot_be_used_as_direct_baseline_ref",
+        "line": 185,
+        "text": "    def test_proposal_cannot_be_used_as_direct_baseline_ref(self):",
+        "lineSha256": "67aa7ef60348f1dd4c78563f52a276edf3445c908cd157a5ac504854fb5ccc35"
+      },
+      {
+        "symbol": "test_scenario_must_belong_to_named_requirement",
+        "line": 181,
+        "text": "    def test_scenario_must_belong_to_named_requirement(self):",
+        "lineSha256": "3bec4aaf6e29b2b64d09aafcc5e4c2321d981bde30fb4c1e0641a9c53e893acf"
+      },
+      {
+        "symbol": "test_no_snapshot_fallback_for_missing_product_blob",
+        "line": 211,
+        "text": "    def test_no_snapshot_fallback_for_missing_product_blob(self):",
+        "lineSha256": "2327b71bc14ea108cdeea2e9ef33d36c19f58b540bb6c354543afd27e6350886"
+      },
+      {
+        "symbol": "test_candidate_record_file_hash_must_match",
+        "line": 236,
+        "text": "    def test_candidate_record_file_hash_must_match(self):",
+        "lineSha256": "f66212f0c51c79a6abb01921e6a419f92502f8e47b5ddde5ffa4fda95de37cf3"
+      },
+      {
+        "symbol": "test_external_revision_must_match_bound_official_source",
+        "line": 252,
+        "text": "    def test_external_revision_must_match_bound_official_source(self):",
+        "lineSha256": "0c62df0046cf2cba866bb707627a94fc9e436d98815f7c3887877b9be8c0b3dc"
+      },
+      {
+        "symbol": "test_boolean_schema_versions_are_refused_in_all_six_documents",
+        "line": 307,
+        "text": "    def test_boolean_schema_versions_are_refused_in_all_six_documents(self):",
+        "lineSha256": "9058356ed69de6eb22e24af3f3791946bd1cf5a8ccc22c41734074a732f8d543"
+      },
+      {
+        "symbol": "test_duplicate_json_keys_remain_refused",
+        "line": 324,
+        "text": "    def test_duplicate_json_keys_remain_refused(self):",
+        "lineSha256": "ad474aa2476e2bfcbf09e5e19347fe1f4074936a03f278a8077362b86f9304b3"
+      },
+      {
+        "symbol": "test_non_finite_json_constants_are_refused_in_opaque_authoring_metadata",
+        "line": 313,
+        "text": "    def test_non_finite_json_constants_are_refused_in_opaque_authoring_metadata(self):",
+        "lineSha256": "643a5af7b7ac6ca55a57d1c283eed01606daf438a547949bb241c8e6d6427fb1"
+      }
+    ]
+  },
+  "currentArgparseAbbreviation": {
+    "defaultAllowsUniquePrefix": true,
+    "syntheticProbe": "evidence/inert-argparse-probe.json"
+  },
+  "proposedBehavior": {
+    "allowAbbreviations": false,
+    "requirementIds": [
+      "KMS-CI-009",
+      "KMS-CI-010"
+    ],
+    "specPath": "openspec/changes/add-openspec-reference-integrity-ci/specs/delivery/software-build-and-ci/spec.md"
+  },
+  "workflowSource": {
+    "path": ".github/workflows/ci.yml",
+    "revision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
+    "fileSha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+    "buildCheckoutLine": 25,
+    "aggregateNeedsLine": 1271,
+    "ciInstalled": false
+  },
+  "verificationAuthority": "not-assessed",
+  "coverageComplete": false,
+  "hostedEvidence": [],
+  "implementationTasksCompleted": 6,
+  "testedCandidate": {
+    "baseDocsRevision": "848874d587e3cc356025605fdc67ccdf3928fb1f",
+    "sourceDomain": "local-tooling-candidate-patch",
+    "candidateCommit": null,
+    "productSourceLocatorForTool": null,
+    "cliProposal": {
+      "path": "openspec/coverage/reference-integrity-cli-proposal.json",
+      "sha256": "4e3e5bd8e5f97be69484618c6a805358111ea2d7ab0b45f0ba7304873c7c1021"
+    },
+    "source": {
+      "path": "tools/check_openspec_references.py",
+      "fileSha256": "31a7da1fb601d2928388bbbaf3420955e98b03813b8315a2cf1085f7363fd3bc",
+      "anchors": [
+        {
+          "symbol": "entrypoint",
+          "line": 650,
+          "text": "def main(argv=None):",
+          "lineSha256": "315f290b730ad0207141775d07c6ede006feb63f84048378e159615915beb40b"
+        },
+        {
+          "symbol": "exact long option policy",
+          "line": 651,
+          "text": "    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)",
+          "lineSha256": "d8245733ee67dafa18136d6c475c6f8a21280ac8c228c06ba5b6306e35525b1c"
+        },
+        {
+          "symbol": "non-authorizing output",
+          "line": 647,
+          "text": "    return {\"verificationAuthority\": \"not-assessed\", \"coverageComplete\": False}",
+          "lineSha256": "22bf9ca11951518f55fa8a6737fbab7b107add79242574457cf238242fa1ea9b"
+        },
+        {
+          "symbol": "check result exit",
+          "line": 664,
+          "text": "    return 0 if result[\"referenceIntegrity\"] else 1",
+          "lineSha256": "775e5b510406e7a6cf12b37f466294a9e188ca14d03ee5c929eb4ddf8b15591d"
+        }
+      ]
+    },
+    "tests": {
+      "path": "tests/test_check_openspec_references.py",
+      "fileSha256": "31a91dcdc25b75d860255dfa5bcce6747e6cc92b5847168b226d3a9692f93ea5",
+      "anchors": [
+        {
+          "symbol": "usage exit 2",
+          "line": 344,
+          "text": "    def test_missing_unknown_and_shortened_options_are_usage_errors(self):",
+          "lineSha256": "c1ebb15295d393904c43ff62a961563eb710b88b37740c7cfbf278fdf8cb4a7e"
+        },
+        {
+          "symbol": "help bypasses source reads",
+          "line": 355,
+          "text": "    def test_help_is_text_and_does_not_access_inputs_or_git(self):",
+          "lineSha256": "bfaf27264791d494172b212e55336188761477b4811ba5aed3e23838cdac29f4"
+        },
+        {
+          "symbol": "reference refusal channel",
+          "line": 374,
+          "text": "    def test_full_options_reach_checking_and_emit_json_refusal(self):",
+          "lineSha256": "c702baf1bfc55e19a349c10cdb12671d919fc60cf1d38f046117a918df846bd3"
+        }
+      ]
+    },
+    "workflow": {
+      "path": ".github/workflows/ci.yml",
+      "fileSha256": "83b5371169c5137f115a5712943256dc7a323b820e4f6151502a157e8fbd5e69",
+      "anchors": [
+        {
+          "symbol": "source-reserve",
+          "line": 184,
+          "text": "        id: openspec-source-reserve",
+          "lineSha256": "70fae466041a4fd5c30829f275e7df676cd31f4627c29a2cbfe244fca6d353f4"
+        },
+        {
+          "symbol": "product-checkout",
+          "line": 188,
+          "text": "        id: openspec-product-checkout",
+          "lineSha256": "979450ee1adf70dd7717728f26df1d7f54711232e8567c30c3ac9224fd04d320"
+        },
+        {
+          "symbol": "source-verify",
+          "line": 201,
+          "text": "        id: openspec-source-verify",
+          "lineSha256": "21c7d5f14f53d95dec2d9386c59d44ab5e685dd5927f49c9f6b9981457d3039d"
+        },
+        {
+          "symbol": "python",
+          "line": 208,
+          "text": "        id: openspec-python",
+          "lineSha256": "a16c1d42575c13666b763c50c7e86dd1b7ec332ba2d829d6464696a709993a81"
+        },
+        {
+          "symbol": "install",
+          "line": 216,
+          "text": "        id: openspec-install",
+          "lineSha256": "f13f7d6cfc092a315c0eeff3eec856666e27a49eb2508276a8799d45476212f5"
+        },
+        {
+          "symbol": "checks",
+          "line": 220,
+          "text": "        id: openspec-checks",
+          "lineSha256": "ec072221faf5fa884fde021c7b9454e1cb53c59d2dcc91b2cfec973ffbc39b31"
+        }
+      ]
+    },
+    "supportingFiles": {
+      "tools/openspec-ci/README.md": "31639d20e3b398b0edf07ca1ec2a47041b15cda9b224b6a5903ae03aad8c7d34",
+      "tools/openspec-ci/check-lock.cjs": "8bd521601116fcab317a854853e5fd972e52d61faee2b0a59155339ce01cd594",
+      "tools/openspec-ci/check-result.py": "f6b794ddeff6ced2929a2702c9b70d106c72223b77d2a47d4fd08be6d63e97b5",
+      "tools/openspec-ci/check-source.sh": "fafaf705f32275f4d186351f8e5dba9db96567d5f3c660d3a18c124934e4a897",
+      "tools/openspec-ci/install-runtime.sh": "44ba441ef384c989b563058e93c98a22a10e5f4dbf043a82d8433229703819fc",
+      "tools/openspec-ci/package-lock.json": "73308b1729ed26821ebbb86f60348e94a03c3206d511cca8c766ee78e8f0acca",
+      "tools/openspec-ci/package.json": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621",
+      "tools/openspec-ci/wiring.test.cjs": "64729f202350ddce3b5743d31f13dfa531be60c01c5a89bb25999a0ec6d87e9c"
+    }
+  }
+}

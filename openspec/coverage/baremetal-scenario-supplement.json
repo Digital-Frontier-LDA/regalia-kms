@@ -1,0 +1,841 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "owner": "baremetal-parent-supplement",
+  "requirements": [
+    {
+      "id": "KMS-HOST-005",
+      "capability": "baremetal/appliance-and-service-hardening",
+      "title": "Run appliance KMS under its service identity",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/systemd/regalia-kms.service",
+          "line": 9,
+          "symbol": "User=regalia-kms",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+          "line": 16,
+          "symbol": "AppArmorProfile=regalia-kms",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_apparmor.py",
+          "line": 91,
+          "symbol": "self.assertEqual(c.get(\"Unit\", \"AssertSecurity\", fallback=None), \"apparmor\")",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        },
+        {
+          "path": "tests/test_service_unit.py",
+          "line": 66,
+          "symbol": "self.assertNotEqual(user, \"root\", f\"{name} runs as root\")",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        },
+        {
+          "path": "tests/test_service_unit.py",
+          "line": 75,
+          "symbol": "self.assertEqual(shared, {}, f\"units share a service account: {shared}\")",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        },
+        {
+          "path": "tests/test_baremetal_apparmor.py",
+          "line": 88,
+          "symbol": "self.assertEqual(c.get(\"Service\", \"AppArmorProfile\", fallback=None), \"regalia-kms\")",
+          "supports": "Unit tests read the dedicated user and appliance confinement directives. A physical or live process start has not been qualified by those assertions."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-kms-start-configured-daemon"
+      ]
+    },
+    {
+      "id": "KMS-UNLOCK-005",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Distinguish an expected initrd skip from failed enrolment evidence",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 60,
+          "symbol": "fmt.Fprintln(diagnostics, \"regalia-unlock: no site credential: expected pre-genesis skip (ESP/stub enrolment state and TPM anchors absent)\")",
+          "supports": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 52,
+          "symbol": "marker, err := os.OpenFile(preGenesisMarker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)",
+          "supports": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 139,
+          "symbol": "return false, errors.New(\"missing site credential: TPM NV inventory cannot be read; pre-genesis is unproven\")",
+          "supports": "The test has an explicit NV inventory error row with a hard-failure expectation."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 142,
+          "symbol": "return false, errors.New(\"missing site credential on an enrolled node: TPM anchor state is present\")",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 117,
+          "symbol": "if chain {",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 124,
+          "symbol": "if credentials {",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 34,
+          "symbol": "fmt.Fprintln(diagnostics, \"regalia-unlock: usage: -render-check [-tpm DEVICE]\")",
+          "supports": "Direct Go tests check malformed and empty-TPM argument forms. Service orchestration is a separate evidence tier."
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 213,
+          "symbol": "t.Fatal(\"skip requires successful ESP inspection and TPM inventory\")",
+          "supports": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 111,
+          "symbol": "{\"pre_genesis\", func(*testing.T, *conditionFixture) {}, 1, \"no site credential: expected pre-genesis skip\"},",
+          "supports": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 197,
+          "symbol": "t.Fatalf(\"%s consumer exit = %d, want %d after render exit %d\", name, got, wantConsumer, c.code)",
+          "supports": "The Go condition fixture checks exact status and successful ESP/TPM inspection. It does not prove fresh physical custody or allow creation of etcd history."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 189,
+          "symbol": "t.Fatalf(\"condition exit = %d, want %d: %s\", got, c.code, diagnostics.String())",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 135,
+          "symbol": "{\"tpm_inventory_error\", func(t *testing.T, f *conditionFixture) { f.nv.err = os.ErrPermission }, 255, \"TPM NV inventory cannot be read; pre-genesis is unproven\"},",
+          "supports": "The test has an explicit NV inventory error row with a hard-failure expectation."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 121,
+          "symbol": "}, 255, \"missing site credential on an enrolled node: ESP membership state is present\"},",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 127,
+          "symbol": "}, 255, \"missing site credential on an enrolled node: stub enrolment state is present\"},",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 129,
+          "symbol": "{\"nv_base_without_esp\", func(t *testing.T, f *conditionFixture) { f.nv.defined[membership.HighWaterIndex+1] = true }, 255, \"missing site credential on an enrolled node: TPM anchor state is present\"},",
+          "supports": "The test table has separate negative rows for ESP, stub and TPM evidence with exact hard-failure and diagnostic assertions."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 223,
+          "symbol": "t.Fatalf(\"bad arguments exit = %d, want hard failure 255\", got)",
+          "supports": "Direct Go tests check malformed and empty-TPM argument forms. Service orchestration is a separate evidence tier."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-render-check-expected-pre-genesis-skip",
+        "BMCASE-render-check-nv-not-readable",
+        "BMCASE-render-check-already-enrolled-missing-site",
+        "BMCASE-render-check-closed-varargs"
+      ]
+    },
+    {
+      "id": "KMS-UNLOCK-006",
+      "capability": "baremetal/boot-network-and-unlock",
+      "title": "Use only a trusted current initrd skip decision",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 37,
+          "symbol": "if err := os.Remove(preGenesisMarker); err != nil && !os.IsNotExist(err) {",
+          "supports": "The test starts with expected skip, installs a test credential and verifies that a subsequent consumer no longer skips."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 83,
+          "symbol": "if !ok || info.Mode() != 0o600 || info.Size() != 0 || stat.Uid != uint32(os.Geteuid()) {",
+          "supports": "The Go control explicitly rejects the marker it creates and an inaccessible path. The trust predicate also checks type, mode, ownership and length; independent variation of all fields remains open."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis.go",
+          "line": 87,
+          "symbol": "fmt.Fprintf(diagnostics, \"%s: expected pre-genesis skip (verified by boot render)\\n\", unit)",
+          "supports": "The test drives both consumer conditions after render and checks each exact exit."
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 294,
+          "symbol": "t.Fatalf(\"consumer exit = %d, want 0 after enrolled retry\", got)",
+          "supports": "The test starts with expected skip, installs a test credential and verifies that a subsequent consumer no longer skips."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 329,
+          "symbol": "t.Fatalf(\"%v exit = %d, want hard failure: %s\", tc.args, got, diagnostics.String())",
+          "supports": "The Go control explicitly rejects the marker it creates and an inaccessible path. The trust predicate also checks type, mode, ownership and length; independent variation of all fields remains open."
+        },
+        {
+          "path": "cmd/regalia-unlock/pregenesis_test.go",
+          "line": 197,
+          "symbol": "t.Fatalf(\"%s consumer exit = %d, want %d after render exit %d\", name, got, wantConsumer, c.code)",
+          "supports": "The test drives both consumer conditions after render and checks each exact exit."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-render-check-invalidate-old-skip",
+        "BMCASE-consumer-check-untrusted-skip-marker",
+        "BMCASE-consumer-check-expected-skip"
+      ]
+    },
+    {
+      "id": "KMS-ENROL-005",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Stop anchor definition when sync is active",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1316,
+          "symbol": "def _no_sync_process(run):",
+          "supports": "The active-process helper assertion applies to the precheck. Configuration publication precedes it, and it provides no transaction-wide exclusion."
+        },
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 2231,
+          "symbol": "_no_sync_process(run)",
+          "supports": "The active-process helper assertion applies to the precheck. Configuration publication precedes it, and it provides no transaction-wide exclusion."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_owner_calls_in_root.py",
+          "line": 122,
+          "symbol": "with self.assertRaisesRegex(enrol.Refused, \"a process of regalia-sync is running\"):",
+          "supports": "The active-process helper assertion applies to the precheck. Configuration publication precedes it, and it provides no transaction-wide exclusion."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-enrol-commit-sync-active"
+      ]
+    },
+    {
+      "id": "KMS-ENROL-006",
+      "capability": "baremetal/enrolment-and-config-publication",
+      "title": "Resume an interrupted sealed credential publication",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/enrol.py",
+          "line": 1973,
+          "symbol": "def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):",
+          "supports": "The injected rename interruption checks final path absence and successful resealing with cleanup. Physical power loss is separate."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 121,
+          "symbol": "self.assertEqual([n for n in os.listdir(self.esp + \"/loader\") if n.endswith(\".enrol-new\")], [])",
+          "supports": "The injected rename interruption checks final path absence and successful resealing with cleanup. Physical power loss is separate."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 116,
+          "symbol": "self.assertFalse(os.path.exists(self.creds + \"/regalia.unlock-local.cred\"))",
+          "supports": "The injected rename interruption checks final path absence and successful resealing with cleanup. Physical power loss is separate."
+        },
+        {
+          "path": "tests/test_baremetal_enrol_seal.py",
+          "line": 120,
+          "symbol": "self.assertEqual(len(files), 2)",
+          "supports": "The injected rename interruption checks final path absence and successful resealing with cleanup. Physical power loss is separate."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-enrol-commit-esp-publish-interrupted"
+      ]
+    },
+    {
+      "id": "KMS-ETCD-004",
+      "capability": "baremetal/etcd-and-operational-state",
+      "title": "Use the appliance's assigned etcd service boundary",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 21,
+          "symbol": "ExecStart=/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml",
+          "supports": "The test reads the service declaration and checks the command and identity. It does not establish an actual PID 1 start or usable store."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 27,
+          "symbol": "User=regalia-etcd",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 11,
+          "symbol": "ConditionPathExists=/etc/regalia/etcd.conf.yml",
+          "supports": "The static unit test checks the precise condition. This case says nothing about whether existing files describe trustworthy live history."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 32,
+          "symbol": "LoadCredentialEncrypted=etcd-peer.key:/etc/credstore.encrypted/regalia-etcd-peer.key",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 38,
+          "symbol": "StateDirectory=regalia-etcd",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "deploy/baremetal/units/regalia-etcd.service",
+          "line": 42,
+          "symbol": "ReadWritePaths=/run/regalia-etcd",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 293,
+          "symbol": "self.assertEqual((service[\"User\"], service[\"Group\"]), (\"regalia-etcd\", \"regalia-etcd\"))",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 290,
+          "symbol": "self.assertEqual(service[\"ExecStart\"], \"/usr/bin/etcd --config-file /etc/regalia/etcd.conf.yml\")",
+          "supports": "The test reads the service declaration and checks the command and identity. It does not establish an actual PID 1 start or usable store."
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 291,
+          "symbol": "self.assertEqual(u[\"Unit\"][\"ConditionPathExists\"], \"/etc/regalia/etcd.conf.yml\")      # skipped before enrolment",
+          "supports": "The static unit test checks the precise condition. This case says nothing about whether existing files describe trustworthy live history."
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 298,
+          "symbol": "self.assertEqual((service[\"StateDirectory\"], service[\"StateDirectoryMode\"]), (\"regalia-etcd\", \"0700\"))",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 302,
+          "symbol": "self.assertEqual((service[\"ReadWritePaths\"], service[\"WorkingDirectory\"], service[\"UMask\"]),",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        },
+        {
+          "path": "tests/test_baremetal_units.py",
+          "line": 316,
+          "symbol": "self.assertEqual([line for line in f.read().splitlines() if line.startswith(\"LoadCredentialEncrypted=\")],",
+          "supports": "The unit test checks encryption credential source, writable paths and sandbox settings. Credential unseal and actual manager enforcement remain open."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-etcd-start-configured-unit",
+        "BMCASE-etcd-start-config-missing",
+        "BMCASE-etcd-start-trusted-local-start"
+      ]
+    },
+    {
+      "id": "KMS-RESTORE-006",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Preserve the restore issuance ledger",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 124,
+          "symbol": "fcntl.flock(lock, fcntl.LOCK_EX)",
+          "supports": "Two threads issue via the same actual file-lock boundary, with a scheduling failpoint."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 114,
+          "symbol": "require(isinstance(issued, list) and all(type(r) is int and r >= 1 for r in issued) and issued == sorted(set(issued)),",
+          "supports": "The test checks an out-of-order ledger is refused. The source applies the same check to duplicates."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 703,
+          "symbol": "self.assertEqual(sorted(got), [5, 6])",
+          "supports": "Two threads issue via the same actual file-lock boundary, with a scheduling failpoint."
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 710,
+          "symbol": "self.assertIn(\"are not a rising list of epochs\", str(caught.exception))",
+          "supports": "The test checks an out-of-order ledger is refused. The source applies the same check to duplicates."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-restore-sign-parallel-issue",
+        "BMCASE-restore-sign-malformed-ledger"
+      ]
+    },
+    {
+      "id": "KMS-RESTORE-007",
+      "capability": "baremetal/recovery-and-restoration",
+      "title": "Keep concurrent and unfinished restore attempts separate",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 455,
+          "symbol": "fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+          "supports": "The fixture holds a real advisory lock. Its stubbed mutation body is asserted uncalled."
+        },
+        {
+          "path": "deploy/baremetal/restore.py",
+          "line": 327,
+          "symbol": "require(not host.exists(DROPIN), \"%s is still in place: an earlier restore stopped part way. Put etcd back on its live store \"",
+          "supports": "This is a present-time residue check. It cannot establish behavior after /run is lost."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 573,
+          "symbol": "run.assert_not_called()",
+          "supports": "The fixture holds a real advisory lock. Its stubbed mutation body is asserted uncalled."
+        },
+        {
+          "path": "tests/test_baremetal_restore.py",
+          "line": 316,
+          "symbol": "self.assertEqual(self.host.calls, [])",
+          "supports": "This is a present-time residue check. It cannot establish behavior after /run is lost."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-restore-run-restore-lock",
+        "BMCASE-restore-run-leftover-stage-override"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-004",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Admission follows the boot-time serving bound",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "supports": "The deterministic gate assertion checks immediately before the exact boundary and at it. Request-correlated audit is a separate harness assertion."
+        },
+        {
+          "path": "internal/admission/admission.go",
+          "line": 509,
+          "symbol": "if now >= document.ServeUntilBoottimeMs {",
+          "supports": "The deterministic gate assertion checks immediately before the exact boundary and at it. Request-correlated audit is a separate harness assertion."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/admission/admission_test.go",
+          "line": 145,
+          "symbol": "t.Fatal(\"refused one millisecond before serve_until\")",
+          "supports": "The deterministic gate assertion checks immediately before the exact boundary and at it. Request-correlated audit is a separate harness assertion."
+        },
+        {
+          "path": "internal/admission/admission_test.go",
+          "line": 148,
+          "symbol": "w.refused(\"the admission ran out\")",
+          "supports": "The deterministic gate assertion checks immediately before the exact boundary and at it. Request-correlated audit is a separate harness assertion."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-admission-expiry"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-005",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Bind the local lease socket only in a trusted directory",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 961,
+          "symbol": "require(stat.S_ISSOCK(left.st_mode), \"%s is there and is not a socket: it is not removed, no local lease listener\" % path)",
+          "supports": "The real filesystem/socket fixture rebinds a leftover socket and separately checks preservation of a regular file."
+        },
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 962,
+          "symbol": "os.unlink(path)",
+          "supports": "The real filesystem/socket fixture rebinds a leftover socket and separately checks preservation of a regular file."
+        },
+        {
+          "path": "deploy/baremetal/sync.py",
+          "line": 954,
+          "symbol": "require(not held.st_mode & 0o022, \"%s is writable by its group or by others (%o): no local lease listener\" % (",
+          "supports": "The fixture exercises group and other writable modes and checks no socket is created."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 170,
+          "symbol": "self.assertEqual(pathlib.Path(self.path).read_text(), \"not a socket\")",
+          "supports": "The real filesystem/socket fixture rebinds a leftover socket and separately checks preservation of a regular file."
+        },
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 166,
+          "symbol": "self.bound()                                             # the leftover socket: removed, bound again",
+          "supports": "The real filesystem/socket fixture rebinds a leftover socket and separately checks preservation of a regular file."
+        },
+        {
+          "path": "tests/test_baremetal_local_lease.py",
+          "line": 162,
+          "symbol": "self.assertFalse(os.path.exists(self.path))",
+          "supports": "The fixture exercises group and other writable modes and checks no socket is created."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-local-lease-stale-socket",
+        "BMCASE-local-lease-untrusted-socket-directory"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-006",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Resume serving after valid renewal",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "supports": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup."
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 336,
+          "symbol": "self.holder.install(self.renew(request), manifest, prefer=waits)",
+          "supports": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup."
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 395,
+          "symbol": "serve_until, reason = before + (left - MARGIN) * 1000, \"\"",
+          "supports": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 416,
+          "symbol": "self.assertIn(\"EXPIRED: the runtime lease expired\", gone[\"reason\"])",
+          "supports": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup."
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 419,
+          "symbol": "self.assertGreater(self.service.step()[\"serve_until_boottime_ms\"], self.ticks)",
+          "supports": "The peer-lease fixture checks expiration and subsequent serving publication. This is not evidence of live self-renewal or daemon startup."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-admission-reacquire"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-007",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Publish loss of admission without waiting for renewal",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 380,
+          "symbol": "def _publish_locked(self, manifest, reason, refused):",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 346,
+          "symbol": "def lapse(self):",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        },
+        {
+          "path": "deploy/baremetal/admission.py",
+          "line": 351,
+          "symbol": "with self.lock:",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 758,
+          "symbol": "self.assertEqual(held, [True])",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 777,
+          "symbol": "self.assertFalse(seen[\"alive\"], \"lapse() waited for the round\")",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 778,
+          "symbol": "self.assertEqual(seen[\"written\"][\"serve_until_boottime_ms\"], 0)",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        },
+        {
+          "path": "tests/test_baremetal_admission.py",
+          "line": 779,
+          "symbol": "self.assertEqual([e[\"outcome\"] for e in self.trail], [\"ALLOW\", \"DENY\"])   # recorded at the bound, once",
+          "supports": "One test asserts a real watcher thread publishes zero while the renewal is stalled. A separate lock assertion checks the expiry decision and publication cannot interleave within the critical section."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-admission-expiry-versus-renew"
+      ]
+    },
+    {
+      "id": "KMS-LEASE-008",
+      "capability": "baremetal/runtime-leases-and-admission",
+      "title": "Separate daemon readiness from process startup",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "internal/server/health.go",
+          "line": 230,
+          "symbol": "if dependencies.Admission != nil {",
+          "supports": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard."
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 187,
+          "symbol": "coordinator.recordOrCount(ctx, request, registry.Route{}, \"deny\", \"not-admitted\", started, false, nil)",
+          "supports": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard."
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/admission_wiring_test.go",
+          "line": 188,
+          "symbol": "t.Fatal(\"a node that is not admitted reported ready: a load balancer would keep sending it work\")",
+          "supports": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard."
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 65,
+          "symbol": "wantNotAdmitted(t, result, err)",
+          "supports": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard."
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 66,
+          "symbol": "if semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {",
+          "supports": "The readiness fixture exercises the server with a failing admission probe, and the operation fixture checks refusal before routing, policy or hardware access. There is no claim of a service-manager start guard."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-kms-start-runtime-not-admitted"
+      ]
+    },
+    {
+      "id": "KMS-RELEASE-004",
+      "capability": "delivery/release-milestones",
+      "title": "Consume late replies during the test client's completion wait",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "e2e/lib/threenode.py",
+          "line": 449,
+          "symbol": "def finish_unlock_client(client, reply, key, timeout, open_reply):",
+          "supports": "The fixture uses a real datagram, real child and synthetic mapper action. This is a harness case, not a real mapper proof."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 300,
+          "symbol": "self.assertEqual(env[\"result\"][\"stderr\"], \"client saw mapper\\n\")",
+          "supports": "The fixture uses a real datagram, real child and synthetic mapper action. This is a harness case, not a real mapper proof."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-owner-unlock-late-harness-reply"
+      ]
+    },
+    {
+      "id": "KMS-RELEASE-005",
+      "capability": "delivery/release-milestones",
+      "title": "Measure revocation shutdown with correlated evidence",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 364,
+          "symbol": "def observe_shutdown(kms, read_admission, started, lifetime):",
+          "supports": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 373,
+          "symbol": "return observed",
+          "supports": "The fixture supplies an unrelated denial and a backend failure. The original admission case here is a proof predicate in the TEST harness."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 392,
+          "symbol": "if status == 503 and isinstance(response, dict) and response.get(\"request_id\") == request_id and observed <= deadline:",
+          "supports": "The fixture supplies an unrelated denial and a backend failure. The original admission case here is a proof predicate in the TEST harness."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 391,
+          "symbol": "return None, stopped    # a later success invalidates any pending refusal evidence",
+          "supports": "The deterministic sequence returns 503, then 200 while the first record becomes visible and verifies rejection."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 393,
+          "symbol": "candidates[request_id] = observed - started",
+          "supports": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time."
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 401,
+          "symbol": "evidence = until(lambda: (observed,) if (observed := audited_denial()) is not None else None, 60, 1)",
+          "supports": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 322,
+          "symbol": "self.assertEqual(self.observe(), (None, 0))",
+          "supports": "The fixture supplies an unrelated denial and a backend failure. The original admission case here is a proof predicate in the TEST harness."
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 303,
+          "symbol": "self.assertEqual(self.observe(), (None, 0))",
+          "supports": "The deterministic sequence returns 503, then 200 while the first record becomes visible and verifies rejection."
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 310,
+          "symbol": "self.assertEqual(self.observe(lambda: self.read() if self.now >= 1 else None), (1, 1))",
+          "supports": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time."
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 311,
+          "symbol": "self.assertEqual(self.now, 5)",
+          "supports": "The fixture asserts a saved earlier response time and later audit confirmation. The collector wait does not become behavior time."
+        }
+      ],
+      "rationale": "New contract text has case-resolution source/assertion references. Reference integrity passed; full semantic and qualifying execution acceptance remain open. Do not infer verified shipping.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "BMCASE-admission-not-any-503",
+        "BMCASE-admission-late-allow-invalidates",
+        "BMCASE-admission-late-audit-keeps-time"
+      ]
+    }
+  ],
+  "sourceAreas": [],
+  "knownGaps": [
+    {
+      "id": "new-scenario-requirement-verification",
+      "capabilities": [
+        "baremetal/appliance-and-service-hardening",
+        "baremetal/boot-network-and-unlock",
+        "baremetal/enrolment-and-config-publication",
+        "baremetal/etcd-and-operational-state",
+        "baremetal/recovery-and-restoration",
+        "baremetal/runtime-leases-and-admission",
+        "delivery/release-milestones"
+      ],
+      "description": "15 newly documented requirement blocks retain UNVERIFIED authoring status pending complete semantic/case/execution reconciliation; their locator and scenario integrity was checked.",
+      "beads": [],
+      "releaseGate": "No verified_shipped promotion from documentation changes."
+    }
+  ]
+}

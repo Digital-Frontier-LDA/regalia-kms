@@ -1,0 +1,3921 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "owner": "runtime",
+  "requirements": [
+    {
+      "id": "KMS-CI-001",
+      "capability": "delivery/software-build-and-ci",
+      "title": "CI aggregate completeness",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1269,
+          "symbol": "ci-gate",
+          "supports": "Always evaluates the expected needs and refuses non-success or draft results"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_ci_gate_needs.py",
+          "line": 52,
+          "symbol": "test_the_gate_needs_every_other_job",
+          "supports": "Asserts complete coverage at the pin"
+        },
+        {
+          "path": "tests/test_ci_gate_needs.py",
+          "line": 55,
+          "symbol": "test_each_way_out_is_found",
+          "supports": "Asserts detection for added jobs, removed needs, invalid count and permissive gates"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [
+        {
+          "kind": "hosted-pr-ci",
+          "sourceRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+          "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+          "workflowId": 358964685,
+          "runId": 44956870826,
+          "jobId": 137013751924,
+          "attempt": 1,
+          "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44956870826/job/137013751924",
+          "observed": "Hosted PR gate reported all 18 dependencies successful. This run was for the tested PR tree, before the squash."
+        }
+      ],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-002",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Scenario summary gates",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 238,
+          "symbol": "26 passed, 0 failed",
+          "supports": "Requires the exact one-node summary. The surrounding step requires abrmd at line 236 and counts each outstanding TODO independently at lines 241–245."
+        },
+        {
+          "path": ".github/workflows/node-units.yml",
+          "line": 282,
+          "symbol": "69 passed, 0 failed",
+          "supports": "Rejects a missing exact recovery summary. The same step requires the abrmd transport at line 280."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_one_node_ci_todos.py",
+          "line": 22,
+          "symbol": "test_each_id_once_passes",
+          "supports": "Executes the actual extracted TODO check on one record per ID"
+        },
+        {
+          "path": "tests/test_one_node_ci_todos.py",
+          "line": 25,
+          "symbol": "test_missing_id_cannot_be_replaced_by_a_duplicate",
+          "supports": "Executes the same gate with duplicates and expects nonzero"
+        },
+        {
+          "path": "tests/test_one_node_ci_todos.py",
+          "line": 30,
+          "symbol": "test_extra_or_missing_line_fails",
+          "supports": "Checks additional or missing TODO records"
+        }
+      ],
+      "rationale": "The workflow enforces transport and exact summaries. Unit assertions directly exercise the TODO gate but do not independently exercise scenario-summary and transport failure branches.",
+      "executionEvidence": [
+        {
+          "kind": "hosted-pr-ci",
+          "sourceRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+          "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+          "workflowId": 373598608,
+          "runId": 44956870774,
+          "jobId": 137006823728,
+          "attempt": 1,
+          "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44956870774/job/137006823728",
+          "observed": "The raw one-node log records 26 passes and zero failures, both explicit TODOs, and the software TPM transport."
+        },
+        {
+          "kind": "hosted-pr-ci",
+          "sourceRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+          "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+          "workflowId": 373598608,
+          "runId": 44956870774,
+          "jobId": 137006823424,
+          "attempt": 1,
+          "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44956870774/job/137006823424",
+          "observed": "The raw recovery log records 69 passes and zero failures and the c-to-a lease-nonce control after b's burst. This is one observation, while the earlier reset diagnosis remains unresolved."
+        }
+      ],
+      "beads": [
+        "regalia-kms-dx7.7",
+        "regalia-kms-dx7.8"
+      ]
+    },
+    {
+      "id": "KMS-CI-003",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Single-node denial evidence integrity",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 588,
+          "symbol": "cluster.audit_has",
+          "supports": "Polls committed collector evidence with event, cutoff, outcome, peer, epoch and reason at lines 587–592. An unsuccessful poll cannot satisfy the list verdict."
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "line": 2697,
+          "symbol": "audit_has",
+          "supports": "Correlates local audit lines with collector records"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 77,
+          "symbol": "test_polling_error_cannot_pass_even_if_diagnostic_reread_succeeds",
+          "supports": "Runs the extracted scenario assertion and rejects diagnostic recovery"
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 80,
+          "symbol": "test_local_denial_without_collector_record_cannot_pass",
+          "supports": "Refuses local trail evidence without collector copy"
+        },
+        {
+          "path": "tests/test_one_node_revocation.py",
+          "line": 83,
+          "symbol": "test_sync_s_peer_a_epoch_two_no_lease_denial_satisfies_the_assertion",
+          "supports": "Checks correlated positive evidence and nearby refusal cases"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [
+        {
+          "kind": "hosted-pr-ci",
+          "sourceRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+          "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+          "workflowId": 373598608,
+          "runId": 44956870774,
+          "jobId": 137006823728,
+          "attempt": 1,
+          "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44956870774/job/137006823728",
+          "observed": "The hosted software scenario records owner-tunnel traffic and no key with the listener stopped, successful signed owner unlock and correlated daemon refusal after zero admission."
+        }
+      ],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-004",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Evidence class disclosure",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "e2e/run.sh",
+          "line": 61,
+          "symbol": "summarise_evidence",
+          "supports": "Uses mode and final exit status to label evidence scope"
+        },
+        {
+          "path": "e2e/run.sh",
+          "line": 14,
+          "symbol": "need_ceremony()",
+          "supports": "Returns early for plan mode, then requires an existing ceremony substrate or exits 2 before running that arm."
+        }
+      ],
+      "tests": [
+        {
+          "path": "e2e/tests/test-evidence-classes.sh",
+          "line": 40,
+          "symbol": "WOULD PRODUCE (nothing ran)",
+          "supports": "Asserts the actual plan invocation says nothing ran."
+        },
+        {
+          "path": "e2e/tests/test-evidence-classes.sh",
+          "line": 57,
+          "symbol": "EVIDENCE PRODUCED",
+          "supports": "Fails if the actually failed run prints the success heading. Lines 49–55 separately assert nonzero exit and the explicit failure summary."
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-005",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Qualification evidence boundaries",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "This shard records source and assertion presence. It does not assert a fresh hosted run at the main commit, physical acceptance or first-store commissioning.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.26"
+      ]
+    },
+    {
+      "id": "KMS-CI-006",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Qualified dependencies and reproducibility controls",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "tools/qualified_stack.py",
+          "line": 42,
+          "symbol": "check_go_mod",
+          "supports": "Compares declared versions against the qualified stack"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1108,
+          "symbol": "initrd-reproducible-compare",
+          "supports": "Checks independently produced initrd artifact hashes"
+        },
+        {
+          "path": "e2e/initrd-drift.sh",
+          "line": 30,
+          "symbol": "SNAPSHOT=",
+          "supports": "Extracts the reviewed snapshot from the inventory, rejects missing or ambiguous data, and derives the build epoch passed to mmdebstrap and dracut."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_qualified_stack.py",
+          "line": 13,
+          "symbol": "test_this_repositorys_go_mod_uses_the_qualified_token_libraries",
+          "supports": "Checks current pins and exercises an unqualified version"
+        },
+        {
+          "path": "tests/test_initrd_drift.py",
+          "line": 205,
+          "symbol": "test_the_drift_build_uses_the_packages_the_boot_test_uses",
+          "supports": "Compares package set and required builder flags"
+        },
+        {
+          "path": "tests/test_initrd_drift.py",
+          "line": 298,
+          "symbol": "test_the_drift_epoch_is_the_reviewed_snapshot_s",
+          "supports": "Runs extracted snapshot gate with valid and invalid inputs"
+        }
+      ],
+      "rationale": "Pinned middleware and drift input checks have direct assertions. Workflow hash comparison exists, with only separately attributed execution evidence in this shard.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CI-007",
+      "capability": "delivery/software-build-and-ci",
+      "title": "Owner-assisted boot evidence",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "e2e/one-node.py",
+          "line": 301,
+          "symbol": "owner_connection_refused",
+          "supports": "Requires pinned client traffic, endpoint refusal, client result and no key"
+        },
+        {
+          "path": "e2e/one-node.py",
+          "line": 479,
+          "symbol": "cluster.owner_tunnel",
+          "supports": "Keeps both attempt arms inside the pinned tunnel, samples pre-attempt counters, classifies the owner-off attempt, and requires owner-keyslot open and marker readback in the owner-on arm."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 22,
+          "symbol": "test_only_an_exhausted_owner_connection_attempt_without_a_key_passes",
+          "supports": "Requires the exact client outcome and no key"
+        },
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 46,
+          "symbol": "test_missing_or_one_way_peer_traffic_cannot_pass_owner_off",
+          "supports": "Rejects missing and asymmetric traffic"
+        },
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 69,
+          "symbol": "test_scenario_keeps_the_tunnel_and_client_limits_when_enabling_the_responder",
+          "supports": "Executes both bounded scenario controls and checks tunnel lifetime"
+        },
+        {
+          "path": "tests/test_one_node_owner_unlock.py",
+          "line": 180,
+          "symbol": "test_probe_runs_only_on_negative_boot_after_client_completion_before_teardown",
+          "supports": "Checks client counters sampled before probe and verifies teardown ordering"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [
+        {
+          "kind": "hosted-pr-ci",
+          "sourceRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+          "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+          "workflowId": 373598608,
+          "runId": 44956870774,
+          "jobId": 137006823728,
+          "attempt": 1,
+          "url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/44956870774/job/137006823728",
+          "observed": "Raw job log records pinned tunnel traffic and stopped inner listener refusal with no key, then signed owner-response delivery, owner-keyslot opening and filesystem marker readback."
+        }
+      ],
+      "beads": []
+    },
+    {
+      "id": "KMS-API-001",
+      "capability": "runtime/api-and-configuration",
+      "title": "Versioned operation routes",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/api/handler.go",
+          "line": 141,
+          "symbol": "operationPaths",
+          "supports": "Defines the exact route set"
+        },
+        {
+          "path": "internal/api/handler.go",
+          "line": 161,
+          "symbol": "ServeHTTP",
+          "supports": "Rejects unsupported paths and methods"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/api/compatibility_test.go",
+          "line": 53,
+          "symbol": "TestOnlyTheVersionedPathIsServed",
+          "supports": "Checks 404 across wrong versions and spellings"
+        },
+        {
+          "path": "internal/api/compatibility_test.go",
+          "line": 164,
+          "symbol": "TestOperationsRejectNonPostAndAdvertiseAllow",
+          "supports": "Checks 405 and Allow"
+        },
+        {
+          "path": "internal/api/validate_request_test.go",
+          "line": 54,
+          "symbol": "TestEveryOperationHasAValidDocumentThatIsAccepted",
+          "supports": "Exercises the valid document for every operation"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-API-002",
+      "capability": "runtime/api-and-configuration",
+      "title": "Closed and bounded requests",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/api/handler.go",
+          "line": 222,
+          "symbol": "decodeRequest",
+          "supports": "Bounds and decodes one closed document"
+        },
+        {
+          "path": "internal/api/handler.go",
+          "line": 296,
+          "symbol": "validateRequest",
+          "supports": "Checks context, nonce and operation-specific payloads"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/api/compatibility_test.go",
+          "line": 68,
+          "symbol": "TestUnknownRequestFieldsAreRejectedNotIgnored",
+          "supports": "Uses a successful control and asserts unknown field is 400"
+        },
+        {
+          "path": "internal/api/handler_test.go",
+          "line": 65,
+          "symbol": "TestDuplicateJSONKeysAreRejectedBeforeDispatch",
+          "supports": "Exercises duplicate JSON refusal"
+        },
+        {
+          "path": "internal/api/validate_request_test.go",
+          "line": 212,
+          "symbol": "TestThePayloadMustDecodeAndFitItsOperationsBound",
+          "supports": "Refuses malformed, empty and oversized sign inputs"
+        },
+        {
+          "path": "internal/api/handler_test.go",
+          "line": 56,
+          "symbol": "TestIdempotencyKeyMustEqualDurableReplayNonce",
+          "supports": "Asserts mismatched idempotency and replay nonce gives 400 with no dispatch"
+        },
+        {
+          "path": "internal/api/handler_test.go",
+          "line": 65,
+          "symbol": "TestDuplicateJSONKeysAreRejectedBeforeDispatch",
+          "supports": "Asserts duplicate fields give 400 with zero coordinator calls"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-API-003",
+      "capability": "runtime/api-and-configuration",
+      "title": "Structured results and errors",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/api/handler.go",
+          "line": 216,
+          "symbol": "Encode(resultDocument",
+          "supports": "Serializes the correlated response fields and standard base64 result after setting no-store at line 215. Classified failure branches return first."
+        },
+        {
+          "path": "internal/api/handler.go",
+          "line": 410,
+          "symbol": "writeError",
+          "supports": "Writes stable error fields"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/api/handler_test.go",
+          "line": 74,
+          "symbol": "TestUnwrapValidatesAndDispatchesBoundRequest",
+          "supports": "Asserts accepted dispatch and response"
+        },
+        {
+          "path": "internal/api/compatibility_test.go",
+          "line": 94,
+          "symbol": "TestErrorDocumentShapeIsStable",
+          "supports": "Asserts exact error shape and code"
+        },
+        {
+          "path": "internal/api/compatibility_test.go",
+          "line": 124,
+          "symbol": "TestErrorMessagesDoNotEchoTheRequest",
+          "supports": "Asserts the canary never appears"
+        },
+        {
+          "path": "internal/api/handler_test.go",
+          "line": 74,
+          "symbol": "TestUnwrapValidatesAndDispatchesBoundRequest",
+          "supports": "Checks no-store and exact encoded result"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-API-004",
+      "capability": "runtime/api-and-configuration",
+      "title": "Constrained daemon configuration",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/config/config.go",
+          "line": 171,
+          "symbol": "Default",
+          "supports": "Sets loopback and bounded defaults"
+        },
+        {
+          "path": "internal/config/config.go",
+          "line": 182,
+          "symbol": "Load",
+          "supports": "Checks file type and write permissions"
+        },
+        {
+          "path": "internal/config/config.go",
+          "line": 202,
+          "symbol": "Decode",
+          "supports": "Bounds and parses one closed document"
+        },
+        {
+          "path": "internal/config/config.go",
+          "line": 404,
+          "symbol": "cfg.OperationTimeout",
+          "supports": "Enforces the operation timeout interval. The following validation checks shutdown timeout, concurrency and dependent settings."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/config/config_test.go",
+          "line": 51,
+          "symbol": "TestLoadRejectsWritableConfiguration",
+          "supports": "Refuses unsafe file mode"
+        },
+        {
+          "path": "internal/config/config_test.go",
+          "line": 64,
+          "symbol": "TestDecodeRejectsUnknownAndTrailingData",
+          "supports": "Refuses unknown fields and trailing JSON"
+        },
+        {
+          "path": "internal/config/config_test.go",
+          "line": 76,
+          "symbol": "TestDecodeRejectsUnsafeValues",
+          "supports": "Tests unsafe bounds and incomplete configuration"
+        },
+        {
+          "path": "internal/config/config_test.go",
+          "line": 94,
+          "symbol": "TestDecodeAppliesSafeDefaults",
+          "supports": "Asserts nonempty positive defaults"
+        },
+        {
+          "path": "internal/config/config_test.go",
+          "line": 94,
+          "symbol": "TestDecodeAppliesSafeDefaults",
+          "supports": "Checks the local bind and bounded runtime defaults"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUDIT-001",
+      "capability": "runtime/audit-and-collector",
+      "title": "Durable result gate",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 348,
+          "symbol": "\"authorized\"",
+          "supports": "Requires durable local authorization and remote acknowledgement before calling the runner. Failure returns without hardware execution."
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 399,
+          "symbol": "\"success\"",
+          "supports": "Requires durable local success and remote acknowledgement before output. Failure zeroes output and reports dependency unavailable."
+        },
+        {
+          "path": "internal/audit/audit.go",
+          "line": 370,
+          "symbol": "Record",
+          "supports": "Syncs local event and waits for required remote acknowledgement"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/coordinator_test.go",
+          "line": 133,
+          "symbol": "TestCoordinatorDenialAndAuditFailureNeverReachHardware",
+          "supports": "Checks pre-audit refusal and zero hardware calls"
+        },
+        {
+          "path": "internal/operations/guard_coverage_test.go",
+          "line": 74,
+          "symbol": "TestSuccessRecordFailureAfterAuthorizedRecordSucceedsStillWithholdsOutput",
+          "supports": "Checks two remote-required drafts, actual hardware invocation and no output on the second refusal"
+        },
+        {
+          "path": "internal/audit/audit_test.go",
+          "line": 107,
+          "symbol": "TestHighRiskRecordFailsClosedAfterDurableLocalAppend",
+          "supports": "Checks audit failure with durable local event"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUDIT-002",
+      "capability": "runtime/audit-and-collector",
+      "title": "Verifiable local event history",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/audit/audit.go",
+          "line": 370,
+          "symbol": "Record",
+          "supports": "Validates, hashes and synchronizes audit metadata"
+        },
+        {
+          "path": "internal/audit/audit.go",
+          "line": 489,
+          "symbol": "verifyEvents",
+          "supports": "Validates sequence and chain"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/audit/audit_test.go",
+          "line": 52,
+          "symbol": "TestRecorderPersistsOrderedIntegrityChainAndShipsOffHost",
+          "supports": "Asserts local event order and delivery"
+        },
+        {
+          "path": "internal/audit/audit_test.go",
+          "line": 77,
+          "symbol": "TestVerifyDetectsAlteredAndMissingEvents",
+          "supports": "Rejects altered and removed links"
+        },
+        {
+          "path": "internal/audit/audit_test.go",
+          "line": 127,
+          "symbol": "TestRecordRejectsUnsafeMetadataWithoutPersistingIt",
+          "supports": "Refuses and confirms unsafe data was not written"
+        },
+        {
+          "path": "internal/audit/audit_test.go",
+          "line": 176,
+          "symbol": "TestEventCarriesRBACDigestThroughRecordAndVerify",
+          "supports": "Compares re-read authorization digest"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUDIT-003",
+      "capability": "runtime/audit-and-collector",
+      "title": "Collector commit and replay",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/audit/collector.go",
+          "line": 372,
+          "symbol": "handleEvent",
+          "supports": "Processes authenticated ingestion for the identified stream"
+        },
+        {
+          "path": "internal/audit/collector.go",
+          "line": 482,
+          "symbol": "commit",
+          "supports": "Enforces ordered commit, idempotency and conflict refusal"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/audit/collector_test.go",
+          "line": 191,
+          "symbol": "TestCollectorCommitsBeforeAcknowledging",
+          "supports": "Asserts failed sync does not acknowledge or move the head and checks persistence across restart"
+        },
+        {
+          "path": "internal/audit/collector_test.go",
+          "line": 248,
+          "symbol": "TestCollectorRejectsARewrittenJournal",
+          "supports": "Checks conflict, unchanged head and durable alarm"
+        },
+        {
+          "path": "internal/audit/collector_test.go",
+          "line": 286,
+          "symbol": "TestCollectorIdempotentlyReacksTheCommittedCopy",
+          "supports": "Checks a retry does not append"
+        },
+        {
+          "path": "internal/audit/collector_test.go",
+          "line": 527,
+          "symbol": "TestCollectorKeysStreamsByIdentityAndSite",
+          "supports": "Checks identity and site separation"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUDIT-004",
+      "capability": "runtime/audit-and-collector",
+      "title": "Trail continuity, receipt and handover",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/audit/trail.go",
+          "line": 350,
+          "symbol": "ShipTrailLines",
+          "supports": "Compares prior head, alarms on divergence and sends only new links"
+        },
+        {
+          "path": "internal/audit/collector.go",
+          "line": 682,
+          "symbol": "handleReceipt",
+          "supports": "Signs held positions for the authenticated stream"
+        },
+        {
+          "path": "internal/audit/handover.go",
+          "line": 272,
+          "symbol": "handleHandover",
+          "supports": "Requires old credential proof and applies authorized rotation"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/audit/trail_test.go",
+          "line": 221,
+          "symbol": "TestShipTrailAgainstARealCollector",
+          "supports": "Checks retained, appended and tampered cases against a TLS reference collector"
+        },
+        {
+          "path": "internal/audit/trail_test.go",
+          "line": 412,
+          "symbol": "TestTheCollectorSignsReceiptsForTheCallersOwnStreamOnly",
+          "supports": "Checks exact signed fields and rejects foreign streams"
+        },
+        {
+          "path": "internal/audit/handover_test.go",
+          "line": 78,
+          "symbol": "TestARotatedCertificateContinuesItsStreams",
+          "supports": "Checks new access, retired identity refusal and persistence"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUDIT-005",
+      "capability": "runtime/audit-and-collector",
+      "title": "Production collector acceptance",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "internal/audit/conformance.go",
+          "line": 72,
+          "symbol": "CheckConformance",
+          "supports": "Provides a reference conformance probe"
+        }
+      ],
+      "tests": [],
+      "rationale": "The reference collector and probe are shipped. Production selection and availability are open, receipts carry no signed time, and scenario audit completeness is bounded.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.9"
+      ]
+    },
+    {
+      "id": "KMS-AUTH-001",
+      "capability": "runtime/authentication",
+      "title": "Verified client identity",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/auth/auth.go",
+          "line": 52,
+          "symbol": "Authenticate",
+          "supports": "Checks chain, serial, validity, key usage and URI"
+        },
+        {
+          "path": "internal/auth/auth.go",
+          "line": 89,
+          "symbol": "canonicalURISAN",
+          "supports": "Requires normalized namespace-bound URI"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/auth/auth_test.go",
+          "line": 69,
+          "symbol": "TestAuthenticateAcceptsOneVerifiedRegaliaURISAN",
+          "supports": "Asserts exact returned identity"
+        },
+        {
+          "path": "internal/auth/auth_test.go",
+          "line": 78,
+          "symbol": "TestAuthenticateRejectsUnverifiedMissingAmbiguousExpiredAndRevokedCertificates",
+          "supports": "Asserts safe denial"
+        },
+        {
+          "path": "internal/auth/auth_test.go",
+          "line": 102,
+          "symbol": "TestAuthenticateRejectsNonCanonicalSPIFFEIdentity",
+          "supports": "Asserts refusal"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTH-002",
+      "capability": "runtime/authentication",
+      "title": "Protected routes and TLS",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/auth/auth.go",
+          "line": 109,
+          "symbol": "Middleware",
+          "supports": "Only health routes bypass identity and failures get 401"
+        },
+        {
+          "path": "internal/auth/auth.go",
+          "line": 138,
+          "symbol": "ServerTLSConfig",
+          "supports": "Sets TLS 1.3 and verifies presented client certs"
+        },
+        {
+          "path": "internal/config/config.go",
+          "line": 399,
+          "symbol": "tlsFields != 3",
+          "supports": "For a non-loopback IP, requires the full certificate, private-key and client-CA set. Line 390 separately rejects partial settings on any bind."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/auth/auth_test.go",
+          "line": 119,
+          "symbol": "TestMiddlewareRequiresIdentityExceptHealthAndDoesNotLeakPeer",
+          "supports": "Asserts probe success and safe 401"
+        },
+        {
+          "path": "internal/auth/auth_test.go",
+          "line": 173,
+          "symbol": "TestServerTLSRequiresTLS13AndVerifiesPresentedClientCertificates",
+          "supports": "Checks transport settings"
+        },
+        {
+          "path": "internal/auth/guard_coverage_round2_test.go",
+          "line": 377,
+          "symbol": "TestMiddlewareExemptsBothHealthRoutesFromAuthentication",
+          "supports": "Tests both exemptions"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTH-003",
+      "capability": "runtime/authentication",
+      "title": "Live certificate revocation",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/auth/auth.go",
+          "line": 65,
+          "symbol": "revocation.Check",
+          "supports": "Looks up the verified leaf serial on each configured authentication and refuses both failed reads and a revoked leaf."
+        },
+        {
+          "path": "internal/auth/revocation.go",
+          "line": 94,
+          "symbol": "Check",
+          "supports": "Uses current parsed file rather than stale serials"
+        },
+        {
+          "path": "internal/auth/revocation.go",
+          "line": 126,
+          "symbol": "load",
+          "supports": "Validates the opened file and refuses symlinks and unsafe modes"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/auth/revocation_test.go",
+          "line": 44,
+          "symbol": "TestRevocationRejectsSerialAddedMidProcess",
+          "supports": "Refuses added serial without restart"
+        },
+        {
+          "path": "internal/auth/revocation_test.go",
+          "line": 80,
+          "symbol": "TestRevocationFileUnreadableFailsClosed",
+          "supports": "Refuses unreadable file"
+        },
+        {
+          "path": "internal/auth/revocation_test.go",
+          "line": 110,
+          "symbol": "TestRevocationFileUnparseableFailsClosed",
+          "supports": "Refuses malformed file"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTHZ-001",
+      "capability": "runtime/authorization-and-approvals",
+      "title": "Exact scoped grants",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/auth/rbac.go",
+          "line": 129,
+          "symbol": "LoadPolicy",
+          "supports": "Compiles and validates the closed grant document"
+        },
+        {
+          "path": "internal/auth/rbac.go",
+          "line": 225,
+          "symbol": "Allowed",
+          "supports": "Checks all dimensions in the same grant"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 176,
+          "symbol": "coordinator.authorizer.Allowed",
+          "supports": "Checks the exact principal, object, operation and environment before routing. A denial records rbac-denied and returns forbidden."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/auth/rbac_test.go",
+          "line": 21,
+          "symbol": "TestRBACAllowsOnlyExactGrant",
+          "supports": "Checks allowed triple and individual mismatch refusals"
+        },
+        {
+          "path": "internal/auth/rbac_test.go",
+          "line": 41,
+          "symbol": "TestRBACRejectsUnknownFieldsWildcardsAndDuplicatePrincipals",
+          "supports": "Refuses each unsafe grant document"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTHZ-002",
+      "capability": "runtime/authorization-and-approvals",
+      "title": "Contextual policy and freshness",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/policy.go",
+          "line": 275,
+          "symbol": "Evaluate",
+          "supports": "Applies policy, freshness and approval rules before reservation"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 242,
+          "symbol": "TestEvaluateAllowsExactPolicyAndReservesReplayAndQuota",
+          "supports": "Checks allow and reservation"
+        },
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 258,
+          "symbol": "TestEvaluateRejectsMismatchesBeforeState",
+          "supports": "Checks both denial and absence of reservations"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTHZ-003",
+      "capability": "runtime/authorization-and-approvals",
+      "title": "Bound distinct approvals",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/approval/approval.go",
+          "line": 250,
+          "symbol": "Verify",
+          "supports": "Bounds evidence and deduplicates approvers"
+        },
+        {
+          "path": "internal/approval/approval.go",
+          "line": 294,
+          "symbol": "counts",
+          "supports": "Checks configured key, claims and signature"
+        },
+        {
+          "path": "internal/policy/policy.go",
+          "line": 365,
+          "symbol": "approvalsSatisfied",
+          "supports": "Applies distinct policy threshold"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/approval/approval_test.go",
+          "line": 75,
+          "symbol": "TestAnApprovalDoesNotTransferToAnotherRequest",
+          "supports": "Mutates request dimensions under an original signature"
+        },
+        {
+          "path": "internal/approval/approval_test.go",
+          "line": 108,
+          "symbol": "TestASignatureFromAnUnconfiguredKeyCountsForNobody",
+          "supports": "Checks both unknown and configured keys"
+        },
+        {
+          "path": "internal/approval/approval_test.go",
+          "line": 127,
+          "symbol": "TestTheSameApproverTwiceCountsOnce",
+          "supports": "Asserts exact count"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-AUTHZ-004",
+      "capability": "runtime/authorization-and-approvals",
+      "title": "Agent secret-release exclusion",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/auth/rbac.go",
+          "line": 40,
+          "symbol": "AgentRefuses",
+          "supports": "Defines the unconditional operation exclusion"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 172,
+          "symbol": "auth.AgentRefuses",
+          "supports": "Applies the agent release refusal before normal RBAC, records its rule, and returns forbidden."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/auth/agent_principal_test.go",
+          "line": 15,
+          "symbol": "TestAPolicyGrantingAnAgentReleaseSecretIsRefusedNamingIt",
+          "supports": "Checks loader refusal"
+        },
+        {
+          "path": "internal/operations/agent_release_test.go",
+          "line": 17,
+          "symbol": "TestAnAgentPrincipalIsRefusedReleaseSecretWithItsOwnRule",
+          "supports": "Checks independent operation refusal"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TOKEN-001",
+      "capability": "runtime/backends-and-token-lifecycle",
+      "title": "Token identity and protected channel",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/backend/nitrokey/provider.go",
+          "line": 341,
+          "symbol": "Execute",
+          "supports": "Verifies identity, establishes the protected channel and checks the pinned key before login"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/backend/nitrokey/session_order_test.go",
+          "line": 24,
+          "symbol": "TestExecuteAttestsTheChannelAndPinsIdentityBeforePresentingThePIN",
+          "supports": "Asserts ordering of identity, channel, login and unwrap"
+        },
+        {
+          "path": "internal/backend/nitrokey/session_order_test.go",
+          "line": 56,
+          "symbol": "TestAFailedSecureChannelStopsBeforeTheLogin",
+          "supports": "Asserts refusal with no login"
+        },
+        {
+          "path": "internal/backend/nitrokey/identity_pin_test.go",
+          "line": 51,
+          "symbol": "TestAPublicKeyThatIsNotTheCommissionedOneIsQuarantinedBeforeLogin",
+          "supports": "Asserts quarantine and no login"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TOKEN-002",
+      "capability": "runtime/backends-and-token-lifecycle",
+      "title": "Credential access and retry budget",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/pin/source.go",
+          "line": 38,
+          "symbol": "PIN",
+          "supports": "Checks ownership, access, kind, format and memory lock"
+        },
+        {
+          "path": "internal/pin/source.go",
+          "line": 133,
+          "symbol": "Release",
+          "supports": "Erases the credential before unlock"
+        },
+        {
+          "path": "internal/backend/nitrokey/provider.go",
+          "line": 463,
+          "symbol": "retries <= 1",
+          "supports": "Refuses unreadable or near-exhausted retry budget before loading credentials. Lines 469–491 load the PIN only afterwards and latch a rejected presented PIN."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/pin/source_test.go",
+          "line": 10,
+          "symbol": "TestLockedFileSourceReadsStrictCredentialAndReleasesIt",
+          "supports": "Checks successful read and zeroed buffer"
+        },
+        {
+          "path": "internal/pin/source_test.go",
+          "line": 31,
+          "symbol": "TestLockedFileSourceRejectsUnknownLooseSymlinkedAndMalformedCredentials",
+          "supports": "Checks multiple unsafe paths are refused"
+        },
+        {
+          "path": "internal/backend/nitrokey/provider_test.go",
+          "line": 336,
+          "symbol": "TestFailedPINLatchesDeviceUntilExplicitReset",
+          "supports": "Checks exact number of logins across latch and explicit reset"
+        },
+        {
+          "path": "internal/backend/nitrokey/provider_test.go",
+          "line": 353,
+          "symbol": "TestLowRetryCountFailsBeforePINRetrievalOrLogin",
+          "supports": "Checks one retry remaining gives zero logins"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TOKEN-003",
+      "capability": "runtime/backends-and-token-lifecycle",
+      "title": "Token removal and lease reauthorization",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/backend/reauth/tracker.go",
+          "line": 90,
+          "symbol": "Serves",
+          "supports": "Checks admitted serial and the start or return time"
+        },
+        {
+          "path": "internal/backend/nitrokey/provider.go",
+          "line": 402,
+          "symbol": "provider.reauthorized",
+          "supports": "Requires token presence and fresh serial-specific authorization before using the returned token."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/backend/reauth/tracker_test.go",
+          "line": 61,
+          "symbol": "TestATokenServesOnlyUnderALeaseAskedForAfterTheProcessStarted",
+          "supports": "Checks start-time boundary"
+        },
+        {
+          "path": "internal/backend/reauth/tracker_test.go",
+          "line": 88,
+          "symbol": "TestATokenThatWasGoneWaitsForALeaseAskedForAfterItWasSeenBack",
+          "supports": "Checks stale, away, and fresh lease behavior"
+        },
+        {
+          "path": "internal/backend/reauth/tracker_test.go",
+          "line": 232,
+          "symbol": "TestATokenServesOnlyWhileTheManifestListsIt",
+          "supports": "Checks listed and delisted transitions"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TOKEN-004",
+      "capability": "runtime/backends-and-token-lifecycle",
+      "title": "Physical token lifecycle acceptance",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "Pinned software assertions and recorded staging results do not establish the physical pull/reinsert drill or operator-authorized production commissioning.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-TOKEN-005",
+      "capability": "runtime/backends-and-token-lifecycle",
+      "title": "Served OpenPGP applet profile",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/openpgp_applet.go",
+          "line": 35,
+          "symbol": "requireOpenPGPAppletBindingsAreServable",
+          "supports": "Restricts algorithm and operation and checks label, pin and serial-specific evidence"
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/openpgp_applet_test.go",
+          "line": 52,
+          "symbol": "TestAppletBindingsTheDaemonCannotServeAreRefusedAtStartup",
+          "supports": "Asserts valid control and exact messages for incompatible claims or absent evidence"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ADAPTER-001",
+      "capability": "runtime/client-adapters",
+      "title": "SOPS context-bound wrapping",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "adapters/sops/adapter.go",
+          "line": 52,
+          "symbol": "Encrypt",
+          "supports": "Validates the request before dispatch and refuses empty results"
+        },
+        {
+          "path": "adapters/sops/adapter.go",
+          "line": 66,
+          "symbol": "Decrypt",
+          "supports": "Discards plaintext on failure"
+        },
+        {
+          "path": "adapters/sops/adapter.go",
+          "line": 80,
+          "symbol": "translate",
+          "supports": "Restricts carrier and canonical context fields"
+        }
+      ],
+      "tests": [
+        {
+          "path": "adapters/sops/round_trip_test.go",
+          "line": 134,
+          "symbol": "TestRoundTripEncryptThenDecryptMatchesPlaintext",
+          "supports": "Compares round-trip plaintext bytes"
+        },
+        {
+          "path": "adapters/sops/round_trip_test.go",
+          "line": 180,
+          "symbol": "TestRoundTripFailsUnderDifferentContext",
+          "supports": "Checks error and no leaked data under a different context"
+        },
+        {
+          "path": "adapters/sops/guard_coverage_test.go",
+          "line": 151,
+          "symbol": "TestTranslateRefusesABindingContextThatIsNotExactlyTheFourBoundFields",
+          "supports": "Checks malformed field sets are refused"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ADAPTER-002",
+      "capability": "runtime/client-adapters",
+      "title": "Local SOPS trust domain",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "adapters/sops/server.go",
+          "line": 46,
+          "symbol": "ServeUnix",
+          "supports": "Refuses path collisions and unsafe mode bits before setting private socket mode"
+        },
+        {
+          "path": "adapters/sops/transport.go",
+          "line": 17,
+          "symbol": "ClientTLSConfig",
+          "supports": "Requires explicit TLS identity, roots and signer"
+        },
+        {
+          "path": "adapters/sops/transport.go",
+          "line": 38,
+          "symbol": "NewMTLSHTTPClient",
+          "supports": "Sets bounded timeouts and prevents proxy and redirects"
+        }
+      ],
+      "tests": [
+        {
+          "path": "adapters/sops/server_test.go",
+          "line": 16,
+          "symbol": "TestServeUnixUsesPrivateSocketAndPublishedRPCMethod",
+          "supports": "Checks socket mode and RPC dispatch"
+        },
+        {
+          "path": "adapters/sops/server_test.go",
+          "line": 66,
+          "symbol": "TestServeUnixRefusesExistingPath",
+          "supports": "Checks collision refusal"
+        },
+        {
+          "path": "adapters/sops/socket_directory_test.go",
+          "line": 36,
+          "symbol": "TestServeUnixRefusesAWritableSocketDirectory",
+          "supports": "Checks refusal before socket creation"
+        },
+        {
+          "path": "adapters/sops/transport_test.go",
+          "line": 47,
+          "symbol": "TestNewMTLSHTTPClientHasBoundedTransportAndNoProxyOrRedirect",
+          "supports": "Asserts transport restrictions"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ADAPTER-003",
+      "capability": "runtime/client-adapters",
+      "title": "GnuPG-compatible signing output",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "adapters/gpgsign/client.go",
+          "line": 118,
+          "symbol": "Sign",
+          "supports": "Checks the response to the exact request"
+        },
+        {
+          "path": "adapters/gpgsign/signer.go",
+          "line": 89,
+          "symbol": "SignDigest",
+          "supports": "Checks requested signing algorithm and verifies the signature"
+        },
+        {
+          "path": "adapters/gpgsign/openpgp.go",
+          "line": 221,
+          "symbol": "DetachSign",
+          "supports": "Emits verified detached packet"
+        },
+        {
+          "path": "adapters/gpgsign/openpgp.go",
+          "line": 263,
+          "symbol": "ClearSign",
+          "supports": "Builds and validates cleartext signed output"
+        }
+      ],
+      "tests": [
+        {
+          "path": "adapters/gpgsign/gpgsign_test.go",
+          "line": 225,
+          "symbol": "TestADetachedSignatureVerifiesWithGnuPGAndGoCrypto",
+          "supports": "Checks signature verification and different-content refusal"
+        },
+        {
+          "path": "adapters/gpgsign/gpgsign_test.go",
+          "line": 520,
+          "symbol": "TestAClearSignedDocumentVerifiesWithGnuPGAptsVerifiersAndGoCrypto",
+          "supports": "Checks verified cleartext and changed-content refusal"
+        },
+        {
+          "path": "adapters/gpgsign/gpgsign_test.go",
+          "line": 318,
+          "symbol": "TestASignatureThePinnedKeyDoesNotVerifyIsNeverEmitted",
+          "supports": "Checks invalid output is withheld"
+        },
+        {
+          "path": "adapters/gpgsign/gpgsign_test.go",
+          "line": 369,
+          "symbol": "TestAnAnswerThatIsNotToThisRequestIsRefused",
+          "supports": "Checks correlation failure and no repeated request"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ADAPTER-004",
+      "capability": "runtime/client-adapters",
+      "title": "OpenBao conformance boundary",
+      "status": "MISSING",
+      "sources": [],
+      "tests": [],
+      "rationale": "The pin contains a draft OpenBao contract and KMS primitives only. It contains no OpenBao plugin or real-server conformance suite.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ADAPTER-005",
+      "capability": "runtime/client-adapters",
+      "title": "Service identity and site commissioning evidence",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "adapters/sops/transport.go",
+          "line": 17,
+          "symbol": "ClientTLSConfig",
+          "supports": "Defines workload TLS trust and identity"
+        }
+      ],
+      "tests": [],
+      "rationale": "Local transport and interoperation assertions do not establish live site reachability, physical key custody or caller-level identity delegation.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-COSMOS-001",
+      "capability": "runtime/cosmos-policy",
+      "title": "Supported SignDoc and parser refusal",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/cosmos.go",
+          "line": 67,
+          "symbol": "parseSignDoc",
+          "supports": "Checks top-level wire and field rules, applies the account-zero default and parses messages"
+        },
+        {
+          "path": "internal/policy/cosmos.go",
+          "line": 307,
+          "symbol": "parseTxBodyMessages",
+          "supports": "Restricts the admitted message types"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 319,
+          "symbol": "policy.ParseCosmosSignDoc",
+          "supports": "Parses Cosmos protobuf and returns invalid-argument on failure before policy evaluation or a hardware call."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/cosmos_reference_test.go",
+          "line": 24,
+          "symbol": "TestParseSignDocAcceptsGeneratedCosmosSDKFixture",
+          "supports": "Checks independently generated MsgSend fields"
+        },
+        {
+          "path": "internal/policy/cosmos_reference_test.go",
+          "line": 44,
+          "symbol": "TestParseSignDocAcceptsGeneratedMsgDelegateFixture",
+          "supports": "Checks delegator, validator and amount"
+        },
+        {
+          "path": "internal/policy/cosmos_test.go",
+          "line": 188,
+          "symbol": "TestParseCosmosSignDocReadsAnAbsentAccountNumberAsZero",
+          "supports": "Asserts proto3 default behavior"
+        },
+        {
+          "path": "internal/policy/cosmos_test.go",
+          "line": 201,
+          "symbol": "TestParseCosmosSignDocRejectsUnknownMessageType",
+          "supports": "Refuses unsupported messages"
+        },
+        {
+          "path": "internal/operations/coordinator_bridging_test.go",
+          "line": 221,
+          "symbol": "TestCoordinatorMalformedCosmosSignDocDeniesBeforePolicyAndHardware",
+          "supports": "Checks HTTP 400 and zero policy and hardware calls"
+        },
+        {
+          "path": "internal/policy/cosmos_wire_refusals_test.go",
+          "line": 55,
+          "symbol": "TestASignDocFieldOnTheWrongWireTypeIsRefused",
+          "supports": "Asserts the reason identifies each top-level wrong wire type"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-COSMOS-002",
+      "capability": "runtime/cosmos-policy",
+      "title": "Transaction policy and signing input",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/policy.go",
+          "line": 403,
+          "symbol": "validateCosmos",
+          "supports": "Checks allowlists and coin, fee and gas limits"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 361,
+          "symbol": "sha256.Sum256(data)",
+          "supports": "Hashes original authorized SignDoc data and sends exactly the digest through hardware dispatch at line 364."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 294,
+          "symbol": "TestCosmosPolicyRejectsEveryControlledDimension",
+          "supports": "Checks each exact dimension and no reservation"
+        },
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 109,
+          "symbol": "TestEvaluateAcceptsInclusiveCosmosGasAndFeeCaps",
+          "supports": "Checks exact cap acceptance"
+        },
+        {
+          "path": "internal/operations/coordinator_bridging_test.go",
+          "line": 175,
+          "symbol": "TestCoordinatorHashesCanonicalCosmosSignDocBeforeHardware",
+          "supports": "Compares complete hardware input to the expected digest"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-COSMOS-003",
+      "capability": "runtime/cosmos-policy",
+      "title": "Sequence reservation and recovery",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/state.go",
+          "line": 331,
+          "symbol": "*reservation.Sequence != previous+1",
+          "supports": "Rejects a reservation whose sequence is not the successor of the one stored for the same sequence key."
+        },
+        {
+          "path": "internal/policy/policy.go",
+          "line": 275,
+          "symbol": "Evaluate",
+          "supports": "Builds a scoped sequence reservation"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 162,
+          "symbol": "Execute",
+          "supports": "Applies the admission check before routing"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 55,
+          "symbol": "TestEvaluateRejectsOutOfOrderCosmosSequenceBeforeHardwareReservation",
+          "supports": "Checks sequence denial after a valid reservation"
+        },
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 147,
+          "symbol": "TestFileStateSequencesAreScopedToChainAndAccount",
+          "supports": "Accepts identical sequences for separate accounts"
+        },
+        {
+          "path": "internal/operations/survivor_test.go",
+          "line": 35,
+          "symbol": "TestALoneSurvivorSignsNoSequenceBearingRequest",
+          "supports": "Checks lease positive control and recovery with zero side effects"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-COSMOS-004",
+      "capability": "runtime/cosmos-policy",
+      "title": "Physical and live-chain qualification",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "The available disposable PKCS#11 and optional simapp checks have distinct proof boundaries, and this baseline does not establish physical production-chain acceptance.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CRYPTO-001",
+      "capability": "runtime/cryptographic-operations",
+      "title": "Signature input and encoding",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/backend/yubikey/sign_contract.go",
+          "line": 40,
+          "symbol": "signingHash",
+          "supports": "Validates digest size or unprehashed Ed25519 message length"
+        },
+        {
+          "path": "internal/backend/nitrokey/pkcs11_driver.go",
+          "line": 417,
+          "symbol": "normalizeLowS",
+          "supports": "Normalizes admitted secp256k1 token output to the required signature form."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/backend/yubikey/matrix_conformance_test.go",
+          "line": 118,
+          "symbol": "TestSigningRefusesADigestOfTheWrongLength",
+          "supports": "Checks correct and neighboring invalid sizes"
+        },
+        {
+          "path": "internal/backend/yubikey/matrix_conformance_test.go",
+          "line": 140,
+          "symbol": "TestEd25519IsSignedAsAMessageOfBoundedLength",
+          "supports": "Checks zero hash and both length boundaries"
+        },
+        {
+          "path": "internal/backend/nitrokey/lows_test.go",
+          "line": 141,
+          "symbol": "TestSignReturnsLowSForSecp256k1",
+          "supports": "Checks actual output size and normalized s"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CRYPTO-002",
+      "capability": "runtime/cryptographic-operations",
+      "title": "Context-bound agreement",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/backend/nitrokey/provider.go",
+          "line": 531,
+          "symbol": "hkdf.Key(sha256.New",
+          "supports": "Derives the returned 32-byte key using HKDF-SHA256 with the agreement context."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/backend/nitrokey/agreement_test.go",
+          "line": 52,
+          "symbol": "TestKeyAgreementReturnsADerivedKeyNotTheRawSecret",
+          "supports": "Compares exact HKDF bytes, content type and absence of the raw secret"
+        },
+        {
+          "path": "internal/backend/nitrokey/agreement_test.go",
+          "line": 96,
+          "symbol": "TestKeyAgreementIsBoundToTheRequestContext",
+          "supports": "Compares derivations across contexts"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CRYPTO-003",
+      "capability": "runtime/cryptographic-operations",
+      "title": "Context-bound RSA wrapping",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/keywrap/rsa.go",
+          "line": 45,
+          "symbol": "RSAOAEP",
+          "supports": "Checks inputs and encrypts the context-bound frame"
+        },
+        {
+          "path": "internal/keywrap/rsa.go",
+          "line": 96,
+          "symbol": "OpenFrame",
+          "supports": "Checks context digest before returning key bytes"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/keywrap/rsa_test.go",
+          "line": 14,
+          "symbol": "TestRSAOAEPBindsContext",
+          "supports": "Decrypts, compares recovered bytes and rejects a changed context"
+        },
+        {
+          "path": "internal/keywrap/rsa_test.go",
+          "line": 37,
+          "symbol": "TestRSAOAEPRejectsAlgorithmAndKeyMismatch",
+          "supports": "Refuses mismatched key length and empty context"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-CRYPTO-004",
+      "capability": "runtime/cryptographic-operations",
+      "title": "Bounded operation execution",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/executor/executor.go",
+          "line": 49,
+          "symbol": "Run",
+          "supports": "Applies capacity, deadline, cancellation and panic containment"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/executor/executor_test.go",
+          "line": 18,
+          "symbol": "TestRunRejectsWhenAtCapacity",
+          "supports": "Asserts retryable busy while first call is held"
+        },
+        {
+          "path": "internal/executor/executor_test.go",
+          "line": 43,
+          "symbol": "TestRunTimesOutAndSignalsOperation",
+          "supports": "Asserts timeout and observes cancellation"
+        },
+        {
+          "path": "internal/executor/executor_test.go",
+          "line": 77,
+          "symbol": "TestRunContainsPanicAndRestoresCapacity",
+          "supports": "Asserts sanitized failure and succeeding next operation"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENV-001",
+      "capability": "runtime/envelopes-and-secret-release",
+      "title": "Authenticated envelope creation",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/envelope/envelope.go",
+          "line": 139,
+          "symbol": "SealAssembled",
+          "supports": "Validates size and authenticates the content before hardware wrap"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 547,
+          "symbol": "seal",
+          "supports": "Builds a wrapper using the authorized route"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/coordinator_seal_test.go",
+          "line": 85,
+          "symbol": "TestSealEnvelopeProducesAnOpenableEnvelope",
+          "supports": "Opens returned envelope and compares plaintext"
+        },
+        {
+          "path": "internal/operations/coordinator_seal_test.go",
+          "line": 172,
+          "symbol": "TestSealEnvelopeRejectsTamperedCiphertextAsIntegrityFailure",
+          "supports": "Asserts HTTP 400 and zero hardware calls"
+        },
+        {
+          "path": "internal/envelope/seal_assembled_test.go",
+          "line": 132,
+          "symbol": "TestSealAssembledRefusesOversizedCiphertextAndSoftwareBackendBeforeAnyHardwareCall",
+          "supports": "Asserts refusals before the wrapper is used"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENV-002",
+      "capability": "runtime/envelopes-and-secret-release",
+      "title": "Authenticated secret release",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/secrets/releaser.go",
+          "line": 41,
+          "symbol": "Execute",
+          "supports": "Checks object and route context before hardware unwrap"
+        },
+        {
+          "path": "internal/envelope/envelope.go",
+          "line": 218,
+          "symbol": "Open",
+          "supports": "Authenticates plaintext before invoking its consumer"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/secrets/releaser_test.go",
+          "line": 90,
+          "symbol": "TestReleaseSecretReturnsThePlaintextAfterAHardwareUnwrap",
+          "supports": "Checks bytes and exactly one unwrap"
+        },
+        {
+          "path": "internal/secrets/releaser_test.go",
+          "line": 119,
+          "symbol": "TestEnvelopeForAnotherObjectIsRefused",
+          "supports": "Checks refusal with zero bytes for a different object"
+        },
+        {
+          "path": "internal/secrets/releaser_test.go",
+          "line": 160,
+          "symbol": "TestTamperedEnvelopeReleasesNothing",
+          "supports": "Checks parsed tampering cannot release data"
+        },
+        {
+          "path": "internal/secrets/binding_context_test.go",
+          "line": 237,
+          "symbol": "TestReleaseRefusesACallerSuppliedContext",
+          "supports": "Asserts refusal when client supplies context"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENV-003",
+      "capability": "runtime/envelopes-and-secret-release",
+      "title": "Envelope age and rotation",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 246,
+          "symbol": "route.EnvelopeMaxAge",
+          "supports": "Compares age to the configured bound, records envelope-expired and returns nonretryable forbidden before unwrap."
+        },
+        {
+          "path": "internal/envelope/envelope.go",
+          "line": 269,
+          "symbol": "Rewrap",
+          "supports": "Rewraps the data key and switches generation without resealing content"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/envelope_age_test.go",
+          "line": 64,
+          "symbol": "TestAnEnvelopePastItsObjectsBoundIsRefused",
+          "supports": "Checks nonretryable refusal and audit outcome"
+        },
+        {
+          "path": "internal/operations/envelope_age_test.go",
+          "line": 106,
+          "symbol": "TestTheBoundIsInclusiveAtItsEdge",
+          "supports": "Checks the configured edge succeeds"
+        },
+        {
+          "path": "internal/envelope/rewrap_test.go",
+          "line": 47,
+          "symbol": "TestARewrappedEnvelopeOpensUnderTheNewKeyAndNotTheOld",
+          "supports": "Checks changed wrapped key and stable content, exact plaintext and old generation refusal"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENV-004",
+      "capability": "runtime/envelopes-and-secret-release",
+      "title": "Hardware provenance refusal",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/backend/nitrokey/pkcs11_driver.go",
+          "line": 804,
+          "symbol": "AssertKEKGeneratedOnToken",
+          "supports": "Rejects absent and misleading provenance"
+        },
+        {
+          "path": "internal/backend/nitrokey/pkcs11_driver.go",
+          "line": 931,
+          "symbol": "!sensitive || extractable",
+          "supports": "Rejects a private key reported nonsensitive or extractable. The prior branch rejects either missing attribute instead of treating it as secure."
+        },
+        {
+          "path": "internal/backend/nitrokey/provider.go",
+          "line": 431,
+          "symbol": "pinnedPublicKey",
+          "supports": "After identity and key-pin verification, the provider uses the commissioned pin as its provenance route. Without a pin it requires the runtime check."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/backend/nitrokey/kek_attributes_test.go",
+          "line": 169,
+          "symbol": "TestSCHSMProvenanceIsReportedAsUndeterminable",
+          "supports": "Checks SC-HSM class does not promote local to provenance"
+        },
+        {
+          "path": "internal/backend/nitrokey/kek_provenance_test.go",
+          "line": 86,
+          "symbol": "TestReleasingUnderAnExportableKEKIsRefusedAndLatched",
+          "supports": "Asserts refusal and exact quarantine reason"
+        },
+        {
+          "path": "internal/backend/nitrokey/identity_pin_test.go",
+          "line": 128,
+          "symbol": "TestWrapTrustsCommissioningProvenanceOnlyWhenThePublicKeyIsPinned",
+          "supports": "Asserts a matching pin admits wrap while same unreadable provenance without a pin refuses"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-ENV-005",
+      "capability": "runtime/envelopes-and-secret-release",
+      "title": "Commissioned KEK continuity",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "The pinned implementation refuses unknown seal provenance and a restored key may have no supported seal proof. Portable production custody and physical restore acceptance remain open.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REG-001",
+      "capability": "runtime/key-registry-and-custody",
+      "title": "Unambiguous manifest and custody",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/registry/registry.go",
+          "line": 389,
+          "symbol": "Load",
+          "supports": "Validates and indexes the manifest before exposing routes"
+        },
+        {
+          "path": "internal/registry/registry.go",
+          "line": 578,
+          "symbol": "validateCustody",
+          "supports": "Enforces production binding count and distinct devices"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/registry/registry_test.go",
+          "line": 127,
+          "symbol": "TestLoadRejectsAmbiguousDuplicateUnsupportedAndIncompatibleEntries",
+          "supports": "Checks that each invalid manifest fails to load"
+        },
+        {
+          "path": "internal/registry/custody_test.go",
+          "line": 77,
+          "symbol": "TestProductionObjectsRequireTwoBindings",
+          "supports": "Requires an explicit exception for the same single-binding shape"
+        },
+        {
+          "path": "internal/registry/custody_test.go",
+          "line": 99,
+          "symbol": "TestBindingsMustUseDistinctDevices",
+          "supports": "Rejects duplicate device identifiers"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REG-002",
+      "capability": "runtime/key-registry-and-custody",
+      "title": "Local assignment and readiness",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/registry/registry.go",
+          "line": 1029,
+          "symbol": "Route",
+          "supports": "Checks local assignment, health and matching purpose and operation"
+        },
+        {
+          "path": "internal/registry/registry.go",
+          "line": 981,
+          "symbol": "selectBinding",
+          "supports": "Selects site-local binding"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/registry/registry_test.go",
+          "line": 79,
+          "symbol": "TestRouteSelectsOnlyActiveBindingAtConfiguredSite",
+          "supports": "Compares the returned slot and device to the local binding"
+        },
+        {
+          "path": "internal/registry/registry_test.go",
+          "line": 96,
+          "symbol": "TestRouteNeverFallsBackFromUnhealthyAssignedDevice",
+          "supports": "Checks dependency failure and exactly one local probe"
+        },
+        {
+          "path": "internal/registry/registry_test.go",
+          "line": 13,
+          "symbol": "TestRepositoryManifestLoadsAsUncommissionedRegistry",
+          "supports": "Asserts the illustrative manifest remains unready"
+        },
+        {
+          "path": "internal/registry/registry_test.go",
+          "line": 144,
+          "symbol": "TestReadinessTracksAssignedDeviceHealth",
+          "supports": "Asserts both failure and recovery readiness states"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REG-003",
+      "capability": "runtime/key-registry-and-custody",
+      "title": "FIDO continuity records",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/registry/registry.go",
+          "line": 623,
+          "symbol": "validateFIDOContinuity",
+          "supports": "Checks backend, kind, sites and recovery mode"
+        },
+        {
+          "path": "internal/registry/registry.go",
+          "line": 1029,
+          "symbol": "Route",
+          "supports": "Denies record-only objects before health checks"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/registry/fido_continuity_test.go",
+          "line": 49,
+          "symbol": "TestRouteDeniesAFIDOCustodyRecordRatherThanReportingHardwareTrouble",
+          "supports": "Checks denial and no health calls"
+        },
+        {
+          "path": "internal/registry/fido_continuity_test.go",
+          "line": 82,
+          "symbol": "TestRequiredBackendsExcludesFIDOEnrollmentsAtTheDaemonSite",
+          "supports": "Checks that the recorded backend is absent and the real routed backend remains required"
+        },
+        {
+          "path": "internal/registry/fido_continuity_test.go",
+          "line": 117,
+          "symbol": "TestLoadEnforcesFIDOContinuityRules",
+          "supports": "Loads valid control and rejects malformed continuity records"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REG-004",
+      "capability": "runtime/key-registry-and-custody",
+      "title": "Envelope key generations",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/registry/registry.go",
+          "line": 1074,
+          "symbol": "RouteForUnwrap",
+          "supports": "Resolves the requested version and distinguishes revoked candidates"
+        },
+        {
+          "path": "internal/registry/registry.go",
+          "line": 1165,
+          "symbol": "RouteForSeal",
+          "supports": "Selects the active eligible generation"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/registry/unwrap_route_test.go",
+          "line": 45,
+          "symbol": "TestUnwrapResolvesTheRetiredKEKTheEnvelopeNames",
+          "supports": "Checks the retired slot, version and binding state"
+        },
+        {
+          "path": "internal/registry/unwrap_route_test.go",
+          "line": 66,
+          "symbol": "TestSealNeverPicksTheRetiredKEK",
+          "supports": "Checks active generation and distinct sets"
+        },
+        {
+          "path": "internal/registry/unwrap_route_test.go",
+          "line": 93,
+          "symbol": "TestUnwrapRefusesAVersionNoBindingHolds",
+          "supports": "Checks refusal without revoked classification"
+        },
+        {
+          "path": "internal/registry/revoked_state_test.go",
+          "line": 111,
+          "symbol": "TestAnEnvelopeUnderARevokedKEKIsRefusedWithTheDistinctReason",
+          "supports": "Requires denial with the dedicated reason"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-REG-005",
+      "capability": "runtime/key-registry-and-custody",
+      "title": "FIDO retirement planning",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "tools/fido_continuity.py",
+          "line": 124,
+          "symbol": "plan_retirement",
+          "supports": "Validates the source and projected manifest and requires commissioned distinct-site survivors"
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_fido_continuity.py",
+          "line": 82,
+          "symbol": "test_retiring_one_of_two_enrollments_is_always_refused",
+          "supports": "Checks actionable refusal and surviving device set for the valid control"
+        },
+        {
+          "path": "tests/test_fido_continuity.py",
+          "line": 113,
+          "symbol": "test_a_surviving_planned_enrollment_does_not_count_as_continuity",
+          "supports": "Refuses a planned enrollment as a live alternative"
+        },
+        {
+          "path": "tests/test_fido_continuity.py",
+          "line": 252,
+          "symbol": "test_the_pass_and_the_refusal_differ_in_exit_code_and_in_reason",
+          "supports": "Checks the CLI verdicts and that a pass gives no authorization"
+        },
+        {
+          "path": "tests/test_fido_continuity.py",
+          "line": 97,
+          "symbol": "test_retiring_one_of_three_commissioned_enrollments_is_allowed",
+          "supports": "Compares the surviving device set in the valid case"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-001",
+      "capability": "runtime/observability",
+      "title": "Authorized metrics access",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/telemetry/telemetry.go",
+          "line": 175,
+          "symbol": "ServeHTTP",
+          "supports": "Checks the handler path, method and authorized principal"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 75,
+          "symbol": "TestMetricsEndpointRequiresAConfiguredReader",
+          "supports": "Checks 401, 403, empty-reader refusal, method refusal and successful scrape"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-002",
+      "capability": "runtime/observability",
+      "title": "Bounded metric dimensions",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/telemetry/telemetry.go",
+          "line": 122,
+          "symbol": "InstrumentOperations",
+          "supports": "Maps paths to a fixed enumeration and counts response classes"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 175,
+          "symbol": "TestRouteLabelsNeverComeFromRequestData",
+          "supports": "Checks exact series and absence of arbitrary request text"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-003",
+      "capability": "runtime/observability",
+      "title": "Freshness and missing state",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/telemetry/telemetry.go",
+          "line": 195,
+          "symbol": "render",
+          "supports": "Controls series presence and exports timestamped observations"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 112,
+          "symbol": "TestRenderedSeriesCarryTheirValueAndFreshness",
+          "supports": "Checks exact series and timestamps"
+        },
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 147,
+          "symbol": "TestAbsentSourcesOmitTheirSeries",
+          "supports": "Checks omission and startup zero counter"
+        },
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 262,
+          "symbol": "TestUnevaluatedLeaseIsNotReportedAsLeaseLost",
+          "supports": "Checks explicit unevaluated state and absent held gauge"
+        },
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 286,
+          "symbol": "TestEvaluatedButUnheldLeaseIsStillReported",
+          "supports": "Checks actual lease-loss series"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-004",
+      "capability": "runtime/observability",
+      "title": "Dropped audit visibility",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 435,
+          "symbol": "recordOrCount",
+          "supports": "Counts failed durable recording on refusal paths"
+        },
+        {
+          "path": "internal/telemetry/telemetry.go",
+          "line": 195,
+          "symbol": "render",
+          "supports": "Exports per-outcome drop counts"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/dropped_audit_test.go",
+          "line": 48,
+          "symbol": "TestADeniedRecordThatFailsToWriteIsCounted",
+          "supports": "Checks denial and exact increment"
+        },
+        {
+          "path": "internal/operations/dropped_audit_test.go",
+          "line": 66,
+          "symbol": "TestADeniedRecordThatWritesIsNotCounted",
+          "supports": "Checks same refusal without increment"
+        },
+        {
+          "path": "internal/telemetry/telemetry_test.go",
+          "line": 351,
+          "symbol": "TestDroppedAuditRecordsRenderPerOutcome",
+          "supports": "Asserts the series type and outcome counts"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-005",
+      "capability": "runtime/observability",
+      "title": "Production monitoring acceptance",
+      "status": "UNVERIFIED",
+      "sources": [],
+      "tests": [],
+      "rationale": "Repository metrics and rule assertions are available. The external monitoring deployment and its conformance procedure are not established at this pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-006",
+      "capability": "runtime/observability",
+      "title": "Alert rule behavior",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "deploy/monitoring/regalia-kms.rules.yml",
+          "line": 9,
+          "symbol": "groups:",
+          "supports": "Defines the Prometheus groups and their KMS alert expressions. The tests feed each expression both fault and healthy histories."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 113,
+          "symbol": "ALERT_RULES_JOB",
+          "supports": "Sets the job's required-rule-engine mode so a missing promtool is an assertion failure instead of a skip."
+        }
+      ],
+      "tests": [
+        {
+          "path": "tests/test_alert_firing.py",
+          "line": 256,
+          "symbol": "test_every_alert_has_a_fault_scenario",
+          "supports": "Checks complete correspondence between rules and scenarios"
+        },
+        {
+          "path": "tests/test_alert_firing.py",
+          "line": 265,
+          "symbol": "test_every_alert_fires_on_its_fault_and_stays_silent_when_healthy",
+          "supports": "Runs the rule engine and refuses vacuous no-file output"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-OBS-007",
+      "capability": "runtime/observability",
+      "title": "Liveness and readiness responses",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/server/health.go",
+          "line": 236,
+          "symbol": "ServeHTTP",
+          "supports": "Serves no-store liveness and readiness with status only"
+        },
+        {
+          "path": "internal/server/health.go",
+          "line": 262,
+          "symbol": "ready",
+          "supports": "Requires available probes and treats panic as unready"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/server/health_test.go",
+          "line": 31,
+          "symbol": "TestLivenessReturnsOnlyOKStatus",
+          "supports": "Checks exact minimal body and no-store"
+        },
+        {
+          "path": "internal/server/health_test.go",
+          "line": 47,
+          "symbol": "TestReadinessFailsClosedWhenNoProbesExist",
+          "supports": "Checks absent probes return only unavailable"
+        },
+        {
+          "path": "internal/server/health_test.go",
+          "line": 60,
+          "symbol": "TestReadinessRequiresEveryProbe",
+          "supports": "Checks all-ready and one-unready outcomes"
+        },
+        {
+          "path": "internal/server/health_test.go",
+          "line": 79,
+          "symbol": "TestReadinessProbePanicFailsClosedWithoutDetail",
+          "supports": "Checks status and sanitized response"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-STATE-001",
+      "capability": "runtime/policy-state-journal",
+      "title": "Durable policy reservations",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/state.go",
+          "line": 299,
+          "symbol": "Reserve",
+          "supports": "Enforces spend constraints and persists each reservation before return"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/durability_test.go",
+          "line": 132,
+          "symbol": "TestIntactJournalReopensAndKeepsItsHistory",
+          "supports": "Asserts replay and quota still deny after reopen"
+        },
+        {
+          "path": "internal/policy/reservation_test.go",
+          "line": 200,
+          "symbol": "TestAJournalWriteFailureLatchesTheStateClosed",
+          "supports": "Asserts both subsequent refusal and failed readiness"
+        },
+        {
+          "path": "internal/policy/policy_test.go",
+          "line": 168,
+          "symbol": "TestCosmosSequenceReservationsFollowActivePassiveEpochs",
+          "supports": "Exercises old and new epochs"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-STATE-002",
+      "capability": "runtime/policy-state-journal",
+      "title": "Local history integrity",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/policy/state.go",
+          "line": 216,
+          "symbol": "OpenFileState",
+          "supports": "Verifies the journal against the mark and acquires the exclusive writer lock"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/policy/durability_test.go",
+          "line": 17,
+          "symbol": "TestTruncatedJournalIsDetectedRatherThanResettingQuota",
+          "supports": "Asserts reopen refusal and cause after truncation"
+        },
+        {
+          "path": "internal/policy/durability_test.go",
+          "line": 58,
+          "symbol": "TestRewrittenJournalOfEqualLengthIsDetected",
+          "supports": "Rejects replacement by a different chain"
+        },
+        {
+          "path": "internal/policy/durability_test.go",
+          "line": 103,
+          "symbol": "TestASecondProcessCannotOpenTheSameJournal",
+          "supports": "Rejects second open while held and accepts after close"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-STATE-003",
+      "capability": "runtime/policy-state-journal",
+      "title": "External policy checkpoint",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 422,
+          "symbol": "operations.ReconcilePolicyState",
+          "supports": "Reconciles the configured policy journal with the collector before opening the recorder and constructing the coordinator."
+        },
+        {
+          "path": "internal/operations/policy_reconcile.go",
+          "line": 19,
+          "symbol": "ReconcilePolicyState",
+          "supports": "Loads the external acknowledged position"
+        },
+        {
+          "path": "internal/policy/state.go",
+          "line": 544,
+          "symbol": "RequireAcknowledged",
+          "supports": "Compares the exact sequence and hash against journal contents"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/policy_anchor_test.go",
+          "line": 172,
+          "symbol": "TestAPolicyJournalIsCheckedAgainstTheAuditCollectorAtStartup",
+          "supports": "Tests matching head, rolled-back pair, empty state, equal-length divergence and unreachable collector"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-STATE-004",
+      "capability": "runtime/policy-state-journal",
+      "title": "Offline journal restore",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/controlplane/restore.go",
+          "line": 42,
+          "symbol": "Restore",
+          "supports": "Checks paired state and absent destinations before exclusive writes and digest readback"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/controlplane/restore_test.go",
+          "line": 28,
+          "symbol": "TestRestorePlacesEveryJournalByteIdenticalAndTheyVerify",
+          "supports": "Checks bytes, modes and verification"
+        },
+        {
+          "path": "internal/controlplane/restore_test.go",
+          "line": 76,
+          "symbol": "TestRestoreNeverWritesOverExistingStateAndWritesNothingWhenItRefuses",
+          "supports": "Checks existing state survives and no other target was created"
+        },
+        {
+          "path": "internal/controlplane/restore_test.go",
+          "line": 99,
+          "symbol": "TestRestoreRefusesAJournalWithoutItsMark",
+          "supports": "Checks missing mark refusal"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-STATE-005",
+      "capability": "runtime/policy-state-journal",
+      "title": "Single-node replay and rollback boundary",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "internal/policy/state.go",
+          "line": 216,
+          "symbol": "OpenFileState",
+          "supports": "Local journal may create on absence and does not carry an independent floor"
+        },
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 422,
+          "symbol": "operations.ReconcilePolicyState",
+          "supports": "Only a configured collector gives this call an independent checkpoint. The audit helper treats a nil sink as an absent external position."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/operations/policy_anchor_test.go",
+          "line": 172,
+          "symbol": "TestAPolicyJournalIsCheckedAgainstTheAuditCollectorAtStartup",
+          "supports": "Checks a configured collector, not a mandatory collector or history floor"
+        }
+      ],
+      "rationale": "The optional remote anchor protects acknowledged reservations when configured. The ordinary single-node store startup and mandatory collector gaps are tracked separately.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.9",
+        "regalia-kms-dx7.26"
+      ]
+    },
+    {
+      "id": "KMS-STATE-006",
+      "capability": "runtime/policy-state-journal",
+      "title": "Control-plane export confidentiality and inspection",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "internal/controlplane/envelope.go",
+          "line": 66,
+          "symbol": "Seal",
+          "supports": "Encrypts the payload to the designated P-256 recipient"
+        },
+        {
+          "path": "internal/controlplane/export.go",
+          "line": 564,
+          "symbol": "InspectForSite",
+          "supports": "Checks the expected site, validates data and refuses secret-shaped material"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/controlplane/controlplane_test.go",
+          "line": 231,
+          "symbol": "TestSealOpenRoundTrip",
+          "supports": "Checks exact decrypted payload"
+        },
+        {
+          "path": "internal/controlplane/controlplane_test.go",
+          "line": 258,
+          "symbol": "TestOpenRefusesEverythingExceptTheRightKeyAndBytes",
+          "supports": "Refuses wrong keys and tampered fields"
+        },
+        {
+          "path": "internal/controlplane/controlplane_test.go",
+          "line": 544,
+          "symbol": "TestInspectRefusesTamperedAndForgedPayloads",
+          "supports": "Rejects tampered contents, incomplete history and planted credential-shaped data"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-001",
+      "capability": "runtime/service-integration",
+      "title": "Coherent preflight and startup configuration",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/preflight.go",
+          "line": 130,
+          "symbol": "requireDeclaredPoliciesAreEnforced",
+          "supports": "Refuses mismatch between the loaded policy and the manifest declaration. The following conditional calls requireGrantsReferenceRealObjects for RBAC consistency."
+        },
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 1148,
+          "symbol": "requireDeclaredPoliciesAreEnforced",
+          "supports": "Refuses missing and mismatched policy"
+        },
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 1183,
+          "symbol": "requireGrantsReferenceRealObjects",
+          "supports": "Refuses dangling or undeclared grants"
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/preflight_test.go",
+          "line": 86,
+          "symbol": "TestPreflightCatchesACrossDocumentDisagreement",
+          "supports": "Checks preflight refusal and the explanation identifies the policy disagreement"
+        },
+        {
+          "path": "cmd/regalia-kms/declared_policy_test.go",
+          "line": 108,
+          "symbol": "TestRBACGrantsOutsideTheRegistryAreRefused",
+          "supports": "Asserts refusal for unknown object and wrong operation"
+        },
+        {
+          "path": "cmd/regalia-kms/declared_policy_test.go",
+          "line": 137,
+          "symbol": "TestObjectsWithNoGrantAreAccepted",
+          "supports": "Checks positive control for configured keys without access grants"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-002",
+      "capability": "runtime/service-integration",
+      "title": "Runtime admission gates",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 926,
+          "symbol": "admitRunner",
+          "supports": "Constructs required admission or refuses unsafe startup settings"
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "line": 162,
+          "symbol": "Execute",
+          "supports": "Checks admission early and records enforcement outcomes"
+        },
+        {
+          "path": "internal/admission/admission.go",
+          "line": 838,
+          "symbol": "Run",
+          "supports": "Checks the gate before, at start and after execution"
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/admission_wiring_test.go",
+          "line": 180,
+          "symbol": "TestReadinessIsFalseWhileTheNodeIsNotAdmitted",
+          "supports": "Checks ready and unready controls"
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 61,
+          "symbol": "TestANodeThatIsNotAdmittedRefusesBeforePolicyIsEvaluated",
+          "supports": "Checks refusal and zero route, policy or token calls"
+        },
+        {
+          "path": "internal/operations/admission_test.go",
+          "line": 94,
+          "symbol": "TestALeaseThatLapsesMidOperationYieldsNoOutputAndIsAuditedAsSuch",
+          "supports": "Checks no output, phase-specific hardware invocation and exact audit outcome"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-003",
+      "capability": "runtime/service-integration",
+      "title": "Optional active-passive fencing",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 821,
+          "symbol": "fenceRunner",
+          "supports": "Wires active-passive fencing and its registry binding"
+        },
+        {
+          "path": "internal/fencing/gate.go",
+          "line": 110,
+          "symbol": "evaluateLocked",
+          "supports": "Checks signature, site, digest, validity and rollback"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/fencing/gate_test.go",
+          "line": 27,
+          "symbol": "TestGateRejectsExpirySubstitutionAndEpochRollback",
+          "supports": "Checks valid, wrong-site, expired and rolled-back leases"
+        },
+        {
+          "path": "internal/fencing/gate_test.go",
+          "line": 58,
+          "symbol": "TestGateRejectsInvalidSignatureRegistryAndJournalTamper",
+          "supports": "Checks signature, registry and durable history refusals"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-004",
+      "capability": "runtime/service-integration",
+      "title": "Constrained certificate issuance",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 668,
+          "symbol": "settings.IssuerCertificatePath",
+          "supports": "Uses the refusing certificate-sign passthrough when no issuer is configured. The configured branch constructs the issuer with the selected CA and profile."
+        },
+        {
+          "path": "internal/certs/issuer.go",
+          "line": 44,
+          "symbol": "Execute",
+          "supports": "Checks routed public key before invoking issuer"
+        },
+        {
+          "path": "internal/certs/issue.go",
+          "line": 44,
+          "symbol": "Issue",
+          "supports": "Checks CSR signature, profile and lifetime and issues a leaf"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/certs/issuer_test.go",
+          "line": 72,
+          "symbol": "TestIssuerSignsThroughTheCardAndTheResultVerifies",
+          "supports": "Asserts one token sign and issuer verification"
+        },
+        {
+          "path": "internal/certs/issuer_test.go",
+          "line": 116,
+          "symbol": "TestRoutedKeyMustMatchTheIssuerCertificate",
+          "supports": "Asserts wrong-key no-output and zero sign calls"
+        },
+        {
+          "path": "internal/certs/certs_test.go",
+          "line": 168,
+          "symbol": "TestNamesOutsideTheNamespaceAreRefused",
+          "supports": "Checks multiple namespace violations"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-005",
+      "capability": "runtime/service-integration",
+      "title": "Operational state publication",
+      "status": "IMPLEMENTED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 851,
+          "symbol": "watchOperationalState",
+          "supports": "Conditionally builds watcher and publishes session key and confirmed revision"
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/opstate_wiring_test.go",
+          "line": 19,
+          "symbol": "TestNoOperationalStateIsWatchedUnlessConfigured",
+          "supports": "Checks absent watcher result"
+        },
+        {
+          "path": "cmd/regalia-kms/opstate_wiring_test.go",
+          "line": 29,
+          "symbol": "TestTheDaemonWatchesTheOperationalStateAndPublishesWhatItApplied",
+          "supports": "With the configured etcd binary, checks session key and applied revision after a real put"
+        }
+      ],
+      "rationale": "Enforcing source and a directly relevant assertion were inspected at the source pin.",
+      "executionEvidence": [],
+      "beads": []
+    },
+    {
+      "id": "KMS-RUNTIME-006",
+      "capability": "runtime/service-integration",
+      "title": "Operational state makes serving contingent",
+      "status": "PARTIAL",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 360,
+          "symbol": "watchOperationalState",
+          "supports": "Starts the optional watcher and discards its cache and session key return values. The watcher does not select the operation policy's state backend."
+        },
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 274,
+          "symbol": "policy.OpenFileState",
+          "supports": "Opens local file-backed state. This is the state passed to policy construction, independently of the optional watcher."
+        },
+        {
+          "path": "internal/opstate/reserve.go",
+          "line": 53,
+          "symbol": "NewEtcdState",
+          "supports": "Defines a shared reservation implementation without a daemon caller"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/opstate/reserve_test.go",
+          "line": 63,
+          "symbol": "TestOneNonceIsSpentOnceAcrossTwoServers",
+          "supports": "Tests shared reservation implementation directly, without establishing daemon wiring"
+        }
+      ],
+      "rationale": "Watching and shared reservations have component tests. The operation runtime still uses file policy state and does not wire the cache or shared reservation engine into admission of stateful operations.",
+      "executionEvidence": [],
+      "beads": [
+        "regalia-kms-dx7.26"
+      ]
+    }
+  ],
+  "sourceAreas": [
+    {
+      "paths": [
+        "API.md",
+        "CONFIGURATIONS.md",
+        "api/README.md",
+        "api/openapi.json",
+        "config/daemon.example.json",
+        "internal/api/handler.go",
+        "internal/config/config.go",
+        "internal/server/health.go",
+        "internal/server/service.go"
+      ],
+      "capabilities": [
+        "runtime/api-and-configuration",
+        "runtime/service-integration",
+        "runtime/observability"
+      ],
+      "rationale": "API, configuration and HTTP lifecycle. Includes request and error handling, readiness probes, configuration loading, example inputs and the published API."
+    },
+    {
+      "paths": [
+        "IDENTITY.md",
+        "internal/auth/auth.go",
+        "internal/auth/revocation.go"
+      ],
+      "capabilities": [
+        "runtime/authentication"
+      ],
+      "rationale": "Authentication. Covers principal mapping, TLS checks, explicit revocation and the documented identity contract."
+    },
+    {
+      "paths": [
+        "POLICY.md",
+        "config/approver-keys.example.json",
+        "config/policy.example.json",
+        "config/rbac.example.json",
+        "internal/approval/approval.go",
+        "internal/auth/rbac.go",
+        "internal/operations/content_type.go",
+        "internal/operations/coordinator.go",
+        "internal/operations/policy_reconcile.go",
+        "internal/policy/load.go",
+        "internal/policy/policy.go"
+      ],
+      "capabilities": [
+        "runtime/authorization-and-approvals",
+        "runtime/policy-state-journal",
+        "runtime/cryptographic-operations",
+        "runtime/audit-and-collector"
+      ],
+      "rationale": "Operation policy and approvals. Covers object and request grants, approval evidence, semantic policy, dispatch and audit coordination."
+    },
+    {
+      "paths": [
+        "config/REGISTRY.md",
+        "config/backend-capabilities.json",
+        "config/custody-manifest.example.json",
+        "config/custody-manifest.schema.json",
+        "internal/registry/binding_coordinates.go",
+        "internal/registry/registry.go",
+        "internal/registry/secret_kek_unwrap.go",
+        "tools/custody_manifest.py",
+        "tools/fido_continuity.py"
+      ],
+      "capabilities": [
+        "runtime/key-registry-and-custody",
+        "runtime/backends-and-token-lifecycle"
+      ],
+      "rationale": "Custody registry, schema, and operator validation. Schema and example custody data express admissible claims. The capability projection is generated validation input, never independent hardware evidence."
+    },
+    {
+      "paths": [
+        "CERTIFICATES.md",
+        "ENVELOPE.md",
+        "internal/certs/issue.go",
+        "internal/certs/issuer.go",
+        "internal/certs/signer.go",
+        "internal/envelope/envelope.go",
+        "internal/executor/executor.go",
+        "internal/keywrap/rsa.go",
+        "internal/secrets/releaser.go",
+        "internal/secrets/sealer.go"
+      ],
+      "capabilities": [
+        "runtime/cryptographic-operations",
+        "runtime/envelopes-and-secret-release",
+        "runtime/service-integration"
+      ],
+      "rationale": "Cryptographic operation boundaries. Includes bounded execution, signature and certificate support, context-bound wrap and authenticated envelope handling."
+    },
+    {
+      "paths": [
+        "COSMOS-SUPPORT.md",
+        "e2e/COSMOS-HARDWARE-RUN.md",
+        "e2e/cosmos-hardware-sign-verify.sh",
+        "e2e/cosmos-simapp-kms-tx.sh",
+        "e2e/cosmos-simapp-smoke.sh",
+        "e2e/cosmos-simapp-tx.sh",
+        "e2e/cosmos_kms_tx.py",
+        "internal/policy/cosmos.go",
+        "internal/policy/wire.go"
+      ],
+      "capabilities": [
+        "runtime/cosmos-policy",
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Cosmos wire policy and integration fixtures. Covers the supported SDK subset, runnable software and opt-in devnet/hardware validation, and documented evidence boundaries."
+    },
+    {
+      "paths": [
+        "POLICY-ANCHOR.md",
+        "e2e/control-plane-restore-drill.py",
+        "internal/controlplane/entropy.go",
+        "internal/controlplane/envelope.go",
+        "internal/controlplane/export.go",
+        "internal/controlplane/restore.go",
+        "internal/controlplane/scan.go",
+        "internal/policy/state.go"
+      ],
+      "capabilities": [
+        "runtime/policy-state-journal",
+        "runtime/audit-and-collector"
+      ],
+      "rationale": "Durable policy and offline control-plane state. Includes export inspection/readback, local state and collector-backed rollback detection. The drill is evidence tooling."
+    },
+    {
+      "paths": [
+        "OPENPGP-COMPATIBILITY.md",
+        "PIN-CUSTODY.md",
+        "PIN-IMPORT-DESIGN.md",
+        "config/secure-channel.example.json",
+        "deploy/baremetal/generators/regalia-kms-credentials",
+        "deploy/opensc/ignore-yubikey.conf",
+        "deploy/opensc/yubikey-openpgp.conf",
+        "deploy/polkit/50-regalia-kms-pcscd.rules",
+        "deploy/seal-hsm-pin.sh",
+        "internal/backend/manager.go",
+        "internal/backend/nitrokey/lows.go",
+        "internal/backend/nitrokey/pkcs11_driver.go",
+        "internal/backend/nitrokey/probes.go",
+        "internal/backend/nitrokey/provider.go",
+        "internal/backend/nitrokey/securechannel.go",
+        "internal/backend/openpgp/admission.go",
+        "internal/backend/openpgp/driver/driver.go",
+        "internal/backend/openpgp/openpgp.go",
+        "internal/backend/openpgp/pcsc/pcsc.go",
+        "internal/backend/openpgp/provider.go",
+        "internal/backend/pcscwatch/pcsc_cgo.go",
+        "internal/backend/pcscwatch/pcsc_stub.go",
+        "internal/backend/pcscwatch/watcher.go",
+        "internal/backend/reauth/gate.go",
+        "internal/backend/reauth/presence.go",
+        "internal/backend/reauth/tracker.go",
+        "internal/backend/yubikey/piv_driver.go",
+        "internal/backend/yubikey/piv_driver_seam.go",
+        "internal/backend/yubikey/piv_reach.go",
+        "internal/backend/yubikey/piv_retry.go",
+        "internal/backend/yubikey/provider.go",
+        "internal/backend/yubikey/sign_contract.go",
+        "internal/pin/source.go"
+      ],
+      "capabilities": [
+        "runtime/backends-and-token-lifecycle",
+        "runtime/cryptographic-operations",
+        "runtime/envelopes-and-secret-release"
+      ],
+      "rationale": "Hardware providers and token access. Includes PKCS#11, PIV, standalone OpenPGP, reauthorization, PC/SC and credentials. The local PIN import design remains subject to its separate custody and physical acceptance gates."
+    },
+    {
+      "paths": [
+        "OPENBAO-COMPATIBILITY.md",
+        "SOPS-TRANSPORT.md",
+        "adapters/gpgsign/README.md",
+        "adapters/gpgsign/client.go",
+        "adapters/gpgsign/cmd/regalia-sign/config.go",
+        "adapters/gpgsign/cmd/regalia-sign/main.go",
+        "adapters/gpgsign/config.example.json",
+        "adapters/gpgsign/eddsa.go",
+        "adapters/gpgsign/go.mod",
+        "adapters/gpgsign/go.sum",
+        "adapters/gpgsign/openpgp.go",
+        "adapters/gpgsign/signer.go",
+        "adapters/sops/README.md",
+        "adapters/sops/adapter.go",
+        "adapters/sops/client.go",
+        "adapters/sops/cmd/regalia-sops-kms/config.go",
+        "adapters/sops/cmd/regalia-sops-kms/main.go",
+        "adapters/sops/config.example.json",
+        "adapters/sops/go.mod",
+        "adapters/sops/go.sum",
+        "adapters/sops/server.go",
+        "adapters/sops/sopsrpc/keyservice.go",
+        "adapters/sops/transport.go",
+        "deploy/systemd/regalia-sops-kms.service"
+      ],
+      "capabilities": [
+        "runtime/client-adapters"
+      ],
+      "rationale": "Client adapters. Includes both separate Go modules, their CLIs and RPC carrier, examples, and the draft-only OpenBao contract."
+    },
+    {
+      "paths": [
+        "AUDIT.md",
+        "cmd/regalia-audit-collector/main.go",
+        "cmd/regalia-audit-ship/check.go",
+        "cmd/regalia-audit-ship/main.go",
+        "deploy/baremetal/AUDIT-COLLECTOR.md",
+        "deploy/baremetal/spendaudit.py",
+        "deploy/baremetal/units/regalia-audit-prune@.service",
+        "deploy/baremetal/units/regalia-audit-prune@.timer",
+        "deploy/baremetal/units/regalia-audit-prune@.timer.d/per-host.conf",
+        "deploy/baremetal/units/regalia-audit-prune@admission.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@enrol.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@esp-advances.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@reanchor.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recount.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recovery-key.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@recovery-reconcile.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@survivor.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@sync.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@time.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-prune@update.service.d/owner.conf",
+        "deploy/baremetal/units/regalia-audit-ship.sysusers.conf",
+        "deploy/baremetal/units/regalia-audit-ship.tmpfiles.conf",
+        "deploy/baremetal/units/regalia-audit-ship@.service",
+        "deploy/baremetal/units/regalia-audit-ship@.service.d/per-host.conf",
+        "deploy/baremetal/units/regalia-audit-ship@admission.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@enrol.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@esp-advances.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@reanchor.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recount.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recovery-key.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@recovery-reconcile.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@survivor.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@sync.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@time.service.d/reader.conf",
+        "deploy/baremetal/units/regalia-audit-ship@update.service.d/reader.conf",
+        "e2e/audit-ship-systemd.py",
+        "internal/audit/audit.go",
+        "internal/audit/collector.go",
+        "internal/audit/conformance.go",
+        "internal/audit/handover.go",
+        "internal/audit/httpsink.go",
+        "internal/audit/policy_position.go",
+        "internal/audit/reconcile.go",
+        "internal/audit/shipper.go",
+        "internal/audit/trail.go",
+        "internal/audit/transport.go",
+        "internal/audit/verifier.go"
+      ],
+      "capabilities": [
+        "runtime/audit-and-collector",
+        "runtime/policy-state-journal",
+        "runtime/observability"
+      ],
+      "rationale": "Audit recorder, collector, and shipping units. Covers local events, collector/server and trail adapters, service timers and credentials, authenticated continuity and operational state observations."
+    },
+    {
+      "paths": [
+        "OBSERVABILITY.md",
+        "deploy/baremetal/MONITORING.md",
+        "deploy/monitoring/regalia-kms.rules.yml",
+        "deploy/monitoring/regalia-node.rules.yml",
+        "internal/telemetry/telemetry.go"
+      ],
+      "capabilities": [
+        "runtime/observability"
+      ],
+      "rationale": "Metrics and monitoring contracts. Includes metrics exposition, separate KMS and node alert rules, and monitoring deployment prerequisites."
+    },
+    {
+      "paths": [
+        "FENCING.md",
+        "cmd/regalia-fence/main.go",
+        "cmd/regalia-kms/main.go",
+        "cmd/regalia-kms/openpgp_applet.go",
+        "cmd/regalia-kms/piv_beside_pkcs11.go",
+        "cmd/regalia-kms/preflight.go",
+        "cmd/regalia-kms/provenance.go",
+        "cmd/regalia-kms/token_mechanisms.go",
+        "cmd/regalia-kms/yubikey_backend_piv.go",
+        "cmd/regalia-kms/yubikey_backend_stub.go",
+        "deploy/baremetal/apparmor/usr.sbin.regalia-kms",
+        "deploy/baremetal/image/etcd.pin",
+        "deploy/baremetal/image/regalia-kms.preset",
+        "deploy/baremetal/regalia-kms-hardening.conf.example",
+        "deploy/baremetal/regalia-kms.sysctl.conf",
+        "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+        "deploy/baremetal/units/regalia-kms.service.d/firewall.conf",
+        "deploy/baremetal/units/regalia-kms.service.d/memlock.conf",
+        "deploy/systemd/regalia-kms-credentials.conf.example",
+        "deploy/systemd/regalia-kms.service",
+        "deploy/systemd/regalia-kms.sysusers.conf",
+        "internal/admission/admission.go",
+        "internal/admission/directives.go",
+        "internal/fencing/authority.go",
+        "internal/fencing/gate.go",
+        "internal/fencing/issue.go",
+        "internal/fencing/runner.go",
+        "internal/fencing/standby.go",
+        "internal/opstate/cache.go",
+        "internal/opstate/etcd.go",
+        "internal/opstate/gate.go",
+        "internal/opstate/judge.go",
+        "internal/opstate/publish.go",
+        "internal/opstate/reserve.go",
+        "internal/opstate/session.go",
+        "internal/opstate/session_entry.go",
+        "internal/opstate/state_epoch.go",
+        "internal/opstate/verify.go"
+      ],
+      "capabilities": [
+        "runtime/service-integration",
+        "runtime/policy-state-journal",
+        "runtime/backends-and-token-lifecycle"
+      ],
+      "rationale": "Daemon and operational admission. Includes daemon lifecycle, preflight, active-passive CLI and admission, session publication and reservation components. Baremetal peer startup, image and restore semantics are covered by the other owner's shard."
+    },
+    {
+      "paths": [
+        ".github/actionlint.yaml",
+        ".github/actions/tpm-diagnostics/action.yml",
+        ".github/dependabot.yml",
+        ".github/workflows/abrmd-probe.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+        ".github/workflows/initrd-drift.yml",
+        ".github/workflows/node-units.yml",
+        ".github/workflows/recovery-matrix.yml",
+        ".github/workflows/recovery-reconcile.yml",
+        ".github/workflows/secret-scan.yml",
+        ".github/workflows/vtpm-probe.yml",
+        ".gitleaks.toml",
+        ".pre-commit-config.yaml",
+        "LIMITATIONS.md",
+        "README.md",
+        "SECURITY.md",
+        "TESTING.md",
+        "config/qualified-stack.json",
+        "go.mod",
+        "go.sum",
+        "tools/__init__.py",
+        "tools/bench/README.md",
+        "tools/bench/hsm-bench.py",
+        "tools/bench/requirements.txt",
+        "tools/bench/test_hsm_bench.py",
+        "tools/guardenum/main.go",
+        "tools/guardenum/main_test.go",
+        "tools/guardenum/output_contract_test.go",
+        "tools/inventory/inventory.go",
+        "tools/inventory/inventory_test.go",
+        "tools/inventory/main.go",
+        "tools/junit.py",
+        "tools/nodeunitsguard/build_graph_test.go",
+        "tools/qualified_stack.py"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Build dependency and CI policy controls. Includes build and scan workflows, dependency pins, inventory tooling, bench scripts and evidence classification. Tool and dependency files contribute to software verification scope only."
+    },
+    {
+      "paths": [
+        "e2e/DUAL-YUBIKEY-QUALIFICATION.md",
+        "e2e/NITROKEY-QUALIFICATION.md",
+        "e2e/README.md",
+        "e2e/YUBIKEY-OPENPGP-PKCS11.md",
+        "e2e/abrmd-probe.sh",
+        "e2e/authtime-chrony-nts.py",
+        "e2e/baremetal-firewall-netns.sh",
+        "e2e/convergence-swtpm.sh",
+        "e2e/etc-factory.sh",
+        "e2e/etcd-unit-sandbox.sh",
+        "e2e/heartbeat-swtpm.sh",
+        "e2e/hsm-gate-drill.py",
+        "e2e/initrd-drift.sh",
+        "e2e/initrd-reproducible.sh",
+        "e2e/install-host-loop.sh",
+        "e2e/kms-hardened-serve.sh",
+        "e2e/kms-sandbox-negative.sh",
+        "e2e/kms-two-token-systemd.sh",
+        "e2e/lib/apt-install-netem.sh",
+        "e2e/lib/bench_cards.sh",
+        "e2e/lib/boot-guest/e2e-addr",
+        "e2e/lib/boot-guest/e2e-enrol",
+        "e2e/lib/boot-guest/e2e-probe",
+        "e2e/lib/boot-guest/e2e-report",
+        "e2e/lib/boot-guest/regalia-e2e-addr.service",
+        "e2e/lib/boot-guest/regalia-e2e-enrol.service",
+        "e2e/lib/boot-guest/regalia-e2e-report.service",
+        "e2e/lib/bounded.py",
+        "e2e/lib/debian-keyring.sh",
+        "e2e/lib/dracut-module-check.sh",
+        "e2e/lib/initrd-cpio-diff.py",
+        "e2e/lib/opensc_isolate.py",
+        "e2e/lib/p11_extract_probe.py",
+        "e2e/lib/pin-blob-v2.sh",
+        "e2e/lib/sandbox_probe.py",
+        "e2e/lib/sc-hsm-pty.py",
+        "e2e/lib/signed_boot.py",
+        "e2e/lib/threenode.py",
+        "e2e/lib/tpmdiag.py",
+        "e2e/luks-recovery-key.sh",
+        "e2e/nitrokey-cross-card-restore-drill.sh",
+        "e2e/nitrokey-envelope-restore-drill.sh",
+        "e2e/nitrokey-pin-custody-drill.sh",
+        "e2e/nitrokey-pin-import-drill.sh",
+        "e2e/nitrokey-token-swap-drill.sh",
+        "e2e/nitrokey-two-site-failover-drill.sh",
+        "e2e/node-replacement-swtpm.sh",
+        "e2e/node-units-systemd.py",
+        "e2e/one-node.py",
+        "e2e/pcr-signed-policy-swtpm.sh",
+        "e2e/pcrlock-luks-swtpm.sh",
+        "e2e/peer-unlock-swtpm.sh",
+        "e2e/pin-import-swtpm.sh",
+        "e2e/pkcs11-contract.sh",
+        "e2e/pkcs11-removal.sh",
+        "e2e/regalia-sync-netns.py",
+        "e2e/rolling-policy-swtpm.sh",
+        "e2e/rolling-threenode.py",
+        "e2e/rootfs-reproducible.sh",
+        "e2e/run.sh",
+        "e2e/runtime-admission.py",
+        "e2e/runtime-lease-swtpm.sh",
+        "e2e/slb9665-pin-import-poc.sh",
+        "e2e/softhsm-pkcs11.sh",
+        "e2e/ssh-trust-sshd.sh",
+        "e2e/tests/image-esp-content.py",
+        "e2e/tests/test-evidence-classes.sh",
+        "e2e/three-node-leases.py",
+        "e2e/three-node-netns.py",
+        "e2e/three-node-outage.py",
+        "e2e/three-node-reanchor.py",
+        "e2e/three-node-recovery.py",
+        "e2e/three-node-replace.py",
+        "e2e/three-node-site-advance.py",
+        "e2e/three-node-theft.py",
+        "e2e/three-node-wan.py",
+        "e2e/tpm-attest-swtpm.sh",
+        "e2e/tpm-lockout-swtpm.sh",
+        "e2e/uki-build.sh",
+        "e2e/unlock-boot-qemu.sh",
+        "e2e/usr-verity.sh",
+        "e2e/vtpm-proxy-probe.sh",
+        "e2e/wg-boot-netns.sh",
+        "e2e/yubikey-pin-custody-drill.sh",
+        "lab/recovery/README.md",
+        "lab/recovery/RECONCILIATION-VALIDATION.md",
+        "lab/recovery/VALIDATION.md",
+        "lab/recovery/matrix.py",
+        "lab/recovery/merge.py",
+        "lab/recovery/reconcile_matrix.py",
+        "lab/recovery/validation-summary.json"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Scenario harness and shared deployment evidence plumbing. Accounts explicitly for scenario drivers, proof assertions, software TPM and boot fixtures, sample evidence, matrix runners and hardware-only commands. Shared baremetal scenarios validate those product contracts without moving their runtime ownership."
+    },
+    {
+      "paths": [
+        "adapters/gpgsign/cmd/regalia-sign/main_test.go",
+        "adapters/gpgsign/gpgsign_test.go",
+        "adapters/sops/adapter_test.go",
+        "adapters/sops/bypass_test.go",
+        "adapters/sops/client_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/config_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/example_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/guard_coverage_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/identity_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/origin_test.go",
+        "adapters/sops/cmd/regalia-sops-kms/startup_test.go",
+        "adapters/sops/drain_test.go",
+        "adapters/sops/guard_coverage_test.go",
+        "adapters/sops/interop_test.go",
+        "adapters/sops/range_bounds_test.go",
+        "adapters/sops/round_trip_test.go",
+        "adapters/sops/server_test.go",
+        "adapters/sops/socket_directory_test.go",
+        "adapters/sops/socketdir_test.go",
+        "adapters/sops/sopsrpc/keyservice_test.go",
+        "adapters/sops/transport_test.go",
+        "adapters/sops/transport_validation_test.go",
+        "cmd/regalia-audit-collector/main_test.go",
+        "cmd/regalia-audit-ship/check_test.go",
+        "cmd/regalia-audit-ship/main_test.go",
+        "cmd/regalia-fence/guard_coverage_test.go",
+        "cmd/regalia-fence/main_test.go",
+        "cmd/regalia-fence/run_test.go",
+        "cmd/regalia-fence/signing_key_test.go",
+        "cmd/regalia-kms/admission_wiring_test.go",
+        "cmd/regalia-kms/bare_invocation_test.go",
+        "cmd/regalia-kms/declared_policy_test.go",
+        "cmd/regalia-kms/entrypoint_refusals_test.go",
+        "cmd/regalia-kms/exit_ceiling_test.go",
+        "cmd/regalia-kms/fencing_wiring_test.go",
+        "cmd/regalia-kms/fido_startup_test.go",
+        "cmd/regalia-kms/guard_coverage_round2_test.go",
+        "cmd/regalia-kms/guard_coverage_test.go",
+        "cmd/regalia-kms/main_test.go",
+        "cmd/regalia-kms/mtls_test.go",
+        "cmd/regalia-kms/one_yubikey_piv_beside_pkcs11_piv_test.go",
+        "cmd/regalia-kms/open_audit_test.go",
+        "cmd/regalia-kms/openpgp_applet_hardware_test.go",
+        "cmd/regalia-kms/openpgp_applet_test.go",
+        "cmd/regalia-kms/opstate_wiring_test.go",
+        "cmd/regalia-kms/piv_beside_pkcs11_test.go",
+        "cmd/regalia-kms/preflight_amputation_test.go",
+        "cmd/regalia-kms/preflight_report_content_test.go",
+        "cmd/regalia-kms/preflight_test.go",
+        "cmd/regalia-kms/preflight_tls_test.go",
+        "cmd/regalia-kms/provenance_test.go",
+        "cmd/regalia-kms/servable_test.go",
+        "cmd/regalia-kms/shipped_example_test.go",
+        "cmd/regalia-kms/startup_helpers_test.go",
+        "cmd/regalia-kms/token_mechanisms_hardware_test.go",
+        "cmd/regalia-kms/token_mechanisms_test.go",
+        "cmd/regalia-kms/verify_audit_test.go",
+        "cmd/regalia-kms/verify_policy_state_test.go",
+        "cmd/regalia-kms/yubikey_hardware_test.go",
+        "internal/admission/admission_test.go",
+        "internal/admission/chain_tip_test.go",
+        "internal/admission/directives_test.go",
+        "internal/admission/single_test.go",
+        "internal/api/capabilities_test.go",
+        "internal/api/compatibility_test.go",
+        "internal/api/guard_coverage_round2_test.go",
+        "internal/api/guard_coverage_test.go",
+        "internal/api/handler_test.go",
+        "internal/api/release_secret_test.go",
+        "internal/api/result_zeroization_test.go",
+        "internal/api/seal_data_key_decode_test.go",
+        "internal/api/validate_request_test.go",
+        "internal/approval/approval_test.go",
+        "internal/approval/deterministic_order_test.go",
+        "internal/approval/guard_coverage_round2_test.go",
+        "internal/approval/guard_coverage_round3_test.go",
+        "internal/approval/guard_coverage_test.go",
+        "internal/approval/opstate_vector_test.go",
+        "internal/approval/trailing_bytes_test.go",
+        "internal/audit/audit_test.go",
+        "internal/audit/chain_rewrite_test.go",
+        "internal/audit/collector_test.go",
+        "internal/audit/conformance_test.go",
+        "internal/audit/draft_validation_test.go",
+        "internal/audit/file_mode_test.go",
+        "internal/audit/guard_coverage_round2_test.go",
+        "internal/audit/guard_coverage_test.go",
+        "internal/audit/handover_test.go",
+        "internal/audit/history_mark_test.go",
+        "internal/audit/httpsink_guards_test.go",
+        "internal/audit/httpsink_test.go",
+        "internal/audit/journal_compat_test.go",
+        "internal/audit/ledger_test.go",
+        "internal/audit/mark_readability_test.go",
+        "internal/audit/mark_required_test.go",
+        "internal/audit/origin_test.go",
+        "internal/audit/policy_position_test.go",
+        "internal/audit/range_bounds_test.go",
+        "internal/audit/reconcile_test.go",
+        "internal/audit/required_metadata_test.go",
+        "internal/audit/round_three_survivors_test.go",
+        "internal/audit/shipped_mark_test.go",
+        "internal/audit/shipper_test.go",
+        "internal/audit/shipping_readiness_test.go",
+        "internal/audit/trail_test.go",
+        "internal/audit/transport_test.go",
+        "internal/audit/truncation_test.go",
+        "internal/audit/unreadable_mark_test.go",
+        "internal/audit/verifier_test.go",
+        "internal/audit/wait_shipped_conjuncts_test.go",
+        "internal/auth/agent_principal_test.go",
+        "internal/auth/auth_test.go",
+        "internal/auth/canonical_uri_san_test.go",
+        "internal/auth/grant_document_test.go",
+        "internal/auth/granted_order_stability_test.go",
+        "internal/auth/guard_coverage_round2_test.go",
+        "internal/auth/guard_coverage_test.go",
+        "internal/auth/policy_read_failure_test.go",
+        "internal/auth/principal_refusal_names_test.go",
+        "internal/auth/rbac_surface_test.go",
+        "internal/auth/rbac_test.go",
+        "internal/auth/revocation_operand_isolation_test.go",
+        "internal/auth/revocation_test.go",
+        "internal/backend/manager_test.go",
+        "internal/backend/nil_manager_test.go",
+        "internal/backend/nitrokey/agreement_test.go",
+        "internal/backend/nitrokey/attestation_identity_test.go",
+        "internal/backend/nitrokey/binding_guard_test.go",
+        "internal/backend/nitrokey/capabilities_test.go",
+        "internal/backend/nitrokey/construction_guards_test.go",
+        "internal/backend/nitrokey/derive_execute_refusals_test.go",
+        "internal/backend/nitrokey/devauth_hardware_test.go",
+        "internal/backend/nitrokey/devauth_pairing_test.go",
+        "internal/backend/nitrokey/driver_ready_test.go",
+        "internal/backend/nitrokey/ended_request_hardware_test.go",
+        "internal/backend/nitrokey/ended_request_test.go",
+        "internal/backend/nitrokey/entry_input_guards_test.go",
+        "internal/backend/nitrokey/evidence_custody_test.go",
+        "internal/backend/nitrokey/healthy_close_test.go",
+        "internal/backend/nitrokey/hsm2_qualification_test.go",
+        "internal/backend/nitrokey/identity_pin_test.go",
+        "internal/backend/nitrokey/kek_attributes_test.go",
+        "internal/backend/nitrokey/kek_provenance_test.go",
+        "internal/backend/nitrokey/local_tokens_test.go",
+        "internal/backend/nitrokey/lows_test.go",
+        "internal/backend/nitrokey/marshal_public_key_test.go",
+        "internal/backend/nitrokey/matrix_converse_test.go",
+        "internal/backend/nitrokey/mechanism_test.go",
+        "internal/backend/nitrokey/oaep_test.go",
+        "internal/backend/nitrokey/observability_test.go",
+        "internal/backend/nitrokey/openpgp_applet_hardware_test.go",
+        "internal/backend/nitrokey/peer_key_test.go",
+        "internal/backend/nitrokey/pkcs11_driver_test.go",
+        "internal/backend/nitrokey/pkcs11_ed25519_integration_test.go",
+        "internal/backend/nitrokey/pkcs11_integration_test.go",
+        "internal/backend/nitrokey/pkcs11_pin_test.go",
+        "internal/backend/nitrokey/probes_test.go",
+        "internal/backend/nitrokey/provider_test.go",
+        "internal/backend/nitrokey/readiness_operands_test.go",
+        "internal/backend/nitrokey/reauthorization_test.go",
+        "internal/backend/nitrokey/removal_test.go",
+        "internal/backend/nitrokey/secure_channel_refusal_test.go",
+        "internal/backend/nitrokey/session_lifecycle_test.go",
+        "internal/backend/nitrokey/session_order_test.go",
+        "internal/backend/nitrokey/swap_test.go",
+        "internal/backend/nitrokey/token_failure_test.go",
+        "internal/backend/nitrokey/token_selection_test.go",
+        "internal/backend/nitrokey/wrap_rsa_success_test.go",
+        "internal/backend/nitrokey/wrap_unwrap_refusals_test.go",
+        "internal/backend/openpgp/admission_test.go",
+        "internal/backend/openpgp/driver/driver_test.go",
+        "internal/backend/openpgp/openpgp_test.go",
+        "internal/backend/openpgp/pcsc/pcsc_physical_test.go",
+        "internal/backend/openpgp/provider_test.go",
+        "internal/backend/pcscwatch/watcher_test.go",
+        "internal/backend/reauth/presence_test.go",
+        "internal/backend/reauth/tracker_test.go",
+        "internal/backend/yubikey/execute_test.go",
+        "internal/backend/yubikey/health_test.go",
+        "internal/backend/yubikey/matrix_conformance_test.go",
+        "internal/backend/yubikey/no_parallel_test.go",
+        "internal/backend/yubikey/pin_latch_ended_request_test.go",
+        "internal/backend/yubikey/pin_source_fit_test.go",
+        "internal/backend/yubikey/piv_driver_seam_test.go",
+        "internal/backend/yubikey/piv_driver_test.go",
+        "internal/backend/yubikey/piv_login_not_presented_test.go",
+        "internal/backend/yubikey/piv_physical_ed25519_test.go",
+        "internal/backend/yubikey/piv_physical_latch_test.go",
+        "internal/backend/yubikey/piv_physical_pin_latch_test.go",
+        "internal/backend/yubikey/piv_physical_removal_test.go",
+        "internal/backend/yubikey/piv_physical_session_state_test.go",
+        "internal/backend/yubikey/piv_physical_test.go",
+        "internal/backend/yubikey/piv_reach_test.go",
+        "internal/backend/yubikey/piv_retry_test.go",
+        "internal/backend/yubikey/piv_session_boundary_test.go",
+        "internal/backend/yubikey/provider_boundary_test.go",
+        "internal/backend/yubikey/provider_test.go",
+        "internal/backend/yubikey/reach_test.go",
+        "internal/backend/yubikey/reauthorization_test.go",
+        "internal/backend/yubikey/sign_contract_test.go",
+        "internal/backend/yubikey/sweep_survivor_ledger_test.go",
+        "internal/backend/yubikey/sweep_uncovered_test.go",
+        "internal/backend/yubikey/turns_test.go",
+        "internal/backend/yubikey/v1_frame_test.go",
+        "internal/boundary_test.go",
+        "internal/certs/certs_test.go",
+        "internal/certs/duplicate_names_test.go",
+        "internal/certs/guard_coverage_test.go",
+        "internal/certs/issued_constraints_test.go",
+        "internal/certs/issuer_key_match_test.go",
+        "internal/certs/issuer_test.go",
+        "internal/certs/issuer_validity_test.go",
+        "internal/certs/namespace_boundaries_test.go",
+        "internal/certs/refusal_surface_test.go",
+        "internal/certs/refusals_test.go",
+        "internal/certs/signature_hash_test.go",
+        "internal/certs/subject_key_test.go",
+        "internal/config/config_test.go",
+        "internal/config/document_fields_test.go",
+        "internal/config/example_test.go",
+        "internal/config/guard_coverage_test.go",
+        "internal/config/partial_configuration_test.go",
+        "internal/config/runtime_admission_test.go",
+        "internal/config/tls_test.go",
+        "internal/controlplane/absence_fields_test.go",
+        "internal/controlplane/controlplane_test.go",
+        "internal/controlplane/entry_path_test.go",
+        "internal/controlplane/envelope_inputs_test.go",
+        "internal/controlplane/guard_coverage_test.go",
+        "internal/controlplane/key_parsing_test.go",
+        "internal/controlplane/restore_test.go",
+        "internal/controlplane/scan_reach_test.go",
+        "internal/controlplane/sorted_keys_test.go",
+        "internal/controlplane/survivor_pool_ledger_test.go",
+        "internal/controlplane/survivor_pool_test.go",
+        "internal/controlplane/trailing_bytes_test.go",
+        "internal/envelope/card_key_length_test.go",
+        "internal/envelope/context_digest_hex_test.go",
+        "internal/envelope/data_key_zeroization_test.go",
+        "internal/envelope/envelope_fuzz_test.go",
+        "internal/envelope/envelope_test.go",
+        "internal/envelope/guard_coverage_round2_test.go",
+        "internal/envelope/guard_coverage_round3_test.go",
+        "internal/envelope/guard_coverage_test.go",
+        "internal/envelope/metadata_leaves_test.go",
+        "internal/envelope/peek_context_test.go",
+        "internal/envelope/peek_parse_error_test.go",
+        "internal/envelope/published_vector_test.go",
+        "internal/envelope/rewrap_test.go",
+        "internal/envelope/seal_assembled_test.go",
+        "internal/executor/admission_test.go",
+        "internal/executor/error_surface_test.go",
+        "internal/executor/executor_test.go",
+        "internal/fencing/atomic_write_test.go",
+        "internal/fencing/authority_input_guards_test.go",
+        "internal/fencing/authority_test.go",
+        "internal/fencing/chain_binding_test.go",
+        "internal/fencing/gate_261_test.go",
+        "internal/fencing/gate_test.go",
+        "internal/fencing/issue_test.go",
+        "internal/fencing/runner_error_test.go",
+        "internal/fencing/snapshot_test.go",
+        "internal/fencing/splitbrain_test.go",
+        "internal/fencing/standby_test.go",
+        "internal/fencing/sweep_round_two_test.go",
+        "internal/fencing/sweep_sole_detectors_test.go",
+        "internal/fencing/sweep_uncovered_test.go",
+        "internal/fencing/tempdir_test.go",
+        "internal/integration/cosmos_node_kms_test.go",
+        "internal/integration/cosmos_pipeline_test.go",
+        "internal/integration/cosmos_promotion_hardware_test.go",
+        "internal/integration/cosmos_two_site_hardware_test.go",
+        "internal/integration/dual_yubikey_piv_test.go",
+        "internal/integration/dual_yubikey_service_piv_test.go",
+        "internal/integration/envelope_restore_drill_test.go",
+        "internal/integration/failover_drill_test.go",
+        "internal/integration/gpgsign_executable_test.go",
+        "internal/integration/identity_public_key_pin_test.go",
+        "internal/integration/kek_hardware_rooted_test.go",
+        "internal/integration/key_agreement_pkcs11_test.go",
+        "internal/integration/nitrokey_pin_custody_drill_test.go",
+        "internal/integration/nitrokey_token_swap_drill_test.go",
+        "internal/integration/no_request_logging_test.go",
+        "internal/integration/operations_http_test.go",
+        "internal/integration/piv_signing_contract_piv_test.go",
+        "internal/integration/pkcs11_http_test.go",
+        "internal/integration/pkcs11_pin_test.go",
+        "internal/integration/readiness_token_mismatch_test.go",
+        "internal/integration/revoked_principal_test.go",
+        "internal/integration/seal_release_pkcs11_test.go",
+        "internal/integration/sops_executable_test.go",
+        "internal/integration/sops_pkcs11_test.go",
+        "internal/integration/yubikey_openpgp_release_signing_test.go",
+        "internal/integration/yubikey_pin_custody_drill_test.go",
+        "internal/keywrap/guard_coverage_test.go",
+        "internal/keywrap/rsa_test.go",
+        "internal/keywrap/size_binding_test.go",
+        "internal/operations/admission_test.go",
+        "internal/operations/agent_release_test.go",
+        "internal/operations/approvals_test.go",
+        "internal/operations/authz_before_policy_test.go",
+        "internal/operations/backend_error_audit_redaction_test.go",
+        "internal/operations/classify_test.go",
+        "internal/operations/coordinator_bridging_test.go",
+        "internal/operations/coordinator_revoked_test.go",
+        "internal/operations/coordinator_seal_test.go",
+        "internal/operations/coordinator_test.go",
+        "internal/operations/dropped_audit_test.go",
+        "internal/operations/envelope_age_test.go",
+        "internal/operations/example_policy_content_type_test.go",
+        "internal/operations/guard_coverage_round2_test.go",
+        "internal/operations/guard_coverage_test.go",
+        "internal/operations/no_logging_release_seal_test.go",
+        "internal/operations/policy_anchor_test.go",
+        "internal/operations/routing_outcome_test.go",
+        "internal/operations/seal_approval_test.go",
+        "internal/operations/seal_separation_test.go",
+        "internal/operations/survivor_test.go",
+        "internal/operations/sweep_execute_guards_test.go",
+        "internal/operations/unwrap_route_test.go",
+        "internal/opstate/cache_test.go",
+        "internal/opstate/etcd_test.go",
+        "internal/opstate/forcenew_test.go",
+        "internal/opstate/gate_test.go",
+        "internal/opstate/reserve_test.go",
+        "internal/opstate/sequence_cases_test.go",
+        "internal/opstate/session_test.go",
+        "internal/opstate/single_node_test.go",
+        "internal/opstate/state_epoch_test.go",
+        "internal/opstate/twin_coverage_test.go",
+        "internal/opstate/verify_test.go",
+        "internal/pin/acl_test.go",
+        "internal/pin/charset_bounds_test.go",
+        "internal/pin/custody_test.go",
+        "internal/pin/foreign_owner_test.go",
+        "internal/pin/mlock_refusal_test.go",
+        "internal/pin/source_test.go",
+        "internal/policy/compile_guards_test.go",
+        "internal/policy/cosmos_fuzz_test.go",
+        "internal/policy/cosmos_reference_test.go",
+        "internal/policy/cosmos_test.go",
+        "internal/policy/cosmos_wire_refusals_test.go",
+        "internal/policy/duplicate_scalar_test.go",
+        "internal/policy/durability_test.go",
+        "internal/policy/fault_injection_leaves_test.go",
+        "internal/policy/fault_injection_test.go",
+        "internal/policy/file_mode_test.go",
+        "internal/policy/guard_coverage_test.go",
+        "internal/policy/load_test.go",
+        "internal/policy/mark_required_test.go",
+        "internal/policy/operand_ledger_test.go",
+        "internal/policy/parser_boundary_test.go",
+        "internal/policy/policy_test.go",
+        "internal/policy/quota_observability_test.go",
+        "internal/policy/readiness_test.go",
+        "internal/policy/replay_decision_test.go",
+        "internal/policy/reservation_test.go",
+        "internal/policy/sequence_cases_test.go",
+        "internal/policy/signdoc_duplicate_test.go",
+        "internal/policy/state_epoch_test.go",
+        "internal/policy/state_test.go",
+        "internal/policy/statement_ledger_test.go",
+        "internal/policy/testdata/README.md",
+        "internal/policy/testdata/msgsend-uakt-1000000.bin",
+        "internal/policy/testdata/signdoc-akashnet2-msgdelegate.hex",
+        "internal/policy/testdata/signdoc-akashnet2-msgsend-account0-sequence0.hex",
+        "internal/policy/testdata/signdoc-akashnet2-msgsend.hex",
+        "internal/policy/varint_bounds_test.go",
+        "internal/policy/verify_state_test.go",
+        "internal/reachability_test.go",
+        "internal/registry/binding_coordinates_test.go",
+        "internal/registry/capabilities_export_test.go",
+        "internal/registry/commissioned_pinning_test.go",
+        "internal/registry/custody_slot_vectors_test.go",
+        "internal/registry/custody_test.go",
+        "internal/registry/envelope_max_age_test.go",
+        "internal/registry/fido_continuity_test.go",
+        "internal/registry/file_gate_test.go",
+        "internal/registry/kek_algorithm_test.go",
+        "internal/registry/mutation_sweep_round2_ledger_test.go",
+        "internal/registry/mutation_sweep_round4_test.go",
+        "internal/registry/mutation_sweep_round5_test.go",
+        "internal/registry/registry_load_file_id_test.go",
+        "internal/registry/registry_sweep_gaps_test.go",
+        "internal/registry/registry_test.go",
+        "internal/registry/revoked_state_test.go",
+        "internal/registry/rotation_test.go",
+        "internal/registry/seal_route_test.go",
+        "internal/registry/secret_kek_unwrap_disjoint_test.go",
+        "internal/registry/servable_operations_test.go",
+        "internal/registry/symmetric_key_aes256_test.go",
+        "internal/registry/token_label_test.go",
+        "internal/registry/unwrap_route_test.go",
+        "internal/secrets/binding_context_test.go",
+        "internal/secrets/guard_coverage_test.go",
+        "internal/secrets/kek_algorithm_test.go",
+        "internal/secrets/kek_identity_test.go",
+        "internal/secrets/kek_version_test.go",
+        "internal/secrets/releaser_test.go",
+        "internal/secrets/sealer_construction_test.go",
+        "internal/secrets/sealer_wrap_test.go",
+        "internal/server/guard_coverage_test.go",
+        "internal/server/health_test.go",
+        "internal/server/readiness_record_test.go",
+        "internal/server/readiness_stats_test.go",
+        "internal/server/readiness_wiring_test.go",
+        "internal/server/require_all_test.go",
+        "internal/server/serve_test.go",
+        "internal/server/service_test.go",
+        "internal/server/shutdown_grace_test.go",
+        "internal/server/surface_test.go",
+        "internal/server/timeouts_test.go",
+        "internal/sweeptext/citation.go",
+        "internal/sweeptext/citation_test.go",
+        "internal/sweeptext/sweeptext.go",
+        "internal/sweeptext/sweeptext_test.go",
+        "internal/telemetry/absent_values_test.go",
+        "internal/telemetry/observability_closure_test.go",
+        "internal/telemetry/telemetry_test.go",
+        "internal/telemetry/unauthenticated_test.go",
+        "internal/writeonly_test.go"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "rationale": "Non-product assertion code and fixture data in assigned runtime modules. Explicit evidence-only disposition for checked-in tests, testdata, mutation ledger renderer and test integration modules. Individual assertions backing requirements are cited separately."
+    },
+    {
+      "paths": [
+        "tests/test_alert_firing.py",
+        "tests/test_alert_rules.py",
+        "tests/test_ci_gate_needs.py",
+        "tests/test_custody_manifest.py",
+        "tests/test_custody_manifest_refusals.py",
+        "tests/test_e2e_card_isolation.py",
+        "tests/test_fido_continuity.py",
+        "tests/test_initrd_drift.py",
+        "tests/test_node_alert_firing.py",
+        "tests/test_one_node_ci_todos.py",
+        "tests/test_one_node_owner_unlock.py",
+        "tests/test_one_node_revocation.py",
+        "tests/test_one_node_survivor.py",
+        "tests/test_qualified_stack.py",
+        "tests/test_root_only_go_tests_run_in_ci.py",
+        "tests/test_threenode_topology.py"
+      ],
+      "capabilities": [
+        "delivery/software-build-and-ci",
+        "runtime/observability",
+        "runtime/key-registry-and-custody"
+      ],
+      "rationale": "Evidence-only disposition for cited standalone assertions and adjacent workflow, custody, qualification and alerting checks. These files help verify product and harness behavior."
+    }
+  ],
+  "knownGaps": [
+    {
+      "id": "runtime-existing-history-startup",
+      "capabilities": [
+        "runtime/service-integration",
+        "runtime/policy-state-journal"
+      ],
+      "description": "Normal single-node service startup can lack an independently established history floor. The frozen daemon opens file-backed policy state, and an optional etcd observer does not prove existing backend/WAL continuity or gate operation admission. The first-store and restore startup contract is a proposed change with unresolved authority and same-artifact start proofs.",
+      "beads": [
+        "regalia-kms-dx7.26"
+      ],
+      "releaseGate": "Required for normal single-node continuation and safe lost-disk restore acceptance."
+    },
+    {
+      "id": "runtime-shared-reservation-wiring",
+      "capabilities": [
+        "runtime/service-integration",
+        "runtime/policy-state-journal",
+        "runtime/cosmos-policy"
+      ],
+      "description": "Shared etcd reservation components and their concurrent tests exist. The pinned daemon does not instantiate the shared policy state, so no daemon-level multi-active spend-once, sequence, revocation and leader transition claim follows from those assertions. Operational-state design issue #432 covers the larger path.",
+      "beads": [],
+      "releaseGate": "Required before claiming stateful multi-active service. Local file-backed guarantees stand on their own deployment scope."
+    },
+    {
+      "id": "runtime-collector-deployment",
+      "capabilities": [
+        "runtime/audit-and-collector",
+        "runtime/policy-state-journal",
+        "runtime/observability"
+      ],
+      "description": "Reference collector and conformance checks exist. Production collector selection, receipt freshness (issue #398), mandatory collector policy and verified alert delivery remain open. Local journal plus mark can move together without an independent confirmed position.",
+      "beads": [
+        "regalia-kms-dx7.9"
+      ],
+      "releaseGate": "Required for production off-host continuity and mandatory collector policy."
+    },
+    {
+      "id": "runtime-token-qualification",
+      "capabilities": [
+        "runtime/backends-and-token-lifecycle",
+        "runtime/envelopes-and-secret-release",
+        "runtime/cosmos-policy"
+      ],
+      "description": "Complete physical token pull and reinsert, commissioned KEK provenance and replacement continuity, and target-chain hardware qualification are separate acceptance evidence. SC-HSM runtime provenance without an independently commissioned pin is indeterminate (regalia issue #447). Staging and SoftHSM results do not establish the production paths.",
+      "beads": [],
+      "releaseGate": "Required for the hardware families and operational paths included in the production custody claim."
+    },
+    {
+      "id": "runtime-openbao",
+      "capabilities": [
+        "runtime/client-adapters"
+      ],
+      "description": "The OpenBao compatibility contract is a draft. Auto-unseal, External Keys/PKI mapping and real-server acceptance need the tracked plugin and conformance work (issues #121, #122 and #123).",
+      "beads": [],
+      "releaseGate": "Feature qualification gate. Applies when OpenBao support is claimed."
+    },
+    {
+      "id": "runtime-sops-site-identity",
+      "capabilities": [
+        "runtime/client-adapters",
+        "runtime/authentication",
+        "runtime/audit-and-collector"
+      ],
+      "description": "SOPS serves a single local trust domain with sidecar-level workload attribution. Live host chain/firewall qualification remains a deployment gate (regalia issue #46, transport issue #19). Caller-level delegation is a separate unshipped authorization design (issue #104).",
+      "beads": [],
+      "releaseGate": "Site commissioning gate for production SOPS deployment. Per-invoker delegation is a distinct optional capability."
+    },
+    {
+      "id": "runtime-one-node-todo-exclusions",
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "description": "One-node CI prints explicit excluded TODOs for owner re-anchor/recount and measured planned-outage update. Its 26 passes prove neither. Signed one-node replacement/restore and the owner-card physical flow also require separate acceptance.",
+      "beads": [
+        "regalia-kms-dx7.7",
+        "regalia-kms-dx7.8",
+        "regalia-kms-dx7.13",
+        "regalia-kms-dx7.19"
+      ],
+      "releaseGate": "The named runtime recovery, update and physical owner gates retain distinct acceptance evidence."
+    },
+    {
+      "id": "runtime-recovery-transport-reset",
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "description": "Earlier PR759 head bb26a2a843f13de2c1ab84dbc1c2304b6c11f1ea failed the section 6 c-to-a nonce control with a TCP reset (job 136992582868). The tested release-tree run passed that control. Source and artifacts do not establish the old failure cause or a transport fix.",
+      "beads": [],
+      "releaseGate": "Unresolved CI reliability incident with a subsequent passing control. No independently designated release blocker."
+    },
+    {
+      "id": "runtime-audit-coverage",
+      "capabilities": [
+        "runtime/audit-and-collector",
+        "delivery/software-build-and-ci"
+      ],
+      "description": "Pinned one-node coverage checks its designated sync, admission and ESP-advance trails. End-to-end audit completeness is not shown for every shared multi-node scenario, such as outage, leases and replace. Time/update audit completeness and collector receipt freshness remain bounded.",
+      "beads": [],
+      "releaseGate": "Evidence gap when claiming complete scenario audit coverage or recovery receipt freshness."
+    },
+    {
+      "id": "runtime-alerts-operational-acceptance",
+      "capabilities": [
+        "runtime/observability"
+      ],
+      "description": "Repository rules have synthetic fault assertions. External monitoring selection, a deployed scrape and alert route, and production recipient delivery require independent evidence.",
+      "beads": [
+        "regalia-kms-dx7.9"
+      ],
+      "releaseGate": "Required to claim verified production monitoring and alert delivery."
+    },
+    {
+      "id": "runtime-test-execution-scope",
+      "capabilities": [
+        "delivery/software-build-and-ci"
+      ],
+      "description": "Implementation classification is source plus assertion inspection. Existing CI artifacts identify their own tested PR head and identical tree. A fresh run at the squash SHA, candidate hardware or proposed commissioning policy is outside this evidence.",
+      "beads": [],
+      "releaseGate": "Provenance boundary. Future release acceptance requires eligible execution evidence for its exact scope."
+    }
+  ]
+}

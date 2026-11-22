@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-runtime-api-batch2-20261122",
+  "reviewedAtUTC": "2026-11-22T02:01:29.927246+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-contract-text-only",
+  "proposalPath": "openspec/coverage/runtime-api-gap-batch2-proposal.json",
+  "proposalSha256": "540e3418e6bca08783e107d4f527cb622bcb2f81e02429994a1d0f0f5504ca1e",
+  "authorityBoundary": "Source-grounded text acceptance; local candidate tests do not establish hosted/shipped verification, restart or physical acceptance.",
+  "cases": [
+    {
+      "caseId": "HTTP.key-agreement.replay-after-restart",
+      "oldCaseSha256": "d14008081d9d5fbedd9c47b07348b61b239129fadf45006e899ed588c716be95",
+      "newCaseSha256": "140079fe05461c139cbfbcc17a1fdb8f6de8c7e465257a504047d862f0bc063c",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "Agreement release and seal cannot reuse a nonce after restart",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.release-secret.busy",
+      "oldCaseSha256": "c9042f05b9349a78677df8b0944c199e55779b86bdcf588e197cf0328283bf97",
+      "newCaseSha256": "c085ba2871dcd7756ad26ae5f000ba9a41c259e959e7bbf5f1598b7e228ce0e9",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Release and seal requests at executor capacity",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.release-secret.already-reserved",
+      "oldCaseSha256": "a9a772d1cd33474edfa5455b06f9069b7e72eee61670a2224e471e3ebd386d0d",
+      "newCaseSha256": "14047ef18005444121933855922682665d5de1881e4c34ecf788399a267a23df",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Release or seal reuses a committed nonce",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.release-secret.replay-after-restart",
+      "oldCaseSha256": "650006f98788ff28be2450b4d9cfd2103edc5b1147db89cf5b769bae1b5c83b5",
+      "newCaseSha256": "83d8beb50c517c0fa29f7036899c5277af6ae18eca1210c2cbebcdcd27c36938",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "Agreement release and seal cannot reuse a nonce after restart",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.seal-envelope.busy",
+      "oldCaseSha256": "e64f75d4291b7f8224934666f73a5b66f698173caf739ea304071841cb20fc9c",
+      "newCaseSha256": "9c1385211c6d69963ecd59a01fa0cb63e8e14f6d94ab58458913d8f457f0adee",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Release and seal requests at executor capacity",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.seal-envelope.already-reserved",
+      "oldCaseSha256": "6c82f6d1aa38d05ce20eb3d9a3ace2c9ec01936004ef8f24f8490267ec7989e8",
+      "newCaseSha256": "2307538dd59f1514c532dd7b49644b2dc29a9208ffbb26bcf7af6d50433beee7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Release or seal reuses a committed nonce",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.seal-envelope.replay-after-restart",
+      "oldCaseSha256": "b0afdf79c23e2aab07b30a27ae63bf37b1cfa974c6e365fede446342bfd4950d",
+      "newCaseSha256": "0da1df6dfd741e64dc13fc6678af8222955e0333cd560f143c17a5cc425a0532",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "Agreement release and seal cannot reuse a nonce after restart",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    }
+  ]
+}

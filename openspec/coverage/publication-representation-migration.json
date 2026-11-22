@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "publication-representation-migration",
+  "originalDocumentationRevision": "115e8d1693e55351792cc43c19cb640fc31febb9",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "scope": "Versioned digest records, five portable provenance locators, and byte-identical fixture composition.",
+  "authorization": "None. Old review decisions, run observations and proof boundaries retain their original dates and scope.",
+  "classificationChanges": false,
+  "digestMapsVerified": {
+    "sourceSnapshotFiles": 1244,
+    "apiProposalSourceFiles": 27
+  },
+  "historicalArtifactLocatorContract": "External IDs identify retained private artifacts by digest; repository paths are root-relative and may identify historical bytes.",
+  "historicalObservations": "Prior input/envelope, patch, log and binary digests remain historical even if a current artifact has different representation.",
+  "rewrittenContentBindings": {
+    "openspec/coverage/source-snapshot.json": {
+      "originalSha256": "032b891c37cdbd82fefc4b41cfdbcec41dcb10467311e300104b5c6c6dd42c5a",
+      "portableSha256": "1f0fb17685d6b11729f244d5c3430051934653b035a955514bf367a88b79bb6c"
+    },
+    "openspec/coverage/source-task-coverage.json": {
+      "originalSha256": "021d2c376780f62c0733510d5d171822a420c2c6b7194ad899045b78ec193064",
+      "portableSha256": "bdd3adfebd2434567a37065786a5c854d622aeb5edc9df09ad78db0da1c6237e"
+    },
+    "openspec/coverage/runtime-api-gap-batch1-proposal.json": {
+      "originalSha256": "9c94478c57b5582f35bdc010379143e371f633dfc4f2d59cbe76939c10c53168",
+      "portableSha256": "5cac7e7ffaf16dcd29f9ea350cb3a0d75e41ef0b09b2d88c78f465fd3390bd7b"
+    },
+    "openspec/coverage/runtime-api-gap-batch1-acceptance.json": {
+      "originalSha256": "dcb2f57f67cdb9d08ca2b5b6fa06b3c93cc2f43039813cdf53308486b81d1016",
+      "portableSha256": "5bb0b435516927c7d90dabc3260166b5f6a4eb3b3a33775e7ea6fce318c4abdd"
+    },
+    "openspec/coverage/historical-case-proof-resolution.json": {
+      "originalSha256": "26033b3f4913f2a59c970489532f2607a84c6e361ce026e74b4afcf5967a8d80",
+      "portableSha256": "900e38377b37731ef4755017fa9344a2abb4cdef46abf951487317f09bafb55b"
+    },
+    "openspec/coverage/historical-case-proof-acceptance.json": {
+      "originalSha256": "06bf7e981cc1245b9940669104e08f326bec5d93086a930eb6e1b054731a7075",
+      "portableSha256": "934721b03d82420911189a0d43f88e395954d2b28bcc1fc0ccab6cb90be9bb7b"
+    },
+    "internal/operations/http_envelope_fixture_test.go": {
+      "originalSha256": "64cc38f3d6823819a77f893556fb46ae2f55f34948e0f1fa95f271ba7c7168dc",
+      "portableSha256": "bc1899a1c517ab5613d5469fbd49dcef387d10f8ba7cb5399d557233b4aeaaa7"
+    },
+    "openspec/coverage/runtime-api-http-test-candidate-batch2.json": {
+      "originalSha256": "62563e0d3913fbbcec19e274046dbbe314dce0619ef7dfb2492ecda4b4b29e1d",
+      "portableSha256": "d73365eb423f9103bec09e8321ebd7b497c2cc8d306b66147c73f12baaadd262"
+    },
+    "openspec/coverage/coverage-summary.json": {
+      "originalSha256": "c73763847a2b21497cf0223ccee60cb531812c039433a328e5aaa60afccd6ece",
+      "portableSha256": "2289688b067cdda8342ed9a69e166e992ea1e43975d2aaa7b80f2dfbc736c9f2"
+    },
+    "openspec/coverage/reconciled-cases.json": {
+      "originalSha256": "59ed02406cd75e2b4a997b64c69498adc7896f115c2bdec8dc9ea30db5a3f4eb",
+      "portableSha256": "3bc40c506313e2e9e8a83ef2a2871321155984e56444123a0b40ebe4437744c7"
+    }
+  }
+}

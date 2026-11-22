@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-recovery-contract-batch5-20261122",
+  "reviewedAtUTC": "2026-11-22T02:39:15.324029+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-source-text-with-three-broader-gaps-preserved",
+  "proposalPath": "openspec/coverage/recovery-contract-gap-batch5-proposal.json",
+  "proposalSha256": "3ce42bc54b1da42f42e68293aabc922c13bc078782f9bb4c3f49cb8c437f715f",
+  "scope": "Six exact source-supported contracts. Three receive related-only partial contracts; no lost-history replay guard, queue timing guarantee, independent lineage or physical qualification inferred.",
+  "cases": [
+    {
+      "caseId": "BMCASE-enrol-bootstrap-production-vs-legacy",
+      "oldCaseSha256": "eebfaff6341e2c34d830c442736caaa3b4eae151c1368dfaf6b41ec9d528edf5",
+      "newCaseSha256": "85e325d77c8604141e8a83116124d6f58e2f8b1a399965d0c2c1927092ce355a",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+          "requirementId": "KMS-ENROL-003",
+          "scenario": "Quorum schema enrolment fetches as sync and verifies in the parent",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/enrolment-and-config-publication/spec.md",
+          "requirementId": "KMS-ENROL-003",
+          "scenario": "Legacy lab enrolment adopts heartbeat state in the sync child",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "BMCASE-restore-sign-runs-on-node",
+      "oldCaseSha256": "a70ef4c6c7b6062d67ca114788efaf7d4bb3a0a0cb2cd02eb925f3595c135196",
+      "newCaseSha256": "4554faf3557a0ba4ec15c142f0ea68661c6d68bc7b1a47625652d557c91722ab",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+          "requirementId": "KMS-RESTORE-001",
+          "scenario": "On-node restore statement issuance refuses before reading the chain",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "BMCASE-restore-sign-statement-replay-after-loss",
+      "oldCaseSha256": "1d73414c4ad556945c4fe62bfca56f8a3da5c4880f6420d5f81df2cbb1e843c8",
+      "newCaseSha256": "63b7a855ab1d9c3b0c7799a19e3bfcac7540cdcb254d57b4f67ca789df56cea1",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+          "requirementId": "KMS-RESTORE-001",
+          "scenario": "Missing live member leaves statement single use to owner procedure",
+          "relation": "related_only"
+        }
+      ],
+      "remainingClass": "spec_gap"
+    },
+    {
+      "caseId": "BMCASE-local-lease-bounded-worker",
+      "oldCaseSha256": "c57ac8ce3a93a94e34e6fda900cffc77ff04b4d256cb8603263ebc11b416760e",
+      "newCaseSha256": "0af23d7228e628c58bf303322c4b1e4b6f9f7e6284b3eec15c8c5606b6529cb8",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+          "requirementId": "KMS-LEASE-001",
+          "scenario": "The local listener closes accepted connections beyond its active limits",
+          "relation": "related_only"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/runtime-leases-and-admission/spec.md",
+          "requirementId": "KMS-LEASE-001",
+          "scenario": "An incomplete local request releases its worker",
+          "relation": "related_only"
+        }
+      ],
+      "remainingClass": "spec_gap"
+    },
+    {
+      "caseId": "BMCASE-restore-run-already-exchanged-wrong-endpoint",
+      "oldCaseSha256": "4f701a92b4fbe88b464a2b53767acc95e07b6b0b91690fefef375b41cfee3590",
+      "newCaseSha256": "1f5bc396b02d908d488cdf008cf0ddda968997e0f259053e2bd8fdb3f08aef20",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+          "requirementId": "KMS-RESTORE-002",
+          "scenario": "Normal endpoint member mismatch keeps KMS stopped after exchange",
+          "relation": "related_only"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/recovery-and-restoration/spec.md",
+          "requirementId": "KMS-RESTORE-002",
+          "scenario": "Normal endpoint epoch must verify and match after exchange",
+          "relation": "related_only"
+        }
+      ],
+      "remainingClass": "spec_gap"
+    },
+    {
+      "caseId": "BMCASE-kms-start-base-vs-appliance",
+      "oldCaseSha256": "5e234a3f5bb89649a83cde3ec0b2f95e0262cb49c665af8ee07750e2fd94da76",
+      "newCaseSha256": "af3235f9cd39ebaddc5b7758a41ad5de032978d19da68a6eec459a02b60d336a",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+          "requirementId": "KMS-RUNTIME-001",
+          "scenario": "The common KMS unit uses the fixed configuration and operator provisioned credentials",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/baremetal/appliance-and-service-hardening/spec.md",
+          "requirementId": "KMS-HOST-005",
+          "scenario": "The appliance composes the common KMS unit with image and credential settings",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "KMS.restore.write-interruption",
+      "oldCaseSha256": "690c071a4980a043556cfabadbb5eefb4cd8f015ef6eaa61f4afe3c957aa5d14",
+      "newCaseSha256": "f6d3bbe5910b31eacc789d5041e73b6e21cd9f464a99af3f82545ef43c735b95",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+          "requirementId": "KMS-STATE-004",
+          "scenario": "Interrupted journal restoration can leave occupied destinations",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "COLLECTOR.receipt.receipt-freshness",
+      "oldCaseSha256": "b871758938d6944dde0524e203f03f6fe3eefc5e127022d8e3e3f7e3a7f0c204",
+      "newCaseSha256": "002da3ca2b2a464aac9da818a5aa55e56852db4bcebeac0069bbd91fd9ac11f2",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/audit-and-collector/spec.md",
+          "requirementId": "KMS-AUDIT-004",
+          "scenario": "A saved receipt gives no fresh collector observation",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "KMS.restore.missing-explicit-target",
+      "oldCaseSha256": "75ebd03c730bf873dbb5d42915a1b5645d52d266b1db727f16887ed5b35b2196",
+      "newCaseSha256": "994989ff167a8299b6525c3bbfef101f5f247b706a298082b22e07c6bc89528a",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+          "requirementId": "KMS-STATE-004",
+          "scenario": "Offline restore requires explicit authority key site and root",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    }
+  ]
+}

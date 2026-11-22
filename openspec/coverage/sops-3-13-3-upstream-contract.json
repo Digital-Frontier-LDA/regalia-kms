@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "status": "official-source-contract-comparison; binary-interop-not-proven",
+  "provenance": {
+    "repository": "getsops/sops",
+    "tag": "v3.13.3",
+    "commit": "26e2f4784ca61353082c32dbd987c25eda086dc9",
+    "tagResolvedVia": "GitHub connector fetch_commit using v3.13.3",
+    "commitUrl": "https://github.com/getsops/sops/commit/26e2f4784ca61353082c32dbd987c25eda086dc9",
+    "tagDescriptorUrl": "https://github.com/getsops/sops/blob/v3.13.3/keyservice/keyservice.proto",
+    "tagAndCommitDescriptorBytesEqual": true,
+    "files": {
+      "keyservice.proto": {
+        "repoPath": "keyservice/keyservice.proto",
+        "gitBlob": "3a471a34fd313bc63b77ce1104b125b8a187a0cf",
+        "sha256": "5e9f0b9e2521799b01ad08c7207bb9ba9815ce9d5a151ccd5160931a217c5844",
+        "size": 1138,
+        "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice.proto"
+      },
+      "keyservice.pb.go": {
+        "repoPath": "keyservice/keyservice.pb.go",
+        "gitBlob": "6314929c7d570e0d646891501247ebe9a3f59ddf",
+        "sha256": "fb25c89ee0e1eec53fa24e77fd34576aed95f1f103232258341c94cb96dbed3e",
+        "size": 29291,
+        "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice.pb.go"
+      },
+      "keyservice_grpc.pb.go": {
+        "repoPath": "keyservice/keyservice_grpc.pb.go",
+        "gitBlob": "d278b82d97ebfa9a46ab293cd7e0c850bd8de701",
+        "sha256": "e2aba26faa2ebde2884810ac3e5766b98b14d16f586e35cc8dd13ac62345d3bd",
+        "size": 5710,
+        "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice_grpc.pb.go"
+      }
+    }
+  },
+  "comparison": {
+    "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+    "upstreamTag": "v3.13.3",
+    "upstreamCommit": "26e2f4784ca61353082c32dbd987c25eda086dc9",
+    "workflowLinuxAmd64AssetUrl": "https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64",
+    "workflowExpectedAssetSha256": "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b",
+    "assetDownloadedOrExecuted": false,
+    "fields": [
+      {
+        "message": "Key",
+        "field": "kms_key",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 7,
+        "localDescriptorLine": 15
+      },
+      {
+        "message": "KmsKey",
+        "field": "arn",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 22,
+        "localDescriptorLine": 29
+      },
+      {
+        "message": "KmsKey",
+        "field": "role",
+        "fieldNumber": 2,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 23,
+        "localDescriptorLine": 30
+      },
+      {
+        "message": "KmsKey",
+        "field": "context",
+        "fieldNumber": 3,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 24,
+        "localDescriptorLine": 31
+      },
+      {
+        "message": "KmsKey",
+        "field": "aws_profile",
+        "fieldNumber": 4,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 25,
+        "localDescriptorLine": 32
+      },
+      {
+        "message": "EncryptRequest",
+        "field": "key",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 53,
+        "localDescriptorLine": 64
+      },
+      {
+        "message": "EncryptRequest",
+        "field": "plaintext",
+        "fieldNumber": 2,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 54,
+        "localDescriptorLine": 65
+      },
+      {
+        "message": "EncryptResponse",
+        "field": "ciphertext",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 58,
+        "localDescriptorLine": 85
+      },
+      {
+        "message": "DecryptRequest",
+        "field": "key",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 62,
+        "localDescriptorLine": 93
+      },
+      {
+        "message": "DecryptRequest",
+        "field": "ciphertext",
+        "fieldNumber": 2,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 63,
+        "localDescriptorLine": 94
+      },
+      {
+        "message": "DecryptResponse",
+        "field": "plaintext",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamSchemaLine": 67,
+        "localDescriptorLine": 114
+      },
+      {
+        "message": "KmsKey.ContextEntry",
+        "field": "key",
+        "fieldNumber": 1,
+        "wireType": "length-delimited",
+        "upstreamGeneratedGoLine": 225,
+        "localDescriptorLine": 31
+      },
+      {
+        "message": "KmsKey.ContextEntry",
+        "field": "value",
+        "fieldNumber": 2,
+        "wireType": "length-delimited",
+        "upstreamGeneratedGoLine": 225,
+        "localDescriptorLine": 31
+      }
+    ],
+    "methods": [
+      {
+        "service": "KeyService",
+        "name": "Encrypt",
+        "fullMethod": "/KeyService/Encrypt",
+        "request": "EncryptRequest",
+        "response": "EncryptResponse",
+        "streaming": false
+      },
+      {
+        "service": "KeyService",
+        "name": "Decrypt",
+        "fullMethod": "/KeyService/Decrypt",
+        "request": "DecryptRequest",
+        "response": "DecryptResponse",
+        "streaming": false
+      }
+    ],
+    "upstreamOneofVariants": [
+      {
+        "type": "KmsKey",
+        "field": "kms_key",
+        "number": 1,
+        "localSupported": true
+      },
+      {
+        "type": "PgpKey",
+        "field": "pgp_key",
+        "number": 2,
+        "localSupported": false
+      },
+      {
+        "type": "GcpKmsKey",
+        "field": "gcp_kms_key",
+        "number": 3,
+        "localSupported": false
+      },
+      {
+        "type": "AzureKeyVaultKey",
+        "field": "azure_keyvault_key",
+        "number": 4,
+        "localSupported": false
+      },
+      {
+        "type": "VaultKey",
+        "field": "vault_key",
+        "number": 5,
+        "localSupported": false
+      },
+      {
+        "type": "AgeKey",
+        "field": "age_key",
+        "number": 6,
+        "localSupported": false
+      },
+      {
+        "type": "HckmsKey",
+        "field": "hckms_key",
+        "number": 7,
+        "localSupported": false
+      }
+    ],
+    "descriptorDifferences": [
+      {
+        "surface": "Key.key_type",
+        "upstream": "Seven-arm oneof on fields 1 through 7",
+        "local": "One ordinary kms_key field at 1",
+        "impact": "Descriptor shape and mixed-arm precedence are not equivalent. Current comparison covers the single populated KMS arm only."
+      }
+    ],
+    "scope": "Matches the conforming kms_key-only wire subset. No equality for the entire Key oneof descriptor, cross-arm selection semantics, or non-KMS variants.",
+    "adapterRule": "Nonempty role and aws_profile decode on the wire but the adapter refuses either. Carrier and context rules remain in force."
+  },
+  "parentIndependentFetch": "Tag resolution and three immutable Git blobs independently matched via official GitHub connector",
+  "sourceBoundary": "External descriptor sources are not repository source blobs or a trusted execution producer."
+}

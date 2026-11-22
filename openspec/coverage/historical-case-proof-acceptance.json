@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "profile": "reviewed-grouped-historical-proof/v1",
+  "reviewId": "parent-historical-proof-20261122-2",
+  "reviewedAtUTC": "2026-11-22T01:06:39.003636+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "observedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+  "observedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "proposalPath": "openspec/coverage/historical-case-proof-resolution.json",
+  "proposalSha256": "900e38377b37731ef4755017fa9344a2abb4cdef46abf951487317f09bafb55b",
+  "status": "accepted-for-specific-historical-emulated-bindings-only",
+  "authorityBoundary": "Parent review record, not KMS operational authority or production CI producer authentication. Future checker must obtain approved digests independently.",
+  "classificationsChanged": false,
+  "cases": [
+    {
+      "caseId": "HTTP.sign.verified-signature-single",
+      "oldCanonicalCaseSha256": "34534ecd07b7e5f7ea66319598b7d5741341e407ead8904bd28c25db17314a47",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Signed response verifies against the configured key",
+        "relation": "direct",
+        "proposedContractScopedSha256": "f1f22922602dfcdd870b7165b32aef62e9d0f967d2bd4ff219616d25ed7c6c7f",
+        "proposedScenarioScopedSha256": "8c10d3f06dce8b4d09ac5910917409ea1ede43d29b32ff87dcb52f6f477ae79d"
+      },
+      "typedGroupsSha256": "9a8b94ebe27da14560beab0b97fc344afc3562b477e986182b4f67fa96d54322",
+      "logProofSha256": "0e882aa9312d557f1a11b2e45d64d4c051cd244a4260730c90093a4943d64f36",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "Only the successful authenticated single-node sign request and actual P-256 token-key signature verification.",
+      "outsideProof": "No attestation of response headers, all response metadata, other routes or physical key custody."
+    },
+    {
+      "caseId": "HTTP.sign.replay-after-restart",
+      "oldCanonicalCaseSha256": "836d072fd3d87366f1015b9accc9a353c859a06e4e8e68e01521b08f11890511",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "A spent signing nonce remains spent after daemon restart",
+        "relation": "direct",
+        "proposedContractScopedSha256": "b4ac9f374d91fde82abc89dc0c391f52d49a903d86ccbb5dfd1c14255a5ef028",
+        "proposedScenarioScopedSha256": "60f372d194a6b6b438abc48ed6c5e435fdd8199d788fd2c59b9a847dea736b3c"
+      },
+      "typedGroupsSha256": "331dfdb3df78bd4897faaf479bf15670d0d48597d2340a0f73ecd28b0bb82750",
+      "logProofSha256": "caf410b657957edf8801d4750118574ba8c4a31f9f94128d7c2a2a66a82e4bca",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "A previously successful, reused signing nonce still returns 409 after a ready real daemon restart with its existing journal.",
+      "outsideProof": "No quota, cause code, denial envelope, crash/disk loss or corruption coverage."
+    },
+    {
+      "caseId": "HTTP.ready.self-lease-real-daemon",
+      "oldCanonicalCaseSha256": "68387e769e4ecaa8b13037352f0f5440bbdbf55c3b15baa0c9d5cac72544df0f",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+        "requirementId": "KMS-RUNTIME-002",
+        "scenario": "Ready under a current single-node self-lease",
+        "relation": "direct",
+        "proposedContractScopedSha256": "3e534abb5c5f16da9313c9a2fa07f0910d7117e23f1682c0b98ee438c27fee66",
+        "proposedScenarioScopedSha256": "97f78aa20a35f2a898f714bafa75ba102e92b80d82871a8c18bbd98724d18dd0"
+      },
+      "typedGroupsSha256": "6e01830b58e7e9cc48a855c6822f7e2c0880827b4fa75e4576a1b68937898e94",
+      "logProofSha256": "11145843db57278b8e19211760872cb6dff87f94992579463289ec52e6846dc1",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "The ready endpoint returns HTTP 200 with valid self-issued single-mode lease in the configured fixture.",
+      "outsideProof": "Readiness does not establish signing or every other dependency/negative arm."
+    },
+    {
+      "caseId": "KMS.admission.real-revocation",
+      "oldCanonicalCaseSha256": "f646d2017a1d333423e9801adf4e853cad798cfe4ef9b3d1710289b0a76f3144",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+        "requirementId": "KMS-RUNTIME-002",
+        "scenario": "Signing is refused after observed non-serving admission",
+        "relation": "direct",
+        "proposedContractScopedSha256": "3e534abb5c5f16da9313c9a2fa07f0910d7117e23f1682c0b98ee438c27fee66",
+        "proposedScenarioScopedSha256": "54f2b83fb88afd804fc39eaa2e76151fe0493dfbbbbe3c26ff03f16c2e9e44e5"
+      },
+      "typedGroupsSha256": "a91d9ca5e812ad0ea33b573bcf0ddc379abbd6f9be6c252f340570e0e3d3de5e",
+      "logProofSha256": "e7a7fd82399bf49ed0bf39dc13fbb1ae3dbd41f11824a2003a9b22fddbf6e9bb",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "Specific trusted post-revocation zero document, subsequent correlated 503 and local deny/not-admitted within one lease; measurement is a separate line.",
+      "outsideProof": "No proof of all timing, readiness or in-flight branches, or collector receipt of the daemon SIGN record."
+    },
+    {
+      "caseId": "CI.gate.all-needs",
+      "oldCanonicalCaseSha256": "cafca6950368ea91811b072e6282ddb64a8f8ddac45da89255aa88684c2c0518",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "Complete run",
+        "relation": "direct",
+        "proposedContractScopedSha256": "6a58c7ad67ccc5852412cc7c4db8dceb5e77ca4d12bd3eb965c1a7478eedcff2",
+        "proposedScenarioScopedSha256": "7c06d64f5f98f974ede66108cc0fbb563ff4056a25852ad55a244e41816e9d3a"
+      },
+      "typedGroupsSha256": "892197025dc4f78ad19c02c9bc7c0eabf8e56ca07e60e301bfe836b451f65f55",
+      "logProofSha256": "b73b45fc73740bae7ad839a1c5998d71965bead1924521b7935610d245c9d991",
+      "hostedStepCorroborationSha256": "277c2ed44f67df6888829c15abcf7191a41cda3c19e28e152afc091d7e56d97c",
+      "acceptedScope": "The exact 18 named dependencies succeeded, non-draft was logged, and hosted gate step 2 completed successfully.",
+      "outsideProof": "No hosted negative branch execution, branch protection or complete job/head payload from the step endpoint."
+    },
+    {
+      "caseId": "CI.one-node.summary",
+      "oldCanonicalCaseSha256": "198b6062c4c69353d2437d4b84061f2e4ae41809a8f06a8d51c6c5f1e39fc700",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-002",
+        "scenario": "One-node summary complete",
+        "relation": "direct",
+        "proposedContractScopedSha256": "38de864eb4caac0f808c68c9dc48d46b61b4f09dc4f7dbb152b53a1fa55d944f",
+        "proposedScenarioScopedSha256": "ac6dd3844a5e5e174b3658d82e4f801085bbf3a2af4ff7503d5971191cc38b8f"
+      },
+      "typedGroupsSha256": "66bef703c722d799796b3275fb6d31aca282cdb3cba2692721216e0fb2e058b4",
+      "logProofSha256": "161552d07b844d7513ccc865aafd7822d0a83a85ec85fcf64a3b4374ec0695f6",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "Exact 26/0, abrmd marker and exactly one of each named TODO, plus successful hosted step 6.",
+      "outsideProof": "Both TODOs describe unexecuted work. No physical scope or assertion of all future coverage."
+    },
+    {
+      "caseId": "CI.one-node.owner-off",
+      "oldCanonicalCaseSha256": "956545752d3c882e0b581bcebede83a64b73cfc94e9b90cc6da05a4a40c3b4b7",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-007",
+        "scenario": "Owner listener stopped",
+        "relation": "direct",
+        "proposedContractScopedSha256": "da0b894aaa3574fb640c20397f2cbb0c49aad42c594d50030301162ccf4e6f26",
+        "proposedScenarioScopedSha256": "c24e9a55bca01917f758e98f1841c1b1d5ee499cbd0944924ce9347a6853564b"
+      },
+      "typedGroupsSha256": "798fea10c581ec14d308b6f988fcfd62c8d9ee5923efeb391979ca5d8fff8bc6",
+      "logProofSha256": "2bc76bd9172f5b0ab9e6e3295a0b76d6d6fe9e3b39f7f51e1e20730f5d6f1fb1",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "With owner listener stopped, pinned peer traffic occurred, the separate TCP probe refused and the real client delivered no key and exhausted its attempt.",
+      "outsideProof": "No generic timeout or mount failure accepted; signed response and marker apply to the positive case only."
+    },
+    {
+      "caseId": "CI.one-node.owner-on",
+      "oldCanonicalCaseSha256": "cfc4d68d28b0c011e33e950f326de889722b5860bf804ec8b0eac7d1f3aca0ad",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-007",
+        "scenario": "Owner listener enabled",
+        "relation": "direct",
+        "proposedContractScopedSha256": "da0b894aaa3574fb640c20397f2cbb0c49aad42c594d50030301162ccf4e6f26",
+        "proposedScenarioScopedSha256": "94c64909ead31cbcf87ef6558ca23ca294601387ccf9f06af2a14a99bcbe6703"
+      },
+      "typedGroupsSha256": "0ffc500ebc84c1484c53b2426870ff3a66d07887dfa03f9c83e5ecbe06249d8c",
+      "logProofSha256": "cc9c7d2af26a695ed4bc87e42f2aaf6b5fadf5e1a7de7044062b7c2d53c6c182",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "Same tunnel, real client mapped owner keyslot and read marker; the responder separately reports a signed send.",
+      "outsideProof": "No additional keyslots or physical unlock claimed. The SENT log does not on its own verify authentication or mapper success."
+    },
+    {
+      "caseId": "CI.one-node.collector-correlation",
+      "oldCanonicalCaseSha256": "b3f5c1b5a59ab8e1a1187b0438fc83207855951d89ec7f0d56fe8defb14804d2",
+      "newScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-003",
+        "scenario": "Collector holds the revoked node's exact renewal denial",
+        "relation": "direct",
+        "proposedContractScopedSha256": "77582bfad867467cc92f3ab9f53a9531b9adb8b233fc51f6691e8555eabee680",
+        "proposedScenarioScopedSha256": "db9e80494c22435a3b7060958b49385ca325887caf855b6facd47155445933f4"
+      },
+      "typedGroupsSha256": "fdf47aff0cfbd4f3102ca8de0e7880194e49599c65433292c727154d55df9757",
+      "logProofSha256": "65e124f4443fec3c3c7cdd6f35e99427f698932ca3d887865b27ba7b2da66c38",
+      "hostedStepCorroborationSha256": "c0abf563945a17b3f166714e71ee2827c1d8a35aa94e236180b71c6459265163",
+      "acceptedScope": "The exact epoch-2 peer-a admission-renew DENY and reason no lease matched collector hashes.",
+      "outsideProof": "No claim of every audit event; in particular, this is not collector proof of daemon SIGN denial or owner unlock."
+    }
+  ]
+}

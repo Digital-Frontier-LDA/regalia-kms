@@ -1,0 +1,4013 @@
+{
+  "schemaVersion": 1,
+  "active": false,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "baselineRevision": "125c231cdda3836c0267817e23b505b82918652f",
+  "upstreamProvenance": "upstream/provenance.json",
+  "comparison": "comparison.json",
+  "cases": [
+    {
+      "id": "SOPS.encrypt.wire",
+      "interfaceId": "SOPS.encrypt",
+      "facet": "compatibility",
+      "originalCaseSha256": "e48968482e9bc8cf2c6fe7a43c37dfe5fc2ac32b09a8428ab773bfb069798722",
+      "reconciledCaseSha256": "75c0bd99482331ff2e37d1081878ffa57952f418d814dcfba3e9b793b0623bfe",
+      "originalInput": "A client implements the pinned upstream SOPS key-service message syntax.",
+      "originalOutcome": "The descriptor exposes the exact method name and checked protobuf field mapping.",
+      "originalGapIds": [
+        {
+          "id": "GAP.SOPS.encrypt.wire",
+          "detail": "An exact OpenSpec RPC name/field/version compatibility scenario is missing. Live upstream execution artifact for this exact RPC was not in the archived subset."
+        }
+      ],
+      "originalScenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Local Encrypt protobuf mapping",
+          "relation": "related_only"
+        }
+      ],
+      "originalClassification": "spec_gap",
+      "originalEvidenceTier": "source_and_assertion_inspected",
+      "active": false,
+      "proposedClassificationIfAccepted": "test_gap",
+      "qualification": "An official v3.13.3 protobuf client uses the admitted kms_key-only carrier. Version, method and field mapping are retained; full release execution is separate.",
+      "proposedScenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Encrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "exact"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "nested-carrier-context"
+        }
+      ],
+      "enforcingSource": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice.go",
+          "sha256": "3fd68fe114877e55ca60a778e78a70102f19c0e0ba1c351451555f851e98df39",
+          "role": "enforcing_source",
+          "scope": "Local KmsKey-only envelope, map entry tags, message fields and registration",
+          "anchors": [
+            {
+              "line": 15,
+              "text": "\tKmsKey *KmsKey `protobuf:\"bytes,1,opt,name=kms_key,json=kmsKey,proto3\" json:\"kms_key,omitempty\"`",
+              "lineSha256": "697daecca1549090bca0dc40c35a9d357559903c6aebc480c864d61508952223"
+            },
+            {
+              "line": 29,
+              "text": "\tArn        string            `protobuf:\"bytes,1,opt,name=arn,proto3\" json:\"arn,omitempty\"`",
+              "lineSha256": "1d1ac853d964a934d6fb7affe640cbbfcc3ecae77de8b01de430bbb607b9daab"
+            },
+            {
+              "line": 30,
+              "text": "\tRole       string            `protobuf:\"bytes,2,opt,name=role,proto3\" json:\"role,omitempty\"`",
+              "lineSha256": "5ef9ec54a78c2291bff2644d855c27915b5d56479b9796b1d77b6cdbe899185e"
+            },
+            {
+              "line": 31,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            },
+            {
+              "line": 32,
+              "text": "\tAwsProfile string            `protobuf:\"bytes,4,opt,name=aws_profile,json=awsProfile,proto3\" json:\"aws_profile,omitempty\"`",
+              "lineSha256": "de9b5bfcc97ffd1c159a68b4342f01d9226899ae720399a416a861354da5e95c"
+            },
+            {
+              "line": 64,
+              "text": "\tKey       *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "10e86910519696d043b69e14450de9d83ec1459f3637a8d3d3c58aa433a13ea6"
+            },
+            {
+              "line": 65,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,2,opt,name=plaintext,proto3\"`",
+              "lineSha256": "0ca15275118a47088ed6bdf73811e5916381f9e4e3bbeb594511f6f4f821bbb7"
+            },
+            {
+              "line": 85,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,1,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "bf593945888078ddab7ba3c0488e429e9c81f7a087d08625495c91d7ce6b4a3c"
+            },
+            {
+              "line": 93,
+              "text": "\tKey        *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "65c347896f06f95fd2318a4e737241116786a1961322dc72c14dd6618b4042d9"
+            },
+            {
+              "line": 94,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,2,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "8417760af717ae903c42aebad21d66b06ffb85059f859a8399e366f4f32167fd"
+            },
+            {
+              "line": 114,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,1,opt,name=plaintext,proto3\"`",
+              "lineSha256": "d408588389d3410fa6855322a4b50bdc4711640f4c651596346ee05a25c896ba"
+            },
+            {
+              "line": 134,
+              "text": "\tr.RegisterService(&KeyService_ServiceDesc, s)",
+              "lineSha256": "630b855c8d2bd0a22664144de3aa83eb6138f1c07ca9db41de71e6c6861121dc"
+            },
+            {
+              "line": 157,
+              "text": "\tin := new(EncryptRequest)",
+              "lineSha256": "2a740c03af60a04cbf1dff9c39c5f81f5db0aa7ed1cfb79fde5cb563967f2509"
+            },
+            {
+              "line": 158,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 162,
+              "text": "\t\treturn s.(KeyServiceServer).Encrypt(ctx, in)",
+              "lineSha256": "b9e43b4050afce1fa0e685c80b0f3eb2afa62428db24a01ce24d1f3a7c0c0559"
+            },
+            {
+              "line": 164,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Encrypt\"}",
+              "lineSha256": "14549b9c3b374ef7e9dc811dde2817e7b2b81621dbf92f047b8c6f89a3dd272c"
+            },
+            {
+              "line": 176,
+              "text": "\tin := new(DecryptRequest)",
+              "lineSha256": "c79812cb93b8eeb55450edc1230dcc8e3886b911f35a00d7f4f9c177fae7c097"
+            },
+            {
+              "line": 177,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 181,
+              "text": "\t\treturn s.(KeyServiceServer).Decrypt(ctx, in)",
+              "lineSha256": "3537a54e7d61b0cb55705629b21f9ac65eec80e48919531faaf341cf7261bd6f"
+            },
+            {
+              "line": 183,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Decrypt\"}",
+              "lineSha256": "9977695a21b2b55acb705ff399dff779651d0c088d4289154d092ac7450305da"
+            },
+            {
+              "line": 189,
+              "text": "var KeyService_ServiceDesc = grpc.ServiceDesc{",
+              "lineSha256": "4bfb704e50acb76c6a02a2dafd84b2da5ba622a2303ee53a1da2544aadd62ec1"
+            },
+            {
+              "line": 190,
+              "text": "\tServiceName: \"KeyService\", HandlerType: (*KeyServiceServer)(nil),",
+              "lineSha256": "46303d48b0328d75374918cd5e7de461e153112c3e2f6a2a85cc9f6e8a98220a"
+            },
+            {
+              "line": 191,
+              "text": "\tMethods:  []grpc.MethodDesc{{MethodName: \"Encrypt\", Handler: encryptHandler}, {MethodName: \"Decrypt\", Handler: decryptHandler}},",
+              "lineSha256": "7e3c9062ebff6a8adedfcc90d16708ed84124083f82dd324916d500e04efd1e3"
+            },
+            {
+              "line": 192,
+              "text": "\tMetadata: \"keyservice/keyservice.proto\",",
+              "lineSha256": "0aa9715dd61db4008b07d320180bfdbd399e404655819e0d22a5f47bb120cd41"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/adapter.go",
+          "sha256": "86e42dcf643958b922a182b9ce161c80e1de0753bf26aaedc4c57269dd966024",
+          "role": "adapter_boundary",
+          "scope": "Local wrap/unwrap, missing KmsKey refusal, nonempty role/profile refusal and required context",
+          "anchors": [
+            {
+              "line": 52,
+              "text": "func (server *Server) Encrypt(ctx context.Context, input *sopsrpc.EncryptRequest) (*sopsrpc.EncryptResponse, error) {",
+              "lineSha256": "7490ded3101440ee602c8774ada18d9e86ec452fc70f3af3db5f5752506fe4be"
+            },
+            {
+              "line": 53,
+              "text": "\trequest, err := translate(input.GetKey(), \"wrap\", input.GetPlaintext())",
+              "lineSha256": "dbebdfaf08f823dcb0bbf45d12afcc5f4631513292a5fe288582f7cc324d0c6a"
+            },
+            {
+              "line": 54,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxDataKeyBytes {",
+              "lineSha256": "36cd281bed014fd0ec3afff916bffa38c5fee1dfa8761485bfa74c002ae73da6"
+            },
+            {
+              "line": 55,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 56,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 57,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 58,
+              "text": "\tresult, err := server.client.Wrap(ctx, request)",
+              "lineSha256": "7810a7a6f6e5a2a9ff9bf087140e2adf479454ab52b7c9c58e4206c0ccc0da79"
+            },
+            {
+              "line": 59,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxCiphertextBytes {",
+              "lineSha256": "9fbe4b3506e795d986c71fe9864c47dcf957074d5412e95b2f8ba9198c3ee719"
+            },
+            {
+              "line": 60,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 61,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 62,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 63,
+              "text": "\treturn &sopsrpc.EncryptResponse{Ciphertext: result}, nil",
+              "lineSha256": "90c5bca39ba3ebb4d47ec9a480dfd85288d7010d1ebf7778af16bf2ac681a063"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "func (server *Server) Decrypt(ctx context.Context, input *sopsrpc.DecryptRequest) (*sopsrpc.DecryptResponse, error) {",
+              "lineSha256": "f33863dd2d37f57007f1de9f4f68e6ab683d4540fc068ff3805af106bca8f63a"
+            },
+            {
+              "line": 67,
+              "text": "\trequest, err := translate(input.GetKey(), \"unwrap\", input.GetCiphertext())",
+              "lineSha256": "1d49ca7776b4e7947d11e816ded7117ece2b6c312902c977dc07aca98a987f95"
+            },
+            {
+              "line": 68,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxCiphertextBytes {",
+              "lineSha256": "3759912e756e4c66bf9d05ab8cb74e0bc84b3a73a93940550cf73e1f6f227a24"
+            },
+            {
+              "line": 69,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 70,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 71,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 72,
+              "text": "\tresult, err := server.client.Unwrap(ctx, request)",
+              "lineSha256": "221c0cc24e82cd273aed2ba6e150b050d37b21fe01346ec9fa30f18677e6dda9"
+            },
+            {
+              "line": 73,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxDataKeyBytes {",
+              "lineSha256": "f7807bef874db0ce6c299f07b4947c109f6c17a2fabe0fdbd1d8908433e17063"
+            },
+            {
+              "line": 74,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 75,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 76,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 77,
+              "text": "\treturn &sopsrpc.DecryptResponse{Plaintext: result}, nil",
+              "lineSha256": "9eb06e41efb34ad098ae40a729bf4c80224bd014c6566b8f96ca70cd4695cf46"
+            },
+            {
+              "line": 78,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 80,
+              "text": "func translate(key *sopsrpc.Key, operation string, data []byte) (Request, error) {",
+              "lineSha256": "26b6ab0faf6f5ce45f026d0a4daa31995e2fd567896329ed9311a293d3b6b2f9"
+            },
+            {
+              "line": 81,
+              "text": "\tif key == nil || key.GetKmsKey() == nil {",
+              "lineSha256": "530dcf88242ed17989bd19e830d63fbddd01943219c88811bd8c97c5f70bf3c2"
+            },
+            {
+              "line": 82,
+              "text": "\t\treturn Request{}, errors.New(\"unsupported SOPS key type\")",
+              "lineSha256": "44a97df06e9959872c473893293c734501da8eb2042965d5a46bc61b33fe3920"
+            },
+            {
+              "line": 83,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 84,
+              "text": "\tcarrier := key.GetKmsKey()",
+              "lineSha256": "503a9fac9b83b4a93a2b9530437b581e5f3bcfcd5fc74b673c27b6098ee0c709"
+            },
+            {
+              "line": 85,
+              "text": "\tif carrier.GetRole() != \"\" || carrier.GetAwsProfile() != \"\" {",
+              "lineSha256": "069698f651a3c4f594e4ab422541f444bc1bbafc0ec07dbe56ee8b1438f3d739"
+            },
+            {
+              "line": 86,
+              "text": "\t\treturn Request{}, errors.New(\"AWS role/profile fields are forbidden\")",
+              "lineSha256": "4d6dd2d1cffb687d6fa297ebf39b3542d9cfcf481393f392213e7f9e90c7fcb6"
+            },
+            {
+              "line": 87,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 88,
+              "text": "\tmatches := carrierPattern.FindStringSubmatch(carrier.GetArn())",
+              "lineSha256": "1a577eb1f5a4ebb5fcc338ec75fe150621a24ffdab360568894f4f76ec15c99b"
+            },
+            {
+              "line": 89,
+              "text": "\tif len(matches) != 2 {",
+              "lineSha256": "b161c780b23c2d4a40ab29278b289c6b1d689bc949ef551390959bea3eb729dd"
+            },
+            {
+              "line": 90,
+              "text": "\t\treturn Request{}, errors.New(\"invalid Regalia carrier ARN\")",
+              "lineSha256": "d5bcb783d9bf7066ccfcb7fe9debceeee1dff94254b56ac95a3c9aeb425ec428"
+            },
+            {
+              "line": 91,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 92,
+              "text": "\tvalues := carrier.GetContext()",
+              "lineSha256": "e637f4796adf76cc5ebbad55da56a55e463ac28f8373f6f4b2487a557f406eaa"
+            },
+            {
+              "line": 93,
+              "text": "\tif len(values) != 4 {",
+              "lineSha256": "43f45cc5f648534e77cbb56f7bc84ff907fc38b731d5c8625ca33d60c4fb3a5f"
+            },
+            {
+              "line": 94,
+              "text": "\t\treturn Request{}, errors.New(\"incomplete SOPS binding context\")",
+              "lineSha256": "38bead4d0897cea92aec498ddc4718869d3f4625e17aa72f85c56132aed992dd"
+            },
+            {
+              "line": 95,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 96,
+              "text": "\trepository, filePath := values[\"repository\"], values[\"path\"]",
+              "lineSha256": "52d0812878fb5d7f12fe1d66ffe20525c7c2e1cfde22531aaef075e88abf43a9"
+            },
+            {
+              "line": 97,
+              "text": "\tenvironment, purpose := values[\"environment\"], values[\"purpose\"]",
+              "lineSha256": "12348c9f42bf88fe6fe9cbbdbec20fe10fc2de619f5bef47026e9643ade5d81d"
+            },
+            {
+              "line": 98,
+              "text": "\tif !repositoryPattern.MatchString(repository) || !safePath(filePath) ||",
+              "lineSha256": "ff0e491ff57262147159b7ca04eb4bdee69eb9bf0e3777274c5a2adf245f1d9d"
+            },
+            {
+              "line": 99,
+              "text": "\t\t(environment != \"production\" && environment != \"staging\" && environment != \"development\") || !identifierPattern.MatchString(purpose) {",
+              "lineSha256": "08c156878f73c820372f83809c2a7e93e1d0a57f42b5125cc94de29c887a36e2"
+            },
+            {
+              "line": 100,
+              "text": "\t\treturn Request{}, errors.New(\"invalid SOPS binding context\")",
+              "lineSha256": "42338afc9cbbd179cb69a2562c99cbb7fb4743da753b9babae59fff33faee19f"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "fixture_plan",
+          "scope": "Local version/checksum configuration; no execution proof",
+          "anchors": [
+            {
+              "line": 758,
+              "text": "      - name: Install checksum-pinned SOPS 3.13.3",
+              "lineSha256": "b67e10e7baeab306de66afe966482eb1dbb0f7d06228b3fc459d2f2648f73176"
+            },
+            {
+              "line": 759,
+              "text": "        env:",
+              "lineSha256": "8aa7752e4827b4b806cbbd47f04d4530b7ac1e9795ce6a774304219756e36739"
+            },
+            {
+              "line": 760,
+              "text": "          SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b",
+              "lineSha256": "cf7df8a9c7e7b577ba30ef1b6f4b56d8f7248ff2ae4ae5b63d9e84ac5c8709c1"
+            },
+            {
+              "line": 761,
+              "text": "        run: |",
+              "lineSha256": "0ce4374895a16baf0990aa74eb6475ef6a3e6ef1066f623e760dd527a7b46503"
+            },
+            {
+              "line": 762,
+              "text": "          curl --fail --location --proto '=https' --tlsv1.2 \\",
+              "lineSha256": "5a760c7a8ac9bc8a6d5c5ec751ce8069e169eeb3ff55656d74bdc2e3afbf7602"
+            },
+            {
+              "line": 763,
+              "text": "            --output \"$RUNNER_TEMP/sops\" \\",
+              "lineSha256": "4c80c4e5a470ec1647c6deeeaa52ad2f7326da98a5512ccdf1c2ec62e915bbf7"
+            },
+            {
+              "line": 764,
+              "text": "            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64",
+              "lineSha256": "e801b7536f48e8772af7a2e2de4aab1a81d047a02d22653d0e0f6a4587480ace"
+            },
+            {
+              "line": 765,
+              "text": "          echo \"$SOPS_SHA256  $RUNNER_TEMP/sops\" | sha256sum --check --strict",
+              "lineSha256": "3cfd54a949c970109fdfc24ec78976e1126654cdcbce8b3084820b3169283bcf"
+            },
+            {
+              "line": 766,
+              "text": "          chmod 0755 \"$RUNNER_TEMP/sops\"",
+              "lineSha256": "0e8a608d2f3e66f2e5e5d1d27149d12ef025feb7387afa680d0532c150f7b1b0"
+            },
+            {
+              "line": 767,
+              "text": "          echo \"$RUNNER_TEMP\" >> \"$GITHUB_PATH\"",
+              "lineSha256": "d17a2deeb0a3c3373ff62e581fe827f87944d9d48a9403466a125ec18bfb16a4"
+            },
+            {
+              "line": 768,
+              "text": "          # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.",
+              "lineSha256": "f64b51cf6923d777d3c9decf1c0e51ec5e33cf024bd9c7bfbeadd615b7f347cb"
+            },
+            {
+              "line": 769,
+              "text": "          echo \"REGALIA_EXPECT_SOPS=1\" >> \"$GITHUB_ENV\"",
+              "lineSha256": "39f3c78d487e079603a6f7afc62d4a8cdf99d41113e90f31c314e8c6a10b621d"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/interop_test.go",
+          "sha256": "fd26b3fc7feac8fc2ae0573d02bcbaa2a8bdff5747deef9e54a4f4d9b315b312",
+          "role": "existing_fixture",
+          "scope": "Version guard allows 3.13.x, and the admitted-carrier fixture exercises both commands if available",
+          "anchors": [
+            {
+              "line": 61,
+              "text": "\tsops, err := exec.LookPath(\"sops\")",
+              "lineSha256": "b81cc1230ca4f481671e364f8fd66e0d2f9b8856978e17fcd0d44d5c67faeebe"
+            },
+            {
+              "line": 62,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 63,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tt.Fatalf(\"REGALIA_EXPECT_SOPS is set but sops is not on PATH: %v — the workflow sets that variable in the same step that installs a checksum-pinned SOPS 3.13.3, so its absence here means the install step and this module's tests are no longer in the same job and the interoperability check has silently stopped running\", err)",
+              "lineSha256": "fcecd72c02c559a2a2ee7a1ca677bd729f424bd8492f3192dc51e9455978fb52"
+            },
+            {
+              "line": 65,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 66,
+              "text": "\t\tt.Skip(\"sops binary is not installed\")",
+              "lineSha256": "a076600da7eb7b8b81b308bade7ae62b71677a16f2a9772cdf59df2df28fc89b"
+            },
+            {
+              "line": 67,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 68,
+              "text": "\tversion, err := exec.Command(sops, \"--version\").CombinedOutput()",
+              "lineSha256": "6c1eb6ffff360fac01facb8d34ad2bc79437e3899ca8d7d4d4a21327ceb469a2"
+            },
+            {
+              "line": 69,
+              "text": "\tif err != nil || !strings.Contains(string(version), \"sops 3.13.\") {",
+              "lineSha256": "e26d306152441b1bc4ac2209229a72ca55cb727c306f13c3c2c3b657b22bdca9"
+            },
+            {
+              "line": 70,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 71,
+              "text": "\t\t\tt.Fatalf(\"sops on PATH is not 3.13.x (%s, err=%v) — the workflow pins 3.13.3, so a different version here means the pin and this assertion have drifted apart\", version, err)",
+              "lineSha256": "374fe548295167a5a0782e520adf68e96966945fba4dae76a1a451471f542e31"
+            },
+            {
+              "line": 72,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 73,
+              "text": "\t\tt.Skipf(\"requires SOPS 3.13.x: %s\", version)",
+              "lineSha256": "37a941ab2acd523f1ab35f01b57e1782636013c8372f809589a9632bba90839e"
+            },
+            {
+              "line": 98,
+              "text": "\tkeyserviceURL := \"unix://\" + socket",
+              "lineSha256": "fe28c4bab1399444952bb0175d2ccb0e3cd258e68a8d791f2a5ba2b873c8733d"
+            },
+            {
+              "line": 99,
+              "text": "\tcarrier := \"arn:aws:kms:regalia:000000000000:key/production-sops\"",
+              "lineSha256": "a6cea8403ef73226c7b11fc05fe67813809d3208fbaf753e7d906263336ed473"
+            },
+            {
+              "line": 100,
+              "text": "\tbinding := \"repository:regalia-kms/infrastructure,path:clusters/prod/secrets.enc.yaml,environment:production,purpose:sops-data-key\"",
+              "lineSha256": "4488026b1cf42d4046906150ac29e22eafd43691b036c14b750f97fa08fd0194"
+            },
+            {
+              "line": 101,
+              "text": "\tencrypt := exec.Command(sops, \"--encrypt\", \"--kms\", carrier, \"--encryption-context\", binding,",
+              "lineSha256": "9a4bead766195c1ff7b110cba7a28b2e2c9a3e6fc27a4b1e816f761b65cf2993"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, plainPath)",
+              "lineSha256": "69a89cbdff4828ea1e7c1ac1893f863437a51a1232d4fdadaea56f64946d0714"
+            },
+            {
+              "line": 103,
+              "text": "\tencrypted, err := encrypt.CombinedOutput()",
+              "lineSha256": "a865bc850c79c4e3bc52eb9b6a882c82debb74d3e0ab7f468557c881416d2daa"
+            },
+            {
+              "line": 104,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 105,
+              "text": "\t\tt.Fatalf(\"sops encrypt: %v\\n%s\", err, encrypted)",
+              "lineSha256": "3360e109638c2dfdc7c8a3837540b3c941ec1404935f4fc5efed0ccf8dedbeb2"
+            },
+            {
+              "line": 106,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 107,
+              "text": "\tif err := os.WriteFile(encryptedPath, encrypted, 0o600); err != nil {",
+              "lineSha256": "391c1e9dd9bee6b2fd17294522ae2452a7358a6c7e315fd424cba818283c038b"
+            },
+            {
+              "line": 108,
+              "text": "\t\tt.Fatal(err)",
+              "lineSha256": "695e9de22ff928747da5b4ed640ce70255c2b2477e5ef843bb3826cb7b7bba99"
+            },
+            {
+              "line": 109,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 110,
+              "text": "\tdecrypt := exec.Command(sops, \"--decrypt\", \"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, encryptedPath)",
+              "lineSha256": "7d1359843eb1c302bb426bff9d289d2e7b7a6bdea09cb820ae1dddd4957d8e9f"
+            },
+            {
+              "line": 111,
+              "text": "\tdecrypted, err := decrypt.CombinedOutput()",
+              "lineSha256": "2fd49f3a425e8a07ad8b526eb559b9c9dd619287b1112e6028c2726ec02cf4bf"
+            },
+            {
+              "line": 112,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 113,
+              "text": "\t\tt.Fatalf(\"sops decrypt: %v\\n%s\", err, decrypted)",
+              "lineSha256": "d8f51e49d13692201bb6b33d9f62e2f8b61489c678bd1a15d46c017ae875ba97"
+            },
+            {
+              "line": 114,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 115,
+              "text": "\tif string(decrypted) != \"secret: value\\n\" {",
+              "lineSha256": "fd2cc35380b43473012c4b288bcaa182da403452b764dc5e2d3c2f4c0be153fb"
+            },
+            {
+              "line": 116,
+              "text": "\t\tt.Fatalf(\"decrypted = %q\", decrypted)",
+              "lineSha256": "f11bdebe2f6bb4579b9dea869ba2d1e0f74efc1476f0d093856873e4f38914cc"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.proto",
+          "sha256": "5e9f0b9e2521799b01ad08c7207bb9ba9815ce9d5a151ccd5160931a217c5844",
+          "role": "official_upstream_source",
+          "scope": "Official oneof variants, nested carrier and both RPC declarations",
+          "anchors": [
+            {
+              "line": 1,
+              "text": "syntax = \"proto3\";",
+              "lineSha256": "bf7901a1fd23ec4cee4e5e86db1e2586f5c6c623526319eb2ff68b74d15edad3"
+            },
+            {
+              "line": 3,
+              "text": "option go_package = \"./keyservice\";",
+              "lineSha256": "6ec5274f672df0afb7d214bec1893e8b25130a6a993abbfbcb4f09109d52b60d"
+            },
+            {
+              "line": 5,
+              "text": "message Key {",
+              "lineSha256": "ffe48fe12e8ea670d93ad42b4e85c59100fa5ed2d9b73a8c22e4f89a1355b310"
+            },
+            {
+              "line": 6,
+              "text": "\toneof key_type {",
+              "lineSha256": "0cb7a885aed374605d0410e0cca9933185386fadf7aaa60e4f1bf657fed38108"
+            },
+            {
+              "line": 7,
+              "text": "\t\tKmsKey kms_key = 1;",
+              "lineSha256": "ab889f887c071c1804e5fdb0f20b2b20e2dc2e8736cf29fc71785a6311e7bb05"
+            },
+            {
+              "line": 8,
+              "text": "\t\tPgpKey pgp_key = 2;",
+              "lineSha256": "8dab50811d63302a52266ce75d3f0b68226a1bf88fa3f31cab60558dfc62bcfc"
+            },
+            {
+              "line": 9,
+              "text": "\t\tGcpKmsKey gcp_kms_key = 3;",
+              "lineSha256": "ac642edcf6b8c24c681c74e52519a07efb42dd66e564c2dc466cd2a4151d86bc"
+            },
+            {
+              "line": 10,
+              "text": "\t\tAzureKeyVaultKey azure_keyvault_key = 4;",
+              "lineSha256": "170e3f8a195f9008f0978101422b8997aaccd9cbb58bf8425f41accde536873b"
+            },
+            {
+              "line": 11,
+              "text": "\t\tVaultKey vault_key = 5;",
+              "lineSha256": "85748c4f4cf5260423c2609931d1a1b2aea33b736dc3e83b2f677954a3d43889"
+            },
+            {
+              "line": 12,
+              "text": "\t\tAgeKey age_key = 6;",
+              "lineSha256": "1db6f7794655b8a4e1dd00bce9e0261fe0b2826f92784421c14dbdd706239ddd"
+            },
+            {
+              "line": 13,
+              "text": "\t\tHckmsKey hckms_key = 7;",
+              "lineSha256": "cfe22f32b2c12dc421aa60edddb579c02c0840bbc5e87706fe793462ca9d77ba"
+            },
+            {
+              "line": 14,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 21,
+              "text": "message KmsKey {",
+              "lineSha256": "2b44876d6ee0d1d5799943a9550b18d4623fca69142dcd37c31dbd5b85d07a9a"
+            },
+            {
+              "line": 22,
+              "text": "\tstring arn = 1;",
+              "lineSha256": "f1f6e2763f7339179b9b05ea89d69c82d4cc3c84e91e65139de11bc970b53e0f"
+            },
+            {
+              "line": 23,
+              "text": "\tstring role = 2;",
+              "lineSha256": "7307ba16d4e543cbe63db48530b65d0b1df8828d060f48f782f56861d2125824"
+            },
+            {
+              "line": 24,
+              "text": "\tmap<string, string> context = 3;",
+              "lineSha256": "6ac364156af72a228a96310dc111b44c7265b6a9752717d83cebaeb1f32e8d28"
+            },
+            {
+              "line": 25,
+              "text": "\tstring aws_profile = 4;",
+              "lineSha256": "f235524c777f56330fead7fe62057884e1275088d6b2f07b7ceff6c6fda94d34"
+            },
+            {
+              "line": 52,
+              "text": "message EncryptRequest {",
+              "lineSha256": "ccf0958c48ce05ee9a3ede4399d917d712461aaf13a04b5fd6a5369b681e3d77"
+            },
+            {
+              "line": 53,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 54,
+              "text": "\tbytes plaintext = 2;",
+              "lineSha256": "45d62e454795e6f7aa8473193d19a0965120fa0a9d5f417c7519f4ff19987463"
+            },
+            {
+              "line": 55,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 57,
+              "text": "message EncryptResponse {",
+              "lineSha256": "44c42c3513668f4104483905ae83271dca55fa042acf87a597fb8f9a029e5666"
+            },
+            {
+              "line": 58,
+              "text": "\tbytes ciphertext = 1;",
+              "lineSha256": "b2a5dd5025d3d86063b79908d7030ae90bfd7575f963b2549c2abaf78d2cd271"
+            },
+            {
+              "line": 59,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 61,
+              "text": "message DecryptRequest {",
+              "lineSha256": "47d3052f36ae6c200747bf17fef01cbbf46c893766ae3622ad7ad56d631dc0f7"
+            },
+            {
+              "line": 62,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 63,
+              "text": "\tbytes ciphertext = 2;",
+              "lineSha256": "53128e70a3e7465134149af3276fb60a58d7cd5a9fac86d65e2e2d7d811ec8bd"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "message DecryptResponse {",
+              "lineSha256": "235a5991130f2eabb9af989c21f9c2732e6ad9135dcef93ca3fc914c653929d1"
+            },
+            {
+              "line": 67,
+              "text": "\tbytes plaintext = 1;",
+              "lineSha256": "84cf6f3d4d91dd0b52d4018ec9e6230a11147c1547679a44436b89058c6538b9"
+            },
+            {
+              "line": 68,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 70,
+              "text": "service KeyService {",
+              "lineSha256": "6ba22710b8eab779d2bb113e3830430c32788a9532d50bfd7efa893e36b18787"
+            },
+            {
+              "line": 71,
+              "text": "\trpc Encrypt (EncryptRequest) returns (EncryptResponse) {}",
+              "lineSha256": "b23147a1cfd51e5556c427777b553ca278ef3a0d2d42c9131eddb1187f8520e0"
+            },
+            {
+              "line": 72,
+              "text": "\trpc Decrypt (DecryptRequest) returns (DecryptResponse) {}",
+              "lineSha256": "6042cc558d0dca296ce98a22fc603d4c2c027986375e0709c8822e81a3c48e17"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.pb.go",
+          "sha256": "fb25c89ee0e1eec53fa24e77fd34576aed95f1f103232258341c94cb96dbed3e",
+          "role": "official_upstream_generated_source",
+          "scope": "Map entries use key field 1 and value field 2",
+          "anchors": [
+            {
+              "line": 225,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice_grpc.pb.go",
+          "sha256": "e2aba26faa2ebde2884810ac3e5766b98b14d16f586e35cc8dd13ac62345d3bd",
+          "role": "official_upstream_generated_source",
+          "scope": "Full method constants and unary service descriptor",
+          "anchors": [
+            {
+              "line": 22,
+              "text": "\tKeyService_Encrypt_FullMethodName = \"/KeyService/Encrypt\"",
+              "lineSha256": "3fef8b411c8c2859f0da7e80b9da2f99eea2c40b1b8731cc8fa8b410d331af6c"
+            },
+            {
+              "line": 23,
+              "text": "\tKeyService_Decrypt_FullMethodName = \"/KeyService/Decrypt\"",
+              "lineSha256": "15c000e45e903e805d6e1b41eac08ebd162aa55ecb7781e3fe1102b0f7a0b973"
+            },
+            {
+              "line": 143,
+              "text": "\tServiceName: \"KeyService\",",
+              "lineSha256": "f9203a7a5ed6482d7279f3b16427f4b2229d56000923b63473a246afd1f319e1"
+            },
+            {
+              "line": 147,
+              "text": "\t\t\tMethodName: \"Encrypt\",",
+              "lineSha256": "06420ebe6292e609c3e632c678b6696d3ddc5d789c1d92ba4efe34e13aebee06"
+            },
+            {
+              "line": 151,
+              "text": "\t\t\tMethodName: \"Decrypt\",",
+              "lineSha256": "a15c74510e4751ce25ccfc981b582131836377c9bb7445367c75fde5b951bac8"
+            }
+          ]
+        }
+      ],
+      "assertionGroups": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_test.go",
+          "sha256": "2df7e0056c8637d98978b4ca64baf1665b624c3a05998b495bad3f2e440d5113",
+          "role": "existing_assertion",
+          "scope": "Actual service/method/metadata and handler assertions; no numeric field check",
+          "anchors": [
+            {
+              "line": 23,
+              "text": "\tif KeyService_ServiceDesc.ServiceName != \"KeyService\" {",
+              "lineSha256": "40b01fcb022a00cfdf09c7c89cfa5a1ca46f21dc9c8bdf284e626375edceaac7"
+            },
+            {
+              "line": 24,
+              "text": "\t\tt.Fatalf(\"ServiceName = %q, want \\\"KeyService\\\": sops dials by this name and would not find the service\",",
+              "lineSha256": "c1f7a03de4fbe8cce0faa76cbd459854b856aec88f6a10ae11a27c726c153a27"
+            },
+            {
+              "line": 25,
+              "text": "\t\t\tKeyService_ServiceDesc.ServiceName)",
+              "lineSha256": "11716a39eabb8ad7c6eb4b239c9a49652fb1fa72e68fadd9a4487f0450cb9e9d"
+            },
+            {
+              "line": 26,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 27,
+              "text": "\tif KeyService_ServiceDesc.Metadata != \"keyservice/keyservice.proto\" {",
+              "lineSha256": "2b282210a10ba84da105cd705e1260f45deb90f378805542b23fd7499060832c"
+            },
+            {
+              "line": 28,
+              "text": "\t\tt.Fatalf(\"Metadata = %v, want the upstream proto path\", KeyService_ServiceDesc.Metadata)",
+              "lineSha256": "1be93f78564bd708696742d02d4f141cdd8622dd0508ab5c7f897f5e965a5fc8"
+            },
+            {
+              "line": 29,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 30,
+              "text": "\tmethods := map[string]bool{}",
+              "lineSha256": "e4cf0cb9a2b66fef74b2a96cf5bf9ec0a7693230419dce800a56a59154651a3a"
+            },
+            {
+              "line": 31,
+              "text": "\tfor _, method := range KeyService_ServiceDesc.Methods {",
+              "lineSha256": "4db8cbd614f79b3c5ac09da7f8a6f292b287a1441742441d67896f46041d7986"
+            },
+            {
+              "line": 32,
+              "text": "\t\tif method.Handler == nil {",
+              "lineSha256": "c69118b23948f51f57048e87046cd47800b172b2d09a684b32d4105e1bcebccd"
+            },
+            {
+              "line": 33,
+              "text": "\t\t\tt.Fatalf(\"method %q has no handler\", method.MethodName)",
+              "lineSha256": "e134ebd334c90f6878f1a04780936f3516e51785183ba8943941fed70a0211ab"
+            },
+            {
+              "line": 34,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 35,
+              "text": "\t\tmethods[method.MethodName] = true",
+              "lineSha256": "97801efbb954e61cd2031182667ac5c7a310af45f9bcc3f19eeb8b30172f854c"
+            },
+            {
+              "line": 36,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 37,
+              "text": "\tfor _, want := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "4081e8a226a6592251b5d994e002ae81ad034c2633e86958381d33984123a716"
+            },
+            {
+              "line": 38,
+              "text": "\t\tif !methods[want] {",
+              "lineSha256": "f8337f743a585e38386970053547bf5d610619dfd711f81e2cbe775d42bae4e5"
+            },
+            {
+              "line": 39,
+              "text": "\t\t\tt.Fatalf(\"no %q method: sops calls /KeyService/%s and would get Unimplemented\", want, want)",
+              "lineSha256": "5ca3aaaa20c2144c7454b7b0c22422709250e3cfa920225dbaf843350eb9d1a6"
+            },
+            {
+              "line": 40,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 41,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 42,
+              "text": "\tif len(methods) != 2 {",
+              "lineSha256": "45e301e696a6c02e58efcd74cc2d361d4d66b00ba3c40bc4b03c956375d7d2bc"
+            },
+            {
+              "line": 43,
+              "text": "\t\tt.Fatalf(\"the descriptor exposes %d methods, want exactly Encrypt and Decrypt: %v\", len(methods), methods)",
+              "lineSha256": "260c520daaeba9fa2721e24f5c93eea137b48bc5b75d2cdcb5419af0943051b1"
+            },
+            {
+              "line": 44,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 45,
+              "text": "\tif KeyService_ServiceDesc.HandlerType == nil {",
+              "lineSha256": "000c098c7c09da348c245a539204b457c4c219ac275d637e83759dd2fcab8197"
+            },
+            {
+              "line": 46,
+              "text": "\t\tt.Fatal(\"HandlerType is nil, so grpc cannot type-check registrations\")",
+              "lineSha256": "7ffe26ccc07e9c7e1237816981e955599ab32039566b3fba463b83442b10e489"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Local deterministic serialization and decode of independent literals; includes map entry and role/profile tags",
+          "anchors": [
+            {
+              "line": 40,
+              "text": "\t\t{\"EncryptRequest\", sops3133RequestKey + \"1205636c656172\", &EncryptRequest{Key: key, Plaintext: []byte(\"clear\")}, &EncryptRequest{}},",
+              "lineSha256": "213efd4a7784d0dd5cfb67ec8c3bd07d1ffef649c07ab5ecbaf0e981588064fe"
+            },
+            {
+              "line": 41,
+              "text": "\t\t{\"EncryptResponse\", \"0a067365616c6564\", &EncryptResponse{Ciphertext: []byte(\"sealed\")}, &EncryptResponse{}},",
+              "lineSha256": "0be99c7cba4de487874aba9dcc9c708724961e2f90bbfca517e4b618f068b51b"
+            },
+            {
+              "line": 44,
+              "text": "\t\t// Wire-only control: these two nonempty fields are refused by the adapter's carrier rules.",
+              "lineSha256": "b4f7fc52c794a57b4007abfe634c4ad5528e85478da9ba267ac59607c8ed78f7"
+            },
+            {
+              "line": 45,
+              "text": "\t\t{\"RoleAndProfileTags\", \"0a0361726e1204726f6c651a060a016b120176220770726f66696c65\",",
+              "lineSha256": "4d31901401c17f7eb80ee0d57276f9e1ddcd86684c6e5f260b7d49aac07e0b87"
+            },
+            {
+              "line": 46,
+              "text": "\t\t\t&KmsKey{Arn: \"arn\", Role: \"role\", Context: map[string]string{\"k\": \"v\"}, AwsProfile: \"profile\"}, &KmsKey{}},",
+              "lineSha256": "2f99fd9fc02204aba981bbaab4c66dd702f3da833f062ef5ae11056c747289c9"
+            },
+            {
+              "line": 47,
+              "text": "\t} {",
+              "lineSha256": "c1ceb8b2113376ffee51d896fea8e25a87082f83afee041071315f639c79c50a"
+            },
+            {
+              "line": 48,
+              "text": "\t\tt.Run(tc.name, func(t *testing.T) {",
+              "lineSha256": "e515dc9cdb0e362932b29d16961409841a103ba4455b4d6df417c90450caa833"
+            },
+            {
+              "line": 49,
+              "text": "\t\t\twant, err := hex.DecodeString(tc.wire)",
+              "lineSha256": "cb32923b53f21243a61658183c6d5d579c65b15800e074aef2b8be229fa002fe"
+            },
+            {
+              "line": 50,
+              "text": "\t\t\tif err != nil {",
+              "lineSha256": "6303317aab8d58a8bcc5c2c1c7c83539df2328e9aa0ba6f8a5745517202ef0c7"
+            },
+            {
+              "line": 51,
+              "text": "\t\t\t\tt.Fatalf(\"invalid literal vector: %v\", err)",
+              "lineSha256": "a9a756eac38a0f549dbd812646b310b5bbe5cd07798744d1b45eccf91b969649"
+            },
+            {
+              "line": 52,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 53,
+              "text": "\t\t\tbuffer := proto.NewBuffer(nil)",
+              "lineSha256": "5fa1aa4557ae13c75830484baadec530ce4acd441f46e567b8d2c027a0bf06e7"
+            },
+            {
+              "line": 54,
+              "text": "\t\t\tbuffer.SetDeterministic(true)",
+              "lineSha256": "7fa753f9f3315426bb137dbf5c575a1d20522b293dac99841c5ab8c00f70cc34"
+            },
+            {
+              "line": 55,
+              "text": "\t\t\tif err := buffer.Marshal(tc.value); err != nil {",
+              "lineSha256": "b0510d105451da3ec5ee1e098b83286e7149942ecccb35a850f34df43b6aefdc"
+            },
+            {
+              "line": 56,
+              "text": "\t\t\t\tt.Fatalf(\"local deterministic marshal: %v\", err)",
+              "lineSha256": "c3f71f0d4b9a77432a2ec9e3b2c8a519bd554c9910c9806dda363e17604b5ecc"
+            },
+            {
+              "line": 57,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 58,
+              "text": "\t\t\tif !bytes.Equal(buffer.Bytes(), want) {",
+              "lineSha256": "9e8cf1cc8ae1c87f853a8e03ef4d42b07faa8ba2b62f0110763afc1c77c67ac4"
+            },
+            {
+              "line": 59,
+              "text": "\t\t\t\tt.Errorf(\"serialized wire differs from v3.13.3 vector: got %x, want %x\", buffer.Bytes(), want)",
+              "lineSha256": "e53323d01f2769ef42c358ab53495a848165fd5f0bab90dfd152177b4ec4eb52"
+            },
+            {
+              "line": 60,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 61,
+              "text": "\t\t\tif err := proto.Unmarshal(want, tc.decoded); err != nil {",
+              "lineSha256": "66abd75ddb978a105155edf1d5406acef07d97ede6e1e3fccc4bcf93b58989bb"
+            },
+            {
+              "line": 62,
+              "text": "\t\t\t\tt.Fatalf(\"decoding upstream literal: %v\", err)",
+              "lineSha256": "5c83c566fd15c0177723168cbc41d256039ce19d24272c92191e44c03c893340"
+            },
+            {
+              "line": 63,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tif !proto.Equal(tc.decoded, tc.value) {",
+              "lineSha256": "7b92c7c40c2beb0bf0f8c9a61c658765a3c43ce51d40df33444b199bf6313d0f"
+            },
+            {
+              "line": 65,
+              "text": "\t\t\t\tt.Errorf(\"decoded upstream literal differs: got %v, want %v\", tc.decoded, tc.value)",
+              "lineSha256": "beece97d8853720f5aec3cf3e495778724c63ef4f21429da9fa1ee1e131c6159"
+            },
+            {
+              "line": 66,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Registers on a real grpc.Server, checks exact unary full paths and interceptor identity with inert handler target",
+          "anchors": [
+            {
+              "line": 71,
+              "text": "func TestSOPS3133FullMethods(t *testing.T) {",
+              "lineSha256": "44f41e27608acaa286e997664db5c1a56942433c38e54349d8c5adda93d04d54"
+            },
+            {
+              "line": 72,
+              "text": "\tupstream := map[string]string{\"Encrypt\": \"/KeyService/Encrypt\", \"Decrypt\": \"/KeyService/Decrypt\"}",
+              "lineSha256": "a579d4ccb87e44b93930fbd071064e750529883af25ffe3a60686f5ffab79327"
+            },
+            {
+              "line": 73,
+              "text": "\tserver := grpc.NewServer()",
+              "lineSha256": "0591799bba8b1a94afafb70cd71a36b04440bf9f78f0e526b02e2098bdee5cde"
+            },
+            {
+              "line": 74,
+              "text": "\tRegisterKeyServiceServer(server, &recordingServer{})",
+              "lineSha256": "39074b9bb02a070f993d0dd525b115887c6d2ed3f9394af3a0806eee5a3c9d4b"
+            },
+            {
+              "line": 75,
+              "text": "\tregistered := map[string]bool{}",
+              "lineSha256": "0d71ff4b3ffa0632335b1253a565543591156c035da87cc12ed1fd7502e297c2"
+            },
+            {
+              "line": 76,
+              "text": "\tfor service, info := range server.GetServiceInfo() {",
+              "lineSha256": "926d5345a9cbcb924f0bb4d4ba5ebc8a03c807df10403e48e48010be164c6668"
+            },
+            {
+              "line": 77,
+              "text": "\t\tfor _, method := range info.Methods {",
+              "lineSha256": "b0da84099ec558a73b99d32bc98e552ddf06546568d657867fa3aaea46b71678"
+            },
+            {
+              "line": 78,
+              "text": "\t\t\tif !method.IsClientStream && !method.IsServerStream {",
+              "lineSha256": "e500637dda2a1e7b77ae6d027594b2206ceaa20931930fa22c1d0dd8e7a62715"
+            },
+            {
+              "line": 79,
+              "text": "\t\t\t\tregistered[\"/\"+service+\"/\"+method.Name] = true",
+              "lineSha256": "d033114ec9556c999b45d12c9c55f379e146185fbd90f149ae25f9ec9b458b29"
+            },
+            {
+              "line": 80,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 81,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 82,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 83,
+              "text": "\tfor _, method := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "7c4a6cf15ef8ce0630a430fffe4d47ec59844d17842f8401aa02f6fe0b8ee4f5"
+            },
+            {
+              "line": 84,
+              "text": "\t\tt.Run(method, func(t *testing.T) {",
+              "lineSha256": "59268a5dee85c9d8bbbdd605f2e6505e7f60f88a4757a621b2da9f96beea1b4b"
+            },
+            {
+              "line": 85,
+              "text": "\t\t\twant := upstream[method]",
+              "lineSha256": "bd8a111a458b4a787c8099465e1f8155a90e75128001a9fc12de13dbfd193b0d"
+            },
+            {
+              "line": 86,
+              "text": "\t\t\tif !registered[want] {",
+              "lineSha256": "ad74697073f7cacf1eed6bc58a7ba0066d140aeb64d943194061f8edf452cd5d"
+            },
+            {
+              "line": 87,
+              "text": "\t\t\t\tt.Fatalf(\"upstream unary method %q is not registered\", want)",
+              "lineSha256": "d9629e18252b6f2a951f3710324dc5af5fd7648d030385b47e58a39b5d2c158b"
+            },
+            {
+              "line": 88,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 89,
+              "text": "\t\t\treq := &recordingServer{}",
+              "lineSha256": "f8c63234c60a838b3bcb45426d09b0d0526164fd20485e21c30d19c2a2a3e54c"
+            },
+            {
+              "line": 90,
+              "text": "\t\t\tcalled := false",
+              "lineSha256": "5f3cd688b7816871fd7f1ed3164c07dc988be1a9c7a36dbbc49d21b8aca286ae"
+            },
+            {
+              "line": 91,
+              "text": "\t\t\tout, err := handlerFor(t, method)(req, context.Background(), func(any) error { return nil },",
+              "lineSha256": "8d8affe270ddb319b8af237fd15e2bfb6d66cb208feb1bac69814526db78d166"
+            },
+            {
+              "line": 92,
+              "text": "\t\t\t\tfunc(ctx context.Context, message any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {",
+              "lineSha256": "f32aa530166c64945633e4833002f53bc132b3cca33397a7c9cd25efbf5dad79"
+            },
+            {
+              "line": 93,
+              "text": "\t\t\t\t\tcalled = true",
+              "lineSha256": "1d151be4a8bac8719db72164c5cb259caec34b709a304eb95b183b75dee45d08"
+            },
+            {
+              "line": 94,
+              "text": "\t\t\t\t\tif info.FullMethod != want {",
+              "lineSha256": "2be69178be69925f9120e0961f646cb7a3bee821dcd30587b1afec76b893b689"
+            },
+            {
+              "line": 95,
+              "text": "\t\t\t\t\t\tt.Errorf(\"interceptor reports %q, want upstream method %q\", info.FullMethod, want)",
+              "lineSha256": "2f48a1e79e8e5be0205d01ce60aca460bb7de85dd7e8fe03c7577c67943a2df3"
+            },
+            {
+              "line": 96,
+              "text": "\t\t\t\t\t}",
+              "lineSha256": "0ba026ffd5b48649b6bfa2d1b007cba796e8abd05416c05edf59b0e46a00857d"
+            },
+            {
+              "line": 97,
+              "text": "\t\t\t\t\treturn next(ctx, message)",
+              "lineSha256": "6ea7382ac12960c6069e90f20143bdec5f16fd1eeda675ca6f9f165b65894a88"
+            },
+            {
+              "line": 98,
+              "text": "\t\t\t\t})",
+              "lineSha256": "63eb129eccf3082090f31298f4bf7b23b337026b70aba44b88f6124e76e12cf7"
+            },
+            {
+              "line": 99,
+              "text": "\t\t\tif err != nil || !called || out == nil {",
+              "lineSha256": "e332a327b822b49b56ce0d22bc269e25e6a1f2fecf2ade61158881abe5c53a66"
+            },
+            {
+              "line": 100,
+              "text": "\t\t\t\tt.Fatalf(\"unary dispatch did not complete: called=%t, result=%T, err=%v\", called, out, err)",
+              "lineSha256": "d303525d93eb0967d0701409a1a441e96ae42ce51aa9e6278d515931f8d542b3"
+            },
+            {
+              "line": 101,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\tif (req.encrypted != nil) != (method == \"Encrypt\") || (req.decrypted != nil) != (method == \"Decrypt\") {",
+              "lineSha256": "c8208a07077757a841f8987b933cc2825b219cebfe43d78264f0839db5eed745"
+            },
+            {
+              "line": 103,
+              "text": "\t\t\t\tt.Fatal(\"unary dispatch reached the wrong method\")",
+              "lineSha256": "17ce8ce5ed24884cf5bfc73b773c3ae1b5cb1b968e0c476946fcb0ef106c8d39"
+            },
+            {
+              "line": 104,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        }
+      ],
+      "candidateSubtests": {
+        "vectors": [
+          "EncryptRequest",
+          "EncryptResponse",
+          "RoleAndProfileTags"
+        ],
+        "methods": [
+          "Encrypt"
+        ]
+      },
+      "candidateRunRecord": "runs/results.json",
+      "remainingEvidenceGap": "No exact revision-bound hosted run of the checksum-pinned upstream binary or full release/KMS operation qualification. Existing v3.13.x guard is not exact-patch evidence. No active verification promotion.",
+      "compatibilityExclusions": "Six unsupported upstream Key oneof arms, mixed oneof precedence, nonempty role/profile acceptance, other releases, and full CLI/TLS/KMS behavior are outside the admitted subset.",
+      "scopeDecision": "Type mismatch is intentional at the enclosing oneof; no numeric mismatch for the admitted arm. Keep the named upstream scope in the exact scenario links."
+    },
+    {
+      "id": "SOPS.decrypt.wire",
+      "interfaceId": "SOPS.decrypt",
+      "facet": "compatibility",
+      "originalCaseSha256": "6228a95079deff5a92ec8d91aba22a980dae6c68b29171ab8c24683f5fbc8c26",
+      "reconciledCaseSha256": "2237154150bdca085c55e3b3307c93244d180b213988f1e27c81482adacc1f5a",
+      "originalInput": "A client implements the pinned upstream SOPS key-service message syntax.",
+      "originalOutcome": "The descriptor exposes the exact method name and checked protobuf field mapping.",
+      "originalGapIds": [
+        {
+          "id": "GAP.SOPS.decrypt.wire",
+          "detail": "An exact OpenSpec RPC name/field/version compatibility scenario is missing. Live upstream execution artifact for this exact RPC was not in the archived subset."
+        }
+      ],
+      "originalScenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Local Decrypt protobuf mapping",
+          "relation": "related_only"
+        }
+      ],
+      "originalClassification": "spec_gap",
+      "originalEvidenceTier": "source_and_assertion_inspected",
+      "active": false,
+      "proposedClassificationIfAccepted": "test_gap",
+      "qualification": "An official v3.13.3 protobuf client uses the admitted kms_key-only carrier. Version, method and field mapping are retained; full release execution is separate.",
+      "proposedScenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Decrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "exact"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "nested-carrier-context"
+        }
+      ],
+      "enforcingSource": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice.go",
+          "sha256": "3fd68fe114877e55ca60a778e78a70102f19c0e0ba1c351451555f851e98df39",
+          "role": "enforcing_source",
+          "scope": "Local KmsKey-only envelope, map entry tags, message fields and registration",
+          "anchors": [
+            {
+              "line": 15,
+              "text": "\tKmsKey *KmsKey `protobuf:\"bytes,1,opt,name=kms_key,json=kmsKey,proto3\" json:\"kms_key,omitempty\"`",
+              "lineSha256": "697daecca1549090bca0dc40c35a9d357559903c6aebc480c864d61508952223"
+            },
+            {
+              "line": 29,
+              "text": "\tArn        string            `protobuf:\"bytes,1,opt,name=arn,proto3\" json:\"arn,omitempty\"`",
+              "lineSha256": "1d1ac853d964a934d6fb7affe640cbbfcc3ecae77de8b01de430bbb607b9daab"
+            },
+            {
+              "line": 30,
+              "text": "\tRole       string            `protobuf:\"bytes,2,opt,name=role,proto3\" json:\"role,omitempty\"`",
+              "lineSha256": "5ef9ec54a78c2291bff2644d855c27915b5d56479b9796b1d77b6cdbe899185e"
+            },
+            {
+              "line": 31,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            },
+            {
+              "line": 32,
+              "text": "\tAwsProfile string            `protobuf:\"bytes,4,opt,name=aws_profile,json=awsProfile,proto3\" json:\"aws_profile,omitempty\"`",
+              "lineSha256": "de9b5bfcc97ffd1c159a68b4342f01d9226899ae720399a416a861354da5e95c"
+            },
+            {
+              "line": 64,
+              "text": "\tKey       *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "10e86910519696d043b69e14450de9d83ec1459f3637a8d3d3c58aa433a13ea6"
+            },
+            {
+              "line": 65,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,2,opt,name=plaintext,proto3\"`",
+              "lineSha256": "0ca15275118a47088ed6bdf73811e5916381f9e4e3bbeb594511f6f4f821bbb7"
+            },
+            {
+              "line": 85,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,1,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "bf593945888078ddab7ba3c0488e429e9c81f7a087d08625495c91d7ce6b4a3c"
+            },
+            {
+              "line": 93,
+              "text": "\tKey        *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "65c347896f06f95fd2318a4e737241116786a1961322dc72c14dd6618b4042d9"
+            },
+            {
+              "line": 94,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,2,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "8417760af717ae903c42aebad21d66b06ffb85059f859a8399e366f4f32167fd"
+            },
+            {
+              "line": 114,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,1,opt,name=plaintext,proto3\"`",
+              "lineSha256": "d408588389d3410fa6855322a4b50bdc4711640f4c651596346ee05a25c896ba"
+            },
+            {
+              "line": 134,
+              "text": "\tr.RegisterService(&KeyService_ServiceDesc, s)",
+              "lineSha256": "630b855c8d2bd0a22664144de3aa83eb6138f1c07ca9db41de71e6c6861121dc"
+            },
+            {
+              "line": 157,
+              "text": "\tin := new(EncryptRequest)",
+              "lineSha256": "2a740c03af60a04cbf1dff9c39c5f81f5db0aa7ed1cfb79fde5cb563967f2509"
+            },
+            {
+              "line": 158,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 162,
+              "text": "\t\treturn s.(KeyServiceServer).Encrypt(ctx, in)",
+              "lineSha256": "b9e43b4050afce1fa0e685c80b0f3eb2afa62428db24a01ce24d1f3a7c0c0559"
+            },
+            {
+              "line": 164,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Encrypt\"}",
+              "lineSha256": "14549b9c3b374ef7e9dc811dde2817e7b2b81621dbf92f047b8c6f89a3dd272c"
+            },
+            {
+              "line": 176,
+              "text": "\tin := new(DecryptRequest)",
+              "lineSha256": "c79812cb93b8eeb55450edc1230dcc8e3886b911f35a00d7f4f9c177fae7c097"
+            },
+            {
+              "line": 177,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 181,
+              "text": "\t\treturn s.(KeyServiceServer).Decrypt(ctx, in)",
+              "lineSha256": "3537a54e7d61b0cb55705629b21f9ac65eec80e48919531faaf341cf7261bd6f"
+            },
+            {
+              "line": 183,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Decrypt\"}",
+              "lineSha256": "9977695a21b2b55acb705ff399dff779651d0c088d4289154d092ac7450305da"
+            },
+            {
+              "line": 189,
+              "text": "var KeyService_ServiceDesc = grpc.ServiceDesc{",
+              "lineSha256": "4bfb704e50acb76c6a02a2dafd84b2da5ba622a2303ee53a1da2544aadd62ec1"
+            },
+            {
+              "line": 190,
+              "text": "\tServiceName: \"KeyService\", HandlerType: (*KeyServiceServer)(nil),",
+              "lineSha256": "46303d48b0328d75374918cd5e7de461e153112c3e2f6a2a85cc9f6e8a98220a"
+            },
+            {
+              "line": 191,
+              "text": "\tMethods:  []grpc.MethodDesc{{MethodName: \"Encrypt\", Handler: encryptHandler}, {MethodName: \"Decrypt\", Handler: decryptHandler}},",
+              "lineSha256": "7e3c9062ebff6a8adedfcc90d16708ed84124083f82dd324916d500e04efd1e3"
+            },
+            {
+              "line": 192,
+              "text": "\tMetadata: \"keyservice/keyservice.proto\",",
+              "lineSha256": "0aa9715dd61db4008b07d320180bfdbd399e404655819e0d22a5f47bb120cd41"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/adapter.go",
+          "sha256": "86e42dcf643958b922a182b9ce161c80e1de0753bf26aaedc4c57269dd966024",
+          "role": "adapter_boundary",
+          "scope": "Local wrap/unwrap, missing KmsKey refusal, nonempty role/profile refusal and required context",
+          "anchors": [
+            {
+              "line": 52,
+              "text": "func (server *Server) Encrypt(ctx context.Context, input *sopsrpc.EncryptRequest) (*sopsrpc.EncryptResponse, error) {",
+              "lineSha256": "7490ded3101440ee602c8774ada18d9e86ec452fc70f3af3db5f5752506fe4be"
+            },
+            {
+              "line": 53,
+              "text": "\trequest, err := translate(input.GetKey(), \"wrap\", input.GetPlaintext())",
+              "lineSha256": "dbebdfaf08f823dcb0bbf45d12afcc5f4631513292a5fe288582f7cc324d0c6a"
+            },
+            {
+              "line": 54,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxDataKeyBytes {",
+              "lineSha256": "36cd281bed014fd0ec3afff916bffa38c5fee1dfa8761485bfa74c002ae73da6"
+            },
+            {
+              "line": 55,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 56,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 57,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 58,
+              "text": "\tresult, err := server.client.Wrap(ctx, request)",
+              "lineSha256": "7810a7a6f6e5a2a9ff9bf087140e2adf479454ab52b7c9c58e4206c0ccc0da79"
+            },
+            {
+              "line": 59,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxCiphertextBytes {",
+              "lineSha256": "9fbe4b3506e795d986c71fe9864c47dcf957074d5412e95b2f8ba9198c3ee719"
+            },
+            {
+              "line": 60,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 61,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 62,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 63,
+              "text": "\treturn &sopsrpc.EncryptResponse{Ciphertext: result}, nil",
+              "lineSha256": "90c5bca39ba3ebb4d47ec9a480dfd85288d7010d1ebf7778af16bf2ac681a063"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "func (server *Server) Decrypt(ctx context.Context, input *sopsrpc.DecryptRequest) (*sopsrpc.DecryptResponse, error) {",
+              "lineSha256": "f33863dd2d37f57007f1de9f4f68e6ab683d4540fc068ff3805af106bca8f63a"
+            },
+            {
+              "line": 67,
+              "text": "\trequest, err := translate(input.GetKey(), \"unwrap\", input.GetCiphertext())",
+              "lineSha256": "1d49ca7776b4e7947d11e816ded7117ece2b6c312902c977dc07aca98a987f95"
+            },
+            {
+              "line": 68,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxCiphertextBytes {",
+              "lineSha256": "3759912e756e4c66bf9d05ab8cb74e0bc84b3a73a93940550cf73e1f6f227a24"
+            },
+            {
+              "line": 69,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 70,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 71,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 72,
+              "text": "\tresult, err := server.client.Unwrap(ctx, request)",
+              "lineSha256": "221c0cc24e82cd273aed2ba6e150b050d37b21fe01346ec9fa30f18677e6dda9"
+            },
+            {
+              "line": 73,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxDataKeyBytes {",
+              "lineSha256": "f7807bef874db0ce6c299f07b4947c109f6c17a2fabe0fdbd1d8908433e17063"
+            },
+            {
+              "line": 74,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 75,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 76,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 77,
+              "text": "\treturn &sopsrpc.DecryptResponse{Plaintext: result}, nil",
+              "lineSha256": "9eb06e41efb34ad098ae40a729bf4c80224bd014c6566b8f96ca70cd4695cf46"
+            },
+            {
+              "line": 78,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 80,
+              "text": "func translate(key *sopsrpc.Key, operation string, data []byte) (Request, error) {",
+              "lineSha256": "26b6ab0faf6f5ce45f026d0a4daa31995e2fd567896329ed9311a293d3b6b2f9"
+            },
+            {
+              "line": 81,
+              "text": "\tif key == nil || key.GetKmsKey() == nil {",
+              "lineSha256": "530dcf88242ed17989bd19e830d63fbddd01943219c88811bd8c97c5f70bf3c2"
+            },
+            {
+              "line": 82,
+              "text": "\t\treturn Request{}, errors.New(\"unsupported SOPS key type\")",
+              "lineSha256": "44a97df06e9959872c473893293c734501da8eb2042965d5a46bc61b33fe3920"
+            },
+            {
+              "line": 83,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 84,
+              "text": "\tcarrier := key.GetKmsKey()",
+              "lineSha256": "503a9fac9b83b4a93a2b9530437b581e5f3bcfcd5fc74b673c27b6098ee0c709"
+            },
+            {
+              "line": 85,
+              "text": "\tif carrier.GetRole() != \"\" || carrier.GetAwsProfile() != \"\" {",
+              "lineSha256": "069698f651a3c4f594e4ab422541f444bc1bbafc0ec07dbe56ee8b1438f3d739"
+            },
+            {
+              "line": 86,
+              "text": "\t\treturn Request{}, errors.New(\"AWS role/profile fields are forbidden\")",
+              "lineSha256": "4d6dd2d1cffb687d6fa297ebf39b3542d9cfcf481393f392213e7f9e90c7fcb6"
+            },
+            {
+              "line": 87,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 88,
+              "text": "\tmatches := carrierPattern.FindStringSubmatch(carrier.GetArn())",
+              "lineSha256": "1a577eb1f5a4ebb5fcc338ec75fe150621a24ffdab360568894f4f76ec15c99b"
+            },
+            {
+              "line": 89,
+              "text": "\tif len(matches) != 2 {",
+              "lineSha256": "b161c780b23c2d4a40ab29278b289c6b1d689bc949ef551390959bea3eb729dd"
+            },
+            {
+              "line": 90,
+              "text": "\t\treturn Request{}, errors.New(\"invalid Regalia carrier ARN\")",
+              "lineSha256": "d5bcb783d9bf7066ccfcb7fe9debceeee1dff94254b56ac95a3c9aeb425ec428"
+            },
+            {
+              "line": 91,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 92,
+              "text": "\tvalues := carrier.GetContext()",
+              "lineSha256": "e637f4796adf76cc5ebbad55da56a55e463ac28f8373f6f4b2487a557f406eaa"
+            },
+            {
+              "line": 93,
+              "text": "\tif len(values) != 4 {",
+              "lineSha256": "43f45cc5f648534e77cbb56f7bc84ff907fc38b731d5c8625ca33d60c4fb3a5f"
+            },
+            {
+              "line": 94,
+              "text": "\t\treturn Request{}, errors.New(\"incomplete SOPS binding context\")",
+              "lineSha256": "38bead4d0897cea92aec498ddc4718869d3f4625e17aa72f85c56132aed992dd"
+            },
+            {
+              "line": 95,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 96,
+              "text": "\trepository, filePath := values[\"repository\"], values[\"path\"]",
+              "lineSha256": "52d0812878fb5d7f12fe1d66ffe20525c7c2e1cfde22531aaef075e88abf43a9"
+            },
+            {
+              "line": 97,
+              "text": "\tenvironment, purpose := values[\"environment\"], values[\"purpose\"]",
+              "lineSha256": "12348c9f42bf88fe6fe9cbbdbec20fe10fc2de619f5bef47026e9643ade5d81d"
+            },
+            {
+              "line": 98,
+              "text": "\tif !repositoryPattern.MatchString(repository) || !safePath(filePath) ||",
+              "lineSha256": "ff0e491ff57262147159b7ca04eb4bdee69eb9bf0e3777274c5a2adf245f1d9d"
+            },
+            {
+              "line": 99,
+              "text": "\t\t(environment != \"production\" && environment != \"staging\" && environment != \"development\") || !identifierPattern.MatchString(purpose) {",
+              "lineSha256": "08c156878f73c820372f83809c2a7e93e1d0a57f42b5125cc94de29c887a36e2"
+            },
+            {
+              "line": 100,
+              "text": "\t\treturn Request{}, errors.New(\"invalid SOPS binding context\")",
+              "lineSha256": "42338afc9cbbd179cb69a2562c99cbb7fb4743da753b9babae59fff33faee19f"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "fixture_plan",
+          "scope": "Local version/checksum configuration; no execution proof",
+          "anchors": [
+            {
+              "line": 758,
+              "text": "      - name: Install checksum-pinned SOPS 3.13.3",
+              "lineSha256": "b67e10e7baeab306de66afe966482eb1dbb0f7d06228b3fc459d2f2648f73176"
+            },
+            {
+              "line": 759,
+              "text": "        env:",
+              "lineSha256": "8aa7752e4827b4b806cbbd47f04d4530b7ac1e9795ce6a774304219756e36739"
+            },
+            {
+              "line": 760,
+              "text": "          SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b",
+              "lineSha256": "cf7df8a9c7e7b577ba30ef1b6f4b56d8f7248ff2ae4ae5b63d9e84ac5c8709c1"
+            },
+            {
+              "line": 761,
+              "text": "        run: |",
+              "lineSha256": "0ce4374895a16baf0990aa74eb6475ef6a3e6ef1066f623e760dd527a7b46503"
+            },
+            {
+              "line": 762,
+              "text": "          curl --fail --location --proto '=https' --tlsv1.2 \\",
+              "lineSha256": "5a760c7a8ac9bc8a6d5c5ec751ce8069e169eeb3ff55656d74bdc2e3afbf7602"
+            },
+            {
+              "line": 763,
+              "text": "            --output \"$RUNNER_TEMP/sops\" \\",
+              "lineSha256": "4c80c4e5a470ec1647c6deeeaa52ad2f7326da98a5512ccdf1c2ec62e915bbf7"
+            },
+            {
+              "line": 764,
+              "text": "            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64",
+              "lineSha256": "e801b7536f48e8772af7a2e2de4aab1a81d047a02d22653d0e0f6a4587480ace"
+            },
+            {
+              "line": 765,
+              "text": "          echo \"$SOPS_SHA256  $RUNNER_TEMP/sops\" | sha256sum --check --strict",
+              "lineSha256": "3cfd54a949c970109fdfc24ec78976e1126654cdcbce8b3084820b3169283bcf"
+            },
+            {
+              "line": 766,
+              "text": "          chmod 0755 \"$RUNNER_TEMP/sops\"",
+              "lineSha256": "0e8a608d2f3e66f2e5e5d1d27149d12ef025feb7387afa680d0532c150f7b1b0"
+            },
+            {
+              "line": 767,
+              "text": "          echo \"$RUNNER_TEMP\" >> \"$GITHUB_PATH\"",
+              "lineSha256": "d17a2deeb0a3c3373ff62e581fe827f87944d9d48a9403466a125ec18bfb16a4"
+            },
+            {
+              "line": 768,
+              "text": "          # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.",
+              "lineSha256": "f64b51cf6923d777d3c9decf1c0e51ec5e33cf024bd9c7bfbeadd615b7f347cb"
+            },
+            {
+              "line": 769,
+              "text": "          echo \"REGALIA_EXPECT_SOPS=1\" >> \"$GITHUB_ENV\"",
+              "lineSha256": "39f3c78d487e079603a6f7afc62d4a8cdf99d41113e90f31c314e8c6a10b621d"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/interop_test.go",
+          "sha256": "fd26b3fc7feac8fc2ae0573d02bcbaa2a8bdff5747deef9e54a4f4d9b315b312",
+          "role": "existing_fixture",
+          "scope": "Version guard allows 3.13.x, and the admitted-carrier fixture exercises both commands if available",
+          "anchors": [
+            {
+              "line": 61,
+              "text": "\tsops, err := exec.LookPath(\"sops\")",
+              "lineSha256": "b81cc1230ca4f481671e364f8fd66e0d2f9b8856978e17fcd0d44d5c67faeebe"
+            },
+            {
+              "line": 62,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 63,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tt.Fatalf(\"REGALIA_EXPECT_SOPS is set but sops is not on PATH: %v — the workflow sets that variable in the same step that installs a checksum-pinned SOPS 3.13.3, so its absence here means the install step and this module's tests are no longer in the same job and the interoperability check has silently stopped running\", err)",
+              "lineSha256": "fcecd72c02c559a2a2ee7a1ca677bd729f424bd8492f3192dc51e9455978fb52"
+            },
+            {
+              "line": 65,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 66,
+              "text": "\t\tt.Skip(\"sops binary is not installed\")",
+              "lineSha256": "a076600da7eb7b8b81b308bade7ae62b71677a16f2a9772cdf59df2df28fc89b"
+            },
+            {
+              "line": 67,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 68,
+              "text": "\tversion, err := exec.Command(sops, \"--version\").CombinedOutput()",
+              "lineSha256": "6c1eb6ffff360fac01facb8d34ad2bc79437e3899ca8d7d4d4a21327ceb469a2"
+            },
+            {
+              "line": 69,
+              "text": "\tif err != nil || !strings.Contains(string(version), \"sops 3.13.\") {",
+              "lineSha256": "e26d306152441b1bc4ac2209229a72ca55cb727c306f13c3c2c3b657b22bdca9"
+            },
+            {
+              "line": 70,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 71,
+              "text": "\t\t\tt.Fatalf(\"sops on PATH is not 3.13.x (%s, err=%v) — the workflow pins 3.13.3, so a different version here means the pin and this assertion have drifted apart\", version, err)",
+              "lineSha256": "374fe548295167a5a0782e520adf68e96966945fba4dae76a1a451471f542e31"
+            },
+            {
+              "line": 72,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 73,
+              "text": "\t\tt.Skipf(\"requires SOPS 3.13.x: %s\", version)",
+              "lineSha256": "37a941ab2acd523f1ab35f01b57e1782636013c8372f809589a9632bba90839e"
+            },
+            {
+              "line": 98,
+              "text": "\tkeyserviceURL := \"unix://\" + socket",
+              "lineSha256": "fe28c4bab1399444952bb0175d2ccb0e3cd258e68a8d791f2a5ba2b873c8733d"
+            },
+            {
+              "line": 99,
+              "text": "\tcarrier := \"arn:aws:kms:regalia:000000000000:key/production-sops\"",
+              "lineSha256": "a6cea8403ef73226c7b11fc05fe67813809d3208fbaf753e7d906263336ed473"
+            },
+            {
+              "line": 100,
+              "text": "\tbinding := \"repository:regalia-kms/infrastructure,path:clusters/prod/secrets.enc.yaml,environment:production,purpose:sops-data-key\"",
+              "lineSha256": "4488026b1cf42d4046906150ac29e22eafd43691b036c14b750f97fa08fd0194"
+            },
+            {
+              "line": 101,
+              "text": "\tencrypt := exec.Command(sops, \"--encrypt\", \"--kms\", carrier, \"--encryption-context\", binding,",
+              "lineSha256": "9a4bead766195c1ff7b110cba7a28b2e2c9a3e6fc27a4b1e816f761b65cf2993"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, plainPath)",
+              "lineSha256": "69a89cbdff4828ea1e7c1ac1893f863437a51a1232d4fdadaea56f64946d0714"
+            },
+            {
+              "line": 103,
+              "text": "\tencrypted, err := encrypt.CombinedOutput()",
+              "lineSha256": "a865bc850c79c4e3bc52eb9b6a882c82debb74d3e0ab7f468557c881416d2daa"
+            },
+            {
+              "line": 104,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 105,
+              "text": "\t\tt.Fatalf(\"sops encrypt: %v\\n%s\", err, encrypted)",
+              "lineSha256": "3360e109638c2dfdc7c8a3837540b3c941ec1404935f4fc5efed0ccf8dedbeb2"
+            },
+            {
+              "line": 106,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 107,
+              "text": "\tif err := os.WriteFile(encryptedPath, encrypted, 0o600); err != nil {",
+              "lineSha256": "391c1e9dd9bee6b2fd17294522ae2452a7358a6c7e315fd424cba818283c038b"
+            },
+            {
+              "line": 108,
+              "text": "\t\tt.Fatal(err)",
+              "lineSha256": "695e9de22ff928747da5b4ed640ce70255c2b2477e5ef843bb3826cb7b7bba99"
+            },
+            {
+              "line": 109,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 110,
+              "text": "\tdecrypt := exec.Command(sops, \"--decrypt\", \"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, encryptedPath)",
+              "lineSha256": "7d1359843eb1c302bb426bff9d289d2e7b7a6bdea09cb820ae1dddd4957d8e9f"
+            },
+            {
+              "line": 111,
+              "text": "\tdecrypted, err := decrypt.CombinedOutput()",
+              "lineSha256": "2fd49f3a425e8a07ad8b526eb559b9c9dd619287b1112e6028c2726ec02cf4bf"
+            },
+            {
+              "line": 112,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 113,
+              "text": "\t\tt.Fatalf(\"sops decrypt: %v\\n%s\", err, decrypted)",
+              "lineSha256": "d8f51e49d13692201bb6b33d9f62e2f8b61489c678bd1a15d46c017ae875ba97"
+            },
+            {
+              "line": 114,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 115,
+              "text": "\tif string(decrypted) != \"secret: value\\n\" {",
+              "lineSha256": "fd2cc35380b43473012c4b288bcaa182da403452b764dc5e2d3c2f4c0be153fb"
+            },
+            {
+              "line": 116,
+              "text": "\t\tt.Fatalf(\"decrypted = %q\", decrypted)",
+              "lineSha256": "f11bdebe2f6bb4579b9dea869ba2d1e0f74efc1476f0d093856873e4f38914cc"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.proto",
+          "sha256": "5e9f0b9e2521799b01ad08c7207bb9ba9815ce9d5a151ccd5160931a217c5844",
+          "role": "official_upstream_source",
+          "scope": "Official oneof variants, nested carrier and both RPC declarations",
+          "anchors": [
+            {
+              "line": 1,
+              "text": "syntax = \"proto3\";",
+              "lineSha256": "bf7901a1fd23ec4cee4e5e86db1e2586f5c6c623526319eb2ff68b74d15edad3"
+            },
+            {
+              "line": 3,
+              "text": "option go_package = \"./keyservice\";",
+              "lineSha256": "6ec5274f672df0afb7d214bec1893e8b25130a6a993abbfbcb4f09109d52b60d"
+            },
+            {
+              "line": 5,
+              "text": "message Key {",
+              "lineSha256": "ffe48fe12e8ea670d93ad42b4e85c59100fa5ed2d9b73a8c22e4f89a1355b310"
+            },
+            {
+              "line": 6,
+              "text": "\toneof key_type {",
+              "lineSha256": "0cb7a885aed374605d0410e0cca9933185386fadf7aaa60e4f1bf657fed38108"
+            },
+            {
+              "line": 7,
+              "text": "\t\tKmsKey kms_key = 1;",
+              "lineSha256": "ab889f887c071c1804e5fdb0f20b2b20e2dc2e8736cf29fc71785a6311e7bb05"
+            },
+            {
+              "line": 8,
+              "text": "\t\tPgpKey pgp_key = 2;",
+              "lineSha256": "8dab50811d63302a52266ce75d3f0b68226a1bf88fa3f31cab60558dfc62bcfc"
+            },
+            {
+              "line": 9,
+              "text": "\t\tGcpKmsKey gcp_kms_key = 3;",
+              "lineSha256": "ac642edcf6b8c24c681c74e52519a07efb42dd66e564c2dc466cd2a4151d86bc"
+            },
+            {
+              "line": 10,
+              "text": "\t\tAzureKeyVaultKey azure_keyvault_key = 4;",
+              "lineSha256": "170e3f8a195f9008f0978101422b8997aaccd9cbb58bf8425f41accde536873b"
+            },
+            {
+              "line": 11,
+              "text": "\t\tVaultKey vault_key = 5;",
+              "lineSha256": "85748c4f4cf5260423c2609931d1a1b2aea33b736dc3e83b2f677954a3d43889"
+            },
+            {
+              "line": 12,
+              "text": "\t\tAgeKey age_key = 6;",
+              "lineSha256": "1db6f7794655b8a4e1dd00bce9e0261fe0b2826f92784421c14dbdd706239ddd"
+            },
+            {
+              "line": 13,
+              "text": "\t\tHckmsKey hckms_key = 7;",
+              "lineSha256": "cfe22f32b2c12dc421aa60edddb579c02c0840bbc5e87706fe793462ca9d77ba"
+            },
+            {
+              "line": 14,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 21,
+              "text": "message KmsKey {",
+              "lineSha256": "2b44876d6ee0d1d5799943a9550b18d4623fca69142dcd37c31dbd5b85d07a9a"
+            },
+            {
+              "line": 22,
+              "text": "\tstring arn = 1;",
+              "lineSha256": "f1f6e2763f7339179b9b05ea89d69c82d4cc3c84e91e65139de11bc970b53e0f"
+            },
+            {
+              "line": 23,
+              "text": "\tstring role = 2;",
+              "lineSha256": "7307ba16d4e543cbe63db48530b65d0b1df8828d060f48f782f56861d2125824"
+            },
+            {
+              "line": 24,
+              "text": "\tmap<string, string> context = 3;",
+              "lineSha256": "6ac364156af72a228a96310dc111b44c7265b6a9752717d83cebaeb1f32e8d28"
+            },
+            {
+              "line": 25,
+              "text": "\tstring aws_profile = 4;",
+              "lineSha256": "f235524c777f56330fead7fe62057884e1275088d6b2f07b7ceff6c6fda94d34"
+            },
+            {
+              "line": 52,
+              "text": "message EncryptRequest {",
+              "lineSha256": "ccf0958c48ce05ee9a3ede4399d917d712461aaf13a04b5fd6a5369b681e3d77"
+            },
+            {
+              "line": 53,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 54,
+              "text": "\tbytes plaintext = 2;",
+              "lineSha256": "45d62e454795e6f7aa8473193d19a0965120fa0a9d5f417c7519f4ff19987463"
+            },
+            {
+              "line": 55,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 57,
+              "text": "message EncryptResponse {",
+              "lineSha256": "44c42c3513668f4104483905ae83271dca55fa042acf87a597fb8f9a029e5666"
+            },
+            {
+              "line": 58,
+              "text": "\tbytes ciphertext = 1;",
+              "lineSha256": "b2a5dd5025d3d86063b79908d7030ae90bfd7575f963b2549c2abaf78d2cd271"
+            },
+            {
+              "line": 59,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 61,
+              "text": "message DecryptRequest {",
+              "lineSha256": "47d3052f36ae6c200747bf17fef01cbbf46c893766ae3622ad7ad56d631dc0f7"
+            },
+            {
+              "line": 62,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 63,
+              "text": "\tbytes ciphertext = 2;",
+              "lineSha256": "53128e70a3e7465134149af3276fb60a58d7cd5a9fac86d65e2e2d7d811ec8bd"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "message DecryptResponse {",
+              "lineSha256": "235a5991130f2eabb9af989c21f9c2732e6ad9135dcef93ca3fc914c653929d1"
+            },
+            {
+              "line": 67,
+              "text": "\tbytes plaintext = 1;",
+              "lineSha256": "84cf6f3d4d91dd0b52d4018ec9e6230a11147c1547679a44436b89058c6538b9"
+            },
+            {
+              "line": 68,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 70,
+              "text": "service KeyService {",
+              "lineSha256": "6ba22710b8eab779d2bb113e3830430c32788a9532d50bfd7efa893e36b18787"
+            },
+            {
+              "line": 71,
+              "text": "\trpc Encrypt (EncryptRequest) returns (EncryptResponse) {}",
+              "lineSha256": "b23147a1cfd51e5556c427777b553ca278ef3a0d2d42c9131eddb1187f8520e0"
+            },
+            {
+              "line": 72,
+              "text": "\trpc Decrypt (DecryptRequest) returns (DecryptResponse) {}",
+              "lineSha256": "6042cc558d0dca296ce98a22fc603d4c2c027986375e0709c8822e81a3c48e17"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.pb.go",
+          "sha256": "fb25c89ee0e1eec53fa24e77fd34576aed95f1f103232258341c94cb96dbed3e",
+          "role": "official_upstream_generated_source",
+          "scope": "Map entries use key field 1 and value field 2",
+          "anchors": [
+            {
+              "line": 225,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice_grpc.pb.go",
+          "sha256": "e2aba26faa2ebde2884810ac3e5766b98b14d16f586e35cc8dd13ac62345d3bd",
+          "role": "official_upstream_generated_source",
+          "scope": "Full method constants and unary service descriptor",
+          "anchors": [
+            {
+              "line": 22,
+              "text": "\tKeyService_Encrypt_FullMethodName = \"/KeyService/Encrypt\"",
+              "lineSha256": "3fef8b411c8c2859f0da7e80b9da2f99eea2c40b1b8731cc8fa8b410d331af6c"
+            },
+            {
+              "line": 23,
+              "text": "\tKeyService_Decrypt_FullMethodName = \"/KeyService/Decrypt\"",
+              "lineSha256": "15c000e45e903e805d6e1b41eac08ebd162aa55ecb7781e3fe1102b0f7a0b973"
+            },
+            {
+              "line": 143,
+              "text": "\tServiceName: \"KeyService\",",
+              "lineSha256": "f9203a7a5ed6482d7279f3b16427f4b2229d56000923b63473a246afd1f319e1"
+            },
+            {
+              "line": 147,
+              "text": "\t\t\tMethodName: \"Encrypt\",",
+              "lineSha256": "06420ebe6292e609c3e632c678b6696d3ddc5d789c1d92ba4efe34e13aebee06"
+            },
+            {
+              "line": 151,
+              "text": "\t\t\tMethodName: \"Decrypt\",",
+              "lineSha256": "a15c74510e4751ce25ccfc981b582131836377c9bb7445367c75fde5b951bac8"
+            }
+          ]
+        }
+      ],
+      "assertionGroups": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_test.go",
+          "sha256": "2df7e0056c8637d98978b4ca64baf1665b624c3a05998b495bad3f2e440d5113",
+          "role": "existing_assertion",
+          "scope": "Actual service/method/metadata and handler assertions; no numeric field check",
+          "anchors": [
+            {
+              "line": 23,
+              "text": "\tif KeyService_ServiceDesc.ServiceName != \"KeyService\" {",
+              "lineSha256": "40b01fcb022a00cfdf09c7c89cfa5a1ca46f21dc9c8bdf284e626375edceaac7"
+            },
+            {
+              "line": 24,
+              "text": "\t\tt.Fatalf(\"ServiceName = %q, want \\\"KeyService\\\": sops dials by this name and would not find the service\",",
+              "lineSha256": "c1f7a03de4fbe8cce0faa76cbd459854b856aec88f6a10ae11a27c726c153a27"
+            },
+            {
+              "line": 25,
+              "text": "\t\t\tKeyService_ServiceDesc.ServiceName)",
+              "lineSha256": "11716a39eabb8ad7c6eb4b239c9a49652fb1fa72e68fadd9a4487f0450cb9e9d"
+            },
+            {
+              "line": 26,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 27,
+              "text": "\tif KeyService_ServiceDesc.Metadata != \"keyservice/keyservice.proto\" {",
+              "lineSha256": "2b282210a10ba84da105cd705e1260f45deb90f378805542b23fd7499060832c"
+            },
+            {
+              "line": 28,
+              "text": "\t\tt.Fatalf(\"Metadata = %v, want the upstream proto path\", KeyService_ServiceDesc.Metadata)",
+              "lineSha256": "1be93f78564bd708696742d02d4f141cdd8622dd0508ab5c7f897f5e965a5fc8"
+            },
+            {
+              "line": 29,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 30,
+              "text": "\tmethods := map[string]bool{}",
+              "lineSha256": "e4cf0cb9a2b66fef74b2a96cf5bf9ec0a7693230419dce800a56a59154651a3a"
+            },
+            {
+              "line": 31,
+              "text": "\tfor _, method := range KeyService_ServiceDesc.Methods {",
+              "lineSha256": "4db8cbd614f79b3c5ac09da7f8a6f292b287a1441742441d67896f46041d7986"
+            },
+            {
+              "line": 32,
+              "text": "\t\tif method.Handler == nil {",
+              "lineSha256": "c69118b23948f51f57048e87046cd47800b172b2d09a684b32d4105e1bcebccd"
+            },
+            {
+              "line": 33,
+              "text": "\t\t\tt.Fatalf(\"method %q has no handler\", method.MethodName)",
+              "lineSha256": "e134ebd334c90f6878f1a04780936f3516e51785183ba8943941fed70a0211ab"
+            },
+            {
+              "line": 34,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 35,
+              "text": "\t\tmethods[method.MethodName] = true",
+              "lineSha256": "97801efbb954e61cd2031182667ac5c7a310af45f9bcc3f19eeb8b30172f854c"
+            },
+            {
+              "line": 36,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 37,
+              "text": "\tfor _, want := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "4081e8a226a6592251b5d994e002ae81ad034c2633e86958381d33984123a716"
+            },
+            {
+              "line": 38,
+              "text": "\t\tif !methods[want] {",
+              "lineSha256": "f8337f743a585e38386970053547bf5d610619dfd711f81e2cbe775d42bae4e5"
+            },
+            {
+              "line": 39,
+              "text": "\t\t\tt.Fatalf(\"no %q method: sops calls /KeyService/%s and would get Unimplemented\", want, want)",
+              "lineSha256": "5ca3aaaa20c2144c7454b7b0c22422709250e3cfa920225dbaf843350eb9d1a6"
+            },
+            {
+              "line": 40,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 41,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 42,
+              "text": "\tif len(methods) != 2 {",
+              "lineSha256": "45e301e696a6c02e58efcd74cc2d361d4d66b00ba3c40bc4b03c956375d7d2bc"
+            },
+            {
+              "line": 43,
+              "text": "\t\tt.Fatalf(\"the descriptor exposes %d methods, want exactly Encrypt and Decrypt: %v\", len(methods), methods)",
+              "lineSha256": "260c520daaeba9fa2721e24f5c93eea137b48bc5b75d2cdcb5419af0943051b1"
+            },
+            {
+              "line": 44,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 45,
+              "text": "\tif KeyService_ServiceDesc.HandlerType == nil {",
+              "lineSha256": "000c098c7c09da348c245a539204b457c4c219ac275d637e83759dd2fcab8197"
+            },
+            {
+              "line": 46,
+              "text": "\t\tt.Fatal(\"HandlerType is nil, so grpc cannot type-check registrations\")",
+              "lineSha256": "7ffe26ccc07e9c7e1237816981e955599ab32039566b3fba463b83442b10e489"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Local deterministic serialization and decode of independent literals; includes map entry and role/profile tags",
+          "anchors": [
+            {
+              "line": 42,
+              "text": "\t\t{\"DecryptRequest\", sops3133RequestKey + \"12067365616c6564\", &DecryptRequest{Key: key, Ciphertext: []byte(\"sealed\")}, &DecryptRequest{}},",
+              "lineSha256": "91b02984855a75ad0fc91b5e3dd712a9ae45d1118a651f47fea70a4641843c83"
+            },
+            {
+              "line": 43,
+              "text": "\t\t{\"DecryptResponse\", \"0a05636c656172\", &DecryptResponse{Plaintext: []byte(\"clear\")}, &DecryptResponse{}},",
+              "lineSha256": "cbc4f2711ad6ee34b1a9fa9fb8a08a077719e1aab2a102162f4d0291994a8aca"
+            },
+            {
+              "line": 44,
+              "text": "\t\t// Wire-only control: these two nonempty fields are refused by the adapter's carrier rules.",
+              "lineSha256": "b4f7fc52c794a57b4007abfe634c4ad5528e85478da9ba267ac59607c8ed78f7"
+            },
+            {
+              "line": 45,
+              "text": "\t\t{\"RoleAndProfileTags\", \"0a0361726e1204726f6c651a060a016b120176220770726f66696c65\",",
+              "lineSha256": "4d31901401c17f7eb80ee0d57276f9e1ddcd86684c6e5f260b7d49aac07e0b87"
+            },
+            {
+              "line": 46,
+              "text": "\t\t\t&KmsKey{Arn: \"arn\", Role: \"role\", Context: map[string]string{\"k\": \"v\"}, AwsProfile: \"profile\"}, &KmsKey{}},",
+              "lineSha256": "2f99fd9fc02204aba981bbaab4c66dd702f3da833f062ef5ae11056c747289c9"
+            },
+            {
+              "line": 47,
+              "text": "\t} {",
+              "lineSha256": "c1ceb8b2113376ffee51d896fea8e25a87082f83afee041071315f639c79c50a"
+            },
+            {
+              "line": 48,
+              "text": "\t\tt.Run(tc.name, func(t *testing.T) {",
+              "lineSha256": "e515dc9cdb0e362932b29d16961409841a103ba4455b4d6df417c90450caa833"
+            },
+            {
+              "line": 49,
+              "text": "\t\t\twant, err := hex.DecodeString(tc.wire)",
+              "lineSha256": "cb32923b53f21243a61658183c6d5d579c65b15800e074aef2b8be229fa002fe"
+            },
+            {
+              "line": 50,
+              "text": "\t\t\tif err != nil {",
+              "lineSha256": "6303317aab8d58a8bcc5c2c1c7c83539df2328e9aa0ba6f8a5745517202ef0c7"
+            },
+            {
+              "line": 51,
+              "text": "\t\t\t\tt.Fatalf(\"invalid literal vector: %v\", err)",
+              "lineSha256": "a9a756eac38a0f549dbd812646b310b5bbe5cd07798744d1b45eccf91b969649"
+            },
+            {
+              "line": 52,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 53,
+              "text": "\t\t\tbuffer := proto.NewBuffer(nil)",
+              "lineSha256": "5fa1aa4557ae13c75830484baadec530ce4acd441f46e567b8d2c027a0bf06e7"
+            },
+            {
+              "line": 54,
+              "text": "\t\t\tbuffer.SetDeterministic(true)",
+              "lineSha256": "7fa753f9f3315426bb137dbf5c575a1d20522b293dac99841c5ab8c00f70cc34"
+            },
+            {
+              "line": 55,
+              "text": "\t\t\tif err := buffer.Marshal(tc.value); err != nil {",
+              "lineSha256": "b0510d105451da3ec5ee1e098b83286e7149942ecccb35a850f34df43b6aefdc"
+            },
+            {
+              "line": 56,
+              "text": "\t\t\t\tt.Fatalf(\"local deterministic marshal: %v\", err)",
+              "lineSha256": "c3f71f0d4b9a77432a2ec9e3b2c8a519bd554c9910c9806dda363e17604b5ecc"
+            },
+            {
+              "line": 57,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 58,
+              "text": "\t\t\tif !bytes.Equal(buffer.Bytes(), want) {",
+              "lineSha256": "9e8cf1cc8ae1c87f853a8e03ef4d42b07faa8ba2b62f0110763afc1c77c67ac4"
+            },
+            {
+              "line": 59,
+              "text": "\t\t\t\tt.Errorf(\"serialized wire differs from v3.13.3 vector: got %x, want %x\", buffer.Bytes(), want)",
+              "lineSha256": "e53323d01f2769ef42c358ab53495a848165fd5f0bab90dfd152177b4ec4eb52"
+            },
+            {
+              "line": 60,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 61,
+              "text": "\t\t\tif err := proto.Unmarshal(want, tc.decoded); err != nil {",
+              "lineSha256": "66abd75ddb978a105155edf1d5406acef07d97ede6e1e3fccc4bcf93b58989bb"
+            },
+            {
+              "line": 62,
+              "text": "\t\t\t\tt.Fatalf(\"decoding upstream literal: %v\", err)",
+              "lineSha256": "5c83c566fd15c0177723168cbc41d256039ce19d24272c92191e44c03c893340"
+            },
+            {
+              "line": 63,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tif !proto.Equal(tc.decoded, tc.value) {",
+              "lineSha256": "7b92c7c40c2beb0bf0f8c9a61c658765a3c43ce51d40df33444b199bf6313d0f"
+            },
+            {
+              "line": 65,
+              "text": "\t\t\t\tt.Errorf(\"decoded upstream literal differs: got %v, want %v\", tc.decoded, tc.value)",
+              "lineSha256": "beece97d8853720f5aec3cf3e495778724c63ef4f21429da9fa1ee1e131c6159"
+            },
+            {
+              "line": 66,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Registers on a real grpc.Server, checks exact unary full paths and interceptor identity with inert handler target",
+          "anchors": [
+            {
+              "line": 71,
+              "text": "func TestSOPS3133FullMethods(t *testing.T) {",
+              "lineSha256": "44f41e27608acaa286e997664db5c1a56942433c38e54349d8c5adda93d04d54"
+            },
+            {
+              "line": 72,
+              "text": "\tupstream := map[string]string{\"Encrypt\": \"/KeyService/Encrypt\", \"Decrypt\": \"/KeyService/Decrypt\"}",
+              "lineSha256": "a579d4ccb87e44b93930fbd071064e750529883af25ffe3a60686f5ffab79327"
+            },
+            {
+              "line": 73,
+              "text": "\tserver := grpc.NewServer()",
+              "lineSha256": "0591799bba8b1a94afafb70cd71a36b04440bf9f78f0e526b02e2098bdee5cde"
+            },
+            {
+              "line": 74,
+              "text": "\tRegisterKeyServiceServer(server, &recordingServer{})",
+              "lineSha256": "39074b9bb02a070f993d0dd525b115887c6d2ed3f9394af3a0806eee5a3c9d4b"
+            },
+            {
+              "line": 75,
+              "text": "\tregistered := map[string]bool{}",
+              "lineSha256": "0d71ff4b3ffa0632335b1253a565543591156c035da87cc12ed1fd7502e297c2"
+            },
+            {
+              "line": 76,
+              "text": "\tfor service, info := range server.GetServiceInfo() {",
+              "lineSha256": "926d5345a9cbcb924f0bb4d4ba5ebc8a03c807df10403e48e48010be164c6668"
+            },
+            {
+              "line": 77,
+              "text": "\t\tfor _, method := range info.Methods {",
+              "lineSha256": "b0da84099ec558a73b99d32bc98e552ddf06546568d657867fa3aaea46b71678"
+            },
+            {
+              "line": 78,
+              "text": "\t\t\tif !method.IsClientStream && !method.IsServerStream {",
+              "lineSha256": "e500637dda2a1e7b77ae6d027594b2206ceaa20931930fa22c1d0dd8e7a62715"
+            },
+            {
+              "line": 79,
+              "text": "\t\t\t\tregistered[\"/\"+service+\"/\"+method.Name] = true",
+              "lineSha256": "d033114ec9556c999b45d12c9c55f379e146185fbd90f149ae25f9ec9b458b29"
+            },
+            {
+              "line": 80,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 81,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 82,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 83,
+              "text": "\tfor _, method := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "7c4a6cf15ef8ce0630a430fffe4d47ec59844d17842f8401aa02f6fe0b8ee4f5"
+            },
+            {
+              "line": 84,
+              "text": "\t\tt.Run(method, func(t *testing.T) {",
+              "lineSha256": "59268a5dee85c9d8bbbdd605f2e6505e7f60f88a4757a621b2da9f96beea1b4b"
+            },
+            {
+              "line": 85,
+              "text": "\t\t\twant := upstream[method]",
+              "lineSha256": "bd8a111a458b4a787c8099465e1f8155a90e75128001a9fc12de13dbfd193b0d"
+            },
+            {
+              "line": 86,
+              "text": "\t\t\tif !registered[want] {",
+              "lineSha256": "ad74697073f7cacf1eed6bc58a7ba0066d140aeb64d943194061f8edf452cd5d"
+            },
+            {
+              "line": 87,
+              "text": "\t\t\t\tt.Fatalf(\"upstream unary method %q is not registered\", want)",
+              "lineSha256": "d9629e18252b6f2a951f3710324dc5af5fd7648d030385b47e58a39b5d2c158b"
+            },
+            {
+              "line": 88,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 89,
+              "text": "\t\t\treq := &recordingServer{}",
+              "lineSha256": "f8c63234c60a838b3bcb45426d09b0d0526164fd20485e21c30d19c2a2a3e54c"
+            },
+            {
+              "line": 90,
+              "text": "\t\t\tcalled := false",
+              "lineSha256": "5f3cd688b7816871fd7f1ed3164c07dc988be1a9c7a36dbbc49d21b8aca286ae"
+            },
+            {
+              "line": 91,
+              "text": "\t\t\tout, err := handlerFor(t, method)(req, context.Background(), func(any) error { return nil },",
+              "lineSha256": "8d8affe270ddb319b8af237fd15e2bfb6d66cb208feb1bac69814526db78d166"
+            },
+            {
+              "line": 92,
+              "text": "\t\t\t\tfunc(ctx context.Context, message any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {",
+              "lineSha256": "f32aa530166c64945633e4833002f53bc132b3cca33397a7c9cd25efbf5dad79"
+            },
+            {
+              "line": 93,
+              "text": "\t\t\t\t\tcalled = true",
+              "lineSha256": "1d151be4a8bac8719db72164c5cb259caec34b709a304eb95b183b75dee45d08"
+            },
+            {
+              "line": 94,
+              "text": "\t\t\t\t\tif info.FullMethod != want {",
+              "lineSha256": "2be69178be69925f9120e0961f646cb7a3bee821dcd30587b1afec76b893b689"
+            },
+            {
+              "line": 95,
+              "text": "\t\t\t\t\t\tt.Errorf(\"interceptor reports %q, want upstream method %q\", info.FullMethod, want)",
+              "lineSha256": "2f48a1e79e8e5be0205d01ce60aca460bb7de85dd7e8fe03c7577c67943a2df3"
+            },
+            {
+              "line": 96,
+              "text": "\t\t\t\t\t}",
+              "lineSha256": "0ba026ffd5b48649b6bfa2d1b007cba796e8abd05416c05edf59b0e46a00857d"
+            },
+            {
+              "line": 97,
+              "text": "\t\t\t\t\treturn next(ctx, message)",
+              "lineSha256": "6ea7382ac12960c6069e90f20143bdec5f16fd1eeda675ca6f9f165b65894a88"
+            },
+            {
+              "line": 98,
+              "text": "\t\t\t\t})",
+              "lineSha256": "63eb129eccf3082090f31298f4bf7b23b337026b70aba44b88f6124e76e12cf7"
+            },
+            {
+              "line": 99,
+              "text": "\t\t\tif err != nil || !called || out == nil {",
+              "lineSha256": "e332a327b822b49b56ce0d22bc269e25e6a1f2fecf2ade61158881abe5c53a66"
+            },
+            {
+              "line": 100,
+              "text": "\t\t\t\tt.Fatalf(\"unary dispatch did not complete: called=%t, result=%T, err=%v\", called, out, err)",
+              "lineSha256": "d303525d93eb0967d0701409a1a441e96ae42ce51aa9e6278d515931f8d542b3"
+            },
+            {
+              "line": 101,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\tif (req.encrypted != nil) != (method == \"Encrypt\") || (req.decrypted != nil) != (method == \"Decrypt\") {",
+              "lineSha256": "c8208a07077757a841f8987b933cc2825b219cebfe43d78264f0839db5eed745"
+            },
+            {
+              "line": 103,
+              "text": "\t\t\t\tt.Fatal(\"unary dispatch reached the wrong method\")",
+              "lineSha256": "17ce8ce5ed24884cf5bfc73b773c3ae1b5cb1b968e0c476946fcb0ef106c8d39"
+            },
+            {
+              "line": 104,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        }
+      ],
+      "candidateSubtests": {
+        "vectors": [
+          "DecryptRequest",
+          "DecryptResponse",
+          "RoleAndProfileTags"
+        ],
+        "methods": [
+          "Decrypt"
+        ]
+      },
+      "candidateRunRecord": "runs/results.json",
+      "remainingEvidenceGap": "No exact revision-bound hosted run of the checksum-pinned upstream binary or full release/KMS operation qualification. Existing v3.13.x guard is not exact-patch evidence. No active verification promotion.",
+      "compatibilityExclusions": "Six unsupported upstream Key oneof arms, mixed oneof precedence, nonempty role/profile acceptance, other releases, and full CLI/TLS/KMS behavior are outside the admitted subset.",
+      "scopeDecision": "Type mismatch is intentional at the enclosing oneof; no numeric mismatch for the admitted arm. Keep the named upstream scope in the exact scenario links."
+    },
+    {
+      "id": "SOPS.protobuf.wire-numbers",
+      "interfaceId": "SOPS.protobuf",
+      "facet": "compatibility",
+      "originalCaseSha256": "be94c17dbf2ea591c3e8ea15924f94af48da11a53f5558b3930765fe0736ed1c",
+      "reconciledCaseSha256": "10bf631ca71fcc6a92f0951b4a127d98278390c20e306e21632590ca216305a4",
+      "originalInput": "The protobuf client uses pinned SOPS keyservice messages.",
+      "originalOutcome": "The exact method names and expected fields marshal with the pinned numbers.",
+      "originalGapIds": [
+        {
+          "id": "GAP.SOPS.protobuf.wire-numbers",
+          "detail": "Trace needs an exact scenario for this observable outcome."
+        }
+      ],
+      "originalScenarioRefs": [],
+      "originalClassification": "spec_gap",
+      "originalEvidenceTier": "source_and_assertion_inspected",
+      "active": false,
+      "proposedClassificationIfAccepted": "test_gap",
+      "qualification": "An official v3.13.3 protobuf client uses the admitted kms_key-only carrier. Version, method and field mapping are retained; full release execution is separate.",
+      "proposedScenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Encrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "exact"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Decrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "exact"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "exact"
+        }
+      ],
+      "enforcingSource": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice.go",
+          "sha256": "3fd68fe114877e55ca60a778e78a70102f19c0e0ba1c351451555f851e98df39",
+          "role": "enforcing_source",
+          "scope": "Local KmsKey-only envelope, map entry tags, message fields and registration",
+          "anchors": [
+            {
+              "line": 15,
+              "text": "\tKmsKey *KmsKey `protobuf:\"bytes,1,opt,name=kms_key,json=kmsKey,proto3\" json:\"kms_key,omitempty\"`",
+              "lineSha256": "697daecca1549090bca0dc40c35a9d357559903c6aebc480c864d61508952223"
+            },
+            {
+              "line": 29,
+              "text": "\tArn        string            `protobuf:\"bytes,1,opt,name=arn,proto3\" json:\"arn,omitempty\"`",
+              "lineSha256": "1d1ac853d964a934d6fb7affe640cbbfcc3ecae77de8b01de430bbb607b9daab"
+            },
+            {
+              "line": 30,
+              "text": "\tRole       string            `protobuf:\"bytes,2,opt,name=role,proto3\" json:\"role,omitempty\"`",
+              "lineSha256": "5ef9ec54a78c2291bff2644d855c27915b5d56479b9796b1d77b6cdbe899185e"
+            },
+            {
+              "line": 31,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            },
+            {
+              "line": 32,
+              "text": "\tAwsProfile string            `protobuf:\"bytes,4,opt,name=aws_profile,json=awsProfile,proto3\" json:\"aws_profile,omitempty\"`",
+              "lineSha256": "de9b5bfcc97ffd1c159a68b4342f01d9226899ae720399a416a861354da5e95c"
+            },
+            {
+              "line": 64,
+              "text": "\tKey       *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "10e86910519696d043b69e14450de9d83ec1459f3637a8d3d3c58aa433a13ea6"
+            },
+            {
+              "line": 65,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,2,opt,name=plaintext,proto3\"`",
+              "lineSha256": "0ca15275118a47088ed6bdf73811e5916381f9e4e3bbeb594511f6f4f821bbb7"
+            },
+            {
+              "line": 85,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,1,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "bf593945888078ddab7ba3c0488e429e9c81f7a087d08625495c91d7ce6b4a3c"
+            },
+            {
+              "line": 93,
+              "text": "\tKey        *Key   `protobuf:\"bytes,1,opt,name=key,proto3\"`",
+              "lineSha256": "65c347896f06f95fd2318a4e737241116786a1961322dc72c14dd6618b4042d9"
+            },
+            {
+              "line": 94,
+              "text": "\tCiphertext []byte `protobuf:\"bytes,2,opt,name=ciphertext,proto3\"`",
+              "lineSha256": "8417760af717ae903c42aebad21d66b06ffb85059f859a8399e366f4f32167fd"
+            },
+            {
+              "line": 114,
+              "text": "\tPlaintext []byte `protobuf:\"bytes,1,opt,name=plaintext,proto3\"`",
+              "lineSha256": "d408588389d3410fa6855322a4b50bdc4711640f4c651596346ee05a25c896ba"
+            },
+            {
+              "line": 134,
+              "text": "\tr.RegisterService(&KeyService_ServiceDesc, s)",
+              "lineSha256": "630b855c8d2bd0a22664144de3aa83eb6138f1c07ca9db41de71e6c6861121dc"
+            },
+            {
+              "line": 157,
+              "text": "\tin := new(EncryptRequest)",
+              "lineSha256": "2a740c03af60a04cbf1dff9c39c5f81f5db0aa7ed1cfb79fde5cb563967f2509"
+            },
+            {
+              "line": 158,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 162,
+              "text": "\t\treturn s.(KeyServiceServer).Encrypt(ctx, in)",
+              "lineSha256": "b9e43b4050afce1fa0e685c80b0f3eb2afa62428db24a01ce24d1f3a7c0c0559"
+            },
+            {
+              "line": 164,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Encrypt\"}",
+              "lineSha256": "14549b9c3b374ef7e9dc811dde2817e7b2b81621dbf92f047b8c6f89a3dd272c"
+            },
+            {
+              "line": 176,
+              "text": "\tin := new(DecryptRequest)",
+              "lineSha256": "c79812cb93b8eeb55450edc1230dcc8e3886b911f35a00d7f4f9c177fae7c097"
+            },
+            {
+              "line": 177,
+              "text": "\tif err := decode(in); err != nil {",
+              "lineSha256": "0b7868b77e7639b67bb621e491609419e7496278e7d2e4fdbaf0b5deaa245e47"
+            },
+            {
+              "line": 181,
+              "text": "\t\treturn s.(KeyServiceServer).Decrypt(ctx, in)",
+              "lineSha256": "3537a54e7d61b0cb55705629b21f9ac65eec80e48919531faaf341cf7261bd6f"
+            },
+            {
+              "line": 183,
+              "text": "\tinfo := &grpc.UnaryServerInfo{Server: s, FullMethod: \"/KeyService/Decrypt\"}",
+              "lineSha256": "9977695a21b2b55acb705ff399dff779651d0c088d4289154d092ac7450305da"
+            },
+            {
+              "line": 189,
+              "text": "var KeyService_ServiceDesc = grpc.ServiceDesc{",
+              "lineSha256": "4bfb704e50acb76c6a02a2dafd84b2da5ba622a2303ee53a1da2544aadd62ec1"
+            },
+            {
+              "line": 190,
+              "text": "\tServiceName: \"KeyService\", HandlerType: (*KeyServiceServer)(nil),",
+              "lineSha256": "46303d48b0328d75374918cd5e7de461e153112c3e2f6a2a85cc9f6e8a98220a"
+            },
+            {
+              "line": 191,
+              "text": "\tMethods:  []grpc.MethodDesc{{MethodName: \"Encrypt\", Handler: encryptHandler}, {MethodName: \"Decrypt\", Handler: decryptHandler}},",
+              "lineSha256": "7e3c9062ebff6a8adedfcc90d16708ed84124083f82dd324916d500e04efd1e3"
+            },
+            {
+              "line": 192,
+              "text": "\tMetadata: \"keyservice/keyservice.proto\",",
+              "lineSha256": "0aa9715dd61db4008b07d320180bfdbd399e404655819e0d22a5f47bb120cd41"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/adapter.go",
+          "sha256": "86e42dcf643958b922a182b9ce161c80e1de0753bf26aaedc4c57269dd966024",
+          "role": "adapter_boundary",
+          "scope": "Local wrap/unwrap, missing KmsKey refusal, nonempty role/profile refusal and required context",
+          "anchors": [
+            {
+              "line": 52,
+              "text": "func (server *Server) Encrypt(ctx context.Context, input *sopsrpc.EncryptRequest) (*sopsrpc.EncryptResponse, error) {",
+              "lineSha256": "7490ded3101440ee602c8774ada18d9e86ec452fc70f3af3db5f5752506fe4be"
+            },
+            {
+              "line": 53,
+              "text": "\trequest, err := translate(input.GetKey(), \"wrap\", input.GetPlaintext())",
+              "lineSha256": "dbebdfaf08f823dcb0bbf45d12afcc5f4631513292a5fe288582f7cc324d0c6a"
+            },
+            {
+              "line": 54,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxDataKeyBytes {",
+              "lineSha256": "36cd281bed014fd0ec3afff916bffa38c5fee1dfa8761485bfa74c002ae73da6"
+            },
+            {
+              "line": 55,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 56,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 57,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 58,
+              "text": "\tresult, err := server.client.Wrap(ctx, request)",
+              "lineSha256": "7810a7a6f6e5a2a9ff9bf087140e2adf479454ab52b7c9c58e4206c0ccc0da79"
+            },
+            {
+              "line": 59,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxCiphertextBytes {",
+              "lineSha256": "9fbe4b3506e795d986c71fe9864c47dcf957074d5412e95b2f8ba9198c3ee719"
+            },
+            {
+              "line": 60,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 61,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 62,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 63,
+              "text": "\treturn &sopsrpc.EncryptResponse{Ciphertext: result}, nil",
+              "lineSha256": "90c5bca39ba3ebb4d47ec9a480dfd85288d7010d1ebf7778af16bf2ac681a063"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "func (server *Server) Decrypt(ctx context.Context, input *sopsrpc.DecryptRequest) (*sopsrpc.DecryptResponse, error) {",
+              "lineSha256": "f33863dd2d37f57007f1de9f4f68e6ab683d4540fc068ff3805af106bca8f63a"
+            },
+            {
+              "line": 67,
+              "text": "\trequest, err := translate(input.GetKey(), \"unwrap\", input.GetCiphertext())",
+              "lineSha256": "1d49ca7776b4e7947d11e816ded7117ece2b6c312902c977dc07aca98a987f95"
+            },
+            {
+              "line": 68,
+              "text": "\tif err != nil || server.client == nil || len(request.Data) == 0 || len(request.Data) > maxCiphertextBytes {",
+              "lineSha256": "3759912e756e4c66bf9d05ab8cb74e0bc84b3a73a93940550cf73e1f6f227a24"
+            },
+            {
+              "line": 69,
+              "text": "\t\treturn nil, errors.New(\"invalid SOPS key request\")",
+              "lineSha256": "2fa36b20b3b304f96e5627287615a98b679d8b8d3f7db9b44b934a800f57ce01"
+            },
+            {
+              "line": 70,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 71,
+              "text": "\tdefer zero(request.Data)",
+              "lineSha256": "37dbf8c3d06003b9b9167b00f842cb9c5af5057b6d57d1d87357cd1ffd6aeb09"
+            },
+            {
+              "line": 72,
+              "text": "\tresult, err := server.client.Unwrap(ctx, request)",
+              "lineSha256": "221c0cc24e82cd273aed2ba6e150b050d37b21fe01346ec9fa30f18677e6dda9"
+            },
+            {
+              "line": 73,
+              "text": "\tif err != nil || len(result) == 0 || len(result) > maxDataKeyBytes {",
+              "lineSha256": "f7807bef874db0ce6c299f07b4947c109f6c17a2fabe0fdbd1d8908433e17063"
+            },
+            {
+              "line": 74,
+              "text": "\t\tzero(result)",
+              "lineSha256": "8c66c8c528815a74e4e95ec92b23a30d8c2b451991adf4c5bbf68e7cc643a9f0"
+            },
+            {
+              "line": 75,
+              "text": "\t\treturn nil, errors.New(\"KMS operation failed\")",
+              "lineSha256": "2d9d0362495f364420ba3f76a8b899629a4af09d1859b14be2802452dc85423d"
+            },
+            {
+              "line": 76,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 77,
+              "text": "\treturn &sopsrpc.DecryptResponse{Plaintext: result}, nil",
+              "lineSha256": "9eb06e41efb34ad098ae40a729bf4c80224bd014c6566b8f96ca70cd4695cf46"
+            },
+            {
+              "line": 78,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 80,
+              "text": "func translate(key *sopsrpc.Key, operation string, data []byte) (Request, error) {",
+              "lineSha256": "26b6ab0faf6f5ce45f026d0a4daa31995e2fd567896329ed9311a293d3b6b2f9"
+            },
+            {
+              "line": 81,
+              "text": "\tif key == nil || key.GetKmsKey() == nil {",
+              "lineSha256": "530dcf88242ed17989bd19e830d63fbddd01943219c88811bd8c97c5f70bf3c2"
+            },
+            {
+              "line": 82,
+              "text": "\t\treturn Request{}, errors.New(\"unsupported SOPS key type\")",
+              "lineSha256": "44a97df06e9959872c473893293c734501da8eb2042965d5a46bc61b33fe3920"
+            },
+            {
+              "line": 83,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 84,
+              "text": "\tcarrier := key.GetKmsKey()",
+              "lineSha256": "503a9fac9b83b4a93a2b9530437b581e5f3bcfcd5fc74b673c27b6098ee0c709"
+            },
+            {
+              "line": 85,
+              "text": "\tif carrier.GetRole() != \"\" || carrier.GetAwsProfile() != \"\" {",
+              "lineSha256": "069698f651a3c4f594e4ab422541f444bc1bbafc0ec07dbe56ee8b1438f3d739"
+            },
+            {
+              "line": 86,
+              "text": "\t\treturn Request{}, errors.New(\"AWS role/profile fields are forbidden\")",
+              "lineSha256": "4d6dd2d1cffb687d6fa297ebf39b3542d9cfcf481393f392213e7f9e90c7fcb6"
+            },
+            {
+              "line": 87,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 88,
+              "text": "\tmatches := carrierPattern.FindStringSubmatch(carrier.GetArn())",
+              "lineSha256": "1a577eb1f5a4ebb5fcc338ec75fe150621a24ffdab360568894f4f76ec15c99b"
+            },
+            {
+              "line": 89,
+              "text": "\tif len(matches) != 2 {",
+              "lineSha256": "b161c780b23c2d4a40ab29278b289c6b1d689bc949ef551390959bea3eb729dd"
+            },
+            {
+              "line": 90,
+              "text": "\t\treturn Request{}, errors.New(\"invalid Regalia carrier ARN\")",
+              "lineSha256": "d5bcb783d9bf7066ccfcb7fe9debceeee1dff94254b56ac95a3c9aeb425ec428"
+            },
+            {
+              "line": 91,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 92,
+              "text": "\tvalues := carrier.GetContext()",
+              "lineSha256": "e637f4796adf76cc5ebbad55da56a55e463ac28f8373f6f4b2487a557f406eaa"
+            },
+            {
+              "line": 93,
+              "text": "\tif len(values) != 4 {",
+              "lineSha256": "43f45cc5f648534e77cbb56f7bc84ff907fc38b731d5c8625ca33d60c4fb3a5f"
+            },
+            {
+              "line": 94,
+              "text": "\t\treturn Request{}, errors.New(\"incomplete SOPS binding context\")",
+              "lineSha256": "38bead4d0897cea92aec498ddc4718869d3f4625e17aa72f85c56132aed992dd"
+            },
+            {
+              "line": 95,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 96,
+              "text": "\trepository, filePath := values[\"repository\"], values[\"path\"]",
+              "lineSha256": "52d0812878fb5d7f12fe1d66ffe20525c7c2e1cfde22531aaef075e88abf43a9"
+            },
+            {
+              "line": 97,
+              "text": "\tenvironment, purpose := values[\"environment\"], values[\"purpose\"]",
+              "lineSha256": "12348c9f42bf88fe6fe9cbbdbec20fe10fc2de619f5bef47026e9643ade5d81d"
+            },
+            {
+              "line": 98,
+              "text": "\tif !repositoryPattern.MatchString(repository) || !safePath(filePath) ||",
+              "lineSha256": "ff0e491ff57262147159b7ca04eb4bdee69eb9bf0e3777274c5a2adf245f1d9d"
+            },
+            {
+              "line": 99,
+              "text": "\t\t(environment != \"production\" && environment != \"staging\" && environment != \"development\") || !identifierPattern.MatchString(purpose) {",
+              "lineSha256": "08c156878f73c820372f83809c2a7e93e1d0a57f42b5125cc94de29c887a36e2"
+            },
+            {
+              "line": 100,
+              "text": "\t\treturn Request{}, errors.New(\"invalid SOPS binding context\")",
+              "lineSha256": "42338afc9cbbd179cb69a2562c99cbb7fb4743da753b9babae59fff33faee19f"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "sha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "fixture_plan",
+          "scope": "Local version/checksum configuration; no execution proof",
+          "anchors": [
+            {
+              "line": 758,
+              "text": "      - name: Install checksum-pinned SOPS 3.13.3",
+              "lineSha256": "b67e10e7baeab306de66afe966482eb1dbb0f7d06228b3fc459d2f2648f73176"
+            },
+            {
+              "line": 759,
+              "text": "        env:",
+              "lineSha256": "8aa7752e4827b4b806cbbd47f04d4530b7ac1e9795ce6a774304219756e36739"
+            },
+            {
+              "line": 760,
+              "text": "          SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b",
+              "lineSha256": "cf7df8a9c7e7b577ba30ef1b6f4b56d8f7248ff2ae4ae5b63d9e84ac5c8709c1"
+            },
+            {
+              "line": 761,
+              "text": "        run: |",
+              "lineSha256": "0ce4374895a16baf0990aa74eb6475ef6a3e6ef1066f623e760dd527a7b46503"
+            },
+            {
+              "line": 762,
+              "text": "          curl --fail --location --proto '=https' --tlsv1.2 \\",
+              "lineSha256": "5a760c7a8ac9bc8a6d5c5ec751ce8069e169eeb3ff55656d74bdc2e3afbf7602"
+            },
+            {
+              "line": 763,
+              "text": "            --output \"$RUNNER_TEMP/sops\" \\",
+              "lineSha256": "4c80c4e5a470ec1647c6deeeaa52ad2f7326da98a5512ccdf1c2ec62e915bbf7"
+            },
+            {
+              "line": 764,
+              "text": "            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64",
+              "lineSha256": "e801b7536f48e8772af7a2e2de4aab1a81d047a02d22653d0e0f6a4587480ace"
+            },
+            {
+              "line": 765,
+              "text": "          echo \"$SOPS_SHA256  $RUNNER_TEMP/sops\" | sha256sum --check --strict",
+              "lineSha256": "3cfd54a949c970109fdfc24ec78976e1126654cdcbce8b3084820b3169283bcf"
+            },
+            {
+              "line": 766,
+              "text": "          chmod 0755 \"$RUNNER_TEMP/sops\"",
+              "lineSha256": "0e8a608d2f3e66f2e5e5d1d27149d12ef025feb7387afa680d0532c150f7b1b0"
+            },
+            {
+              "line": 767,
+              "text": "          echo \"$RUNNER_TEMP\" >> \"$GITHUB_PATH\"",
+              "lineSha256": "d17a2deeb0a3c3373ff62e581fe827f87944d9d48a9403466a125ec18bfb16a4"
+            },
+            {
+              "line": 768,
+              "text": "          # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.",
+              "lineSha256": "f64b51cf6923d777d3c9decf1c0e51ec5e33cf024bd9c7bfbeadd615b7f347cb"
+            },
+            {
+              "line": 769,
+              "text": "          echo \"REGALIA_EXPECT_SOPS=1\" >> \"$GITHUB_ENV\"",
+              "lineSha256": "39f3c78d487e079603a6f7afc62d4a8cdf99d41113e90f31c314e8c6a10b621d"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/interop_test.go",
+          "sha256": "fd26b3fc7feac8fc2ae0573d02bcbaa2a8bdff5747deef9e54a4f4d9b315b312",
+          "role": "existing_fixture",
+          "scope": "Version guard allows 3.13.x, and the admitted-carrier fixture exercises both commands if available",
+          "anchors": [
+            {
+              "line": 61,
+              "text": "\tsops, err := exec.LookPath(\"sops\")",
+              "lineSha256": "b81cc1230ca4f481671e364f8fd66e0d2f9b8856978e17fcd0d44d5c67faeebe"
+            },
+            {
+              "line": 62,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 63,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tt.Fatalf(\"REGALIA_EXPECT_SOPS is set but sops is not on PATH: %v — the workflow sets that variable in the same step that installs a checksum-pinned SOPS 3.13.3, so its absence here means the install step and this module's tests are no longer in the same job and the interoperability check has silently stopped running\", err)",
+              "lineSha256": "fcecd72c02c559a2a2ee7a1ca677bd729f424bd8492f3192dc51e9455978fb52"
+            },
+            {
+              "line": 65,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 66,
+              "text": "\t\tt.Skip(\"sops binary is not installed\")",
+              "lineSha256": "a076600da7eb7b8b81b308bade7ae62b71677a16f2a9772cdf59df2df28fc89b"
+            },
+            {
+              "line": 67,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 68,
+              "text": "\tversion, err := exec.Command(sops, \"--version\").CombinedOutput()",
+              "lineSha256": "6c1eb6ffff360fac01facb8d34ad2bc79437e3899ca8d7d4d4a21327ceb469a2"
+            },
+            {
+              "line": 69,
+              "text": "\tif err != nil || !strings.Contains(string(version), \"sops 3.13.\") {",
+              "lineSha256": "e26d306152441b1bc4ac2209229a72ca55cb727c306f13c3c2c3b657b22bdca9"
+            },
+            {
+              "line": 70,
+              "text": "\t\tif expectSOPS {",
+              "lineSha256": "6490cfb00c8742d54703f95bb69b9ff19fa6e72ecb4c3f85e768e02c49a10b45"
+            },
+            {
+              "line": 71,
+              "text": "\t\t\tt.Fatalf(\"sops on PATH is not 3.13.x (%s, err=%v) — the workflow pins 3.13.3, so a different version here means the pin and this assertion have drifted apart\", version, err)",
+              "lineSha256": "374fe548295167a5a0782e520adf68e96966945fba4dae76a1a451471f542e31"
+            },
+            {
+              "line": 72,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 73,
+              "text": "\t\tt.Skipf(\"requires SOPS 3.13.x: %s\", version)",
+              "lineSha256": "37a941ab2acd523f1ab35f01b57e1782636013c8372f809589a9632bba90839e"
+            },
+            {
+              "line": 98,
+              "text": "\tkeyserviceURL := \"unix://\" + socket",
+              "lineSha256": "fe28c4bab1399444952bb0175d2ccb0e3cd258e68a8d791f2a5ba2b873c8733d"
+            },
+            {
+              "line": 99,
+              "text": "\tcarrier := \"arn:aws:kms:regalia:000000000000:key/production-sops\"",
+              "lineSha256": "a6cea8403ef73226c7b11fc05fe67813809d3208fbaf753e7d906263336ed473"
+            },
+            {
+              "line": 100,
+              "text": "\tbinding := \"repository:regalia-kms/infrastructure,path:clusters/prod/secrets.enc.yaml,environment:production,purpose:sops-data-key\"",
+              "lineSha256": "4488026b1cf42d4046906150ac29e22eafd43691b036c14b750f97fa08fd0194"
+            },
+            {
+              "line": 101,
+              "text": "\tencrypt := exec.Command(sops, \"--encrypt\", \"--kms\", carrier, \"--encryption-context\", binding,",
+              "lineSha256": "9a4bead766195c1ff7b110cba7a28b2e2c9a3e6fc27a4b1e816f761b65cf2993"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, plainPath)",
+              "lineSha256": "69a89cbdff4828ea1e7c1ac1893f863437a51a1232d4fdadaea56f64946d0714"
+            },
+            {
+              "line": 103,
+              "text": "\tencrypted, err := encrypt.CombinedOutput()",
+              "lineSha256": "a865bc850c79c4e3bc52eb9b6a882c82debb74d3e0ab7f468557c881416d2daa"
+            },
+            {
+              "line": 104,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 105,
+              "text": "\t\tt.Fatalf(\"sops encrypt: %v\\n%s\", err, encrypted)",
+              "lineSha256": "3360e109638c2dfdc7c8a3837540b3c941ec1404935f4fc5efed0ccf8dedbeb2"
+            },
+            {
+              "line": 106,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 107,
+              "text": "\tif err := os.WriteFile(encryptedPath, encrypted, 0o600); err != nil {",
+              "lineSha256": "391c1e9dd9bee6b2fd17294522ae2452a7358a6c7e315fd424cba818283c038b"
+            },
+            {
+              "line": 108,
+              "text": "\t\tt.Fatal(err)",
+              "lineSha256": "695e9de22ff928747da5b4ed640ce70255c2b2477e5ef843bb3826cb7b7bba99"
+            },
+            {
+              "line": 109,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 110,
+              "text": "\tdecrypt := exec.Command(sops, \"--decrypt\", \"--enable-local-keyservice=false\", \"--keyservice\", keyserviceURL, encryptedPath)",
+              "lineSha256": "7d1359843eb1c302bb426bff9d289d2e7b7a6bdea09cb820ae1dddd4957d8e9f"
+            },
+            {
+              "line": 111,
+              "text": "\tdecrypted, err := decrypt.CombinedOutput()",
+              "lineSha256": "2fd49f3a425e8a07ad8b526eb559b9c9dd619287b1112e6028c2726ec02cf4bf"
+            },
+            {
+              "line": 112,
+              "text": "\tif err != nil {",
+              "lineSha256": "c7f20c48746f19a5d787caa3b1edf954dda6a8ac1736658bb9228943e4a93e1e"
+            },
+            {
+              "line": 113,
+              "text": "\t\tt.Fatalf(\"sops decrypt: %v\\n%s\", err, decrypted)",
+              "lineSha256": "d8f51e49d13692201bb6b33d9f62e2f8b61489c678bd1a15d46c017ae875ba97"
+            },
+            {
+              "line": 114,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 115,
+              "text": "\tif string(decrypted) != \"secret: value\\n\" {",
+              "lineSha256": "fd2cc35380b43473012c4b288bcaa182da403452b764dc5e2d3c2f4c0be153fb"
+            },
+            {
+              "line": 116,
+              "text": "\t\tt.Fatalf(\"decrypted = %q\", decrypted)",
+              "lineSha256": "f11bdebe2f6bb4579b9dea869ba2d1e0f74efc1476f0d093856873e4f38914cc"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.proto",
+          "sha256": "5e9f0b9e2521799b01ad08c7207bb9ba9815ce9d5a151ccd5160931a217c5844",
+          "role": "official_upstream_source",
+          "scope": "Official oneof variants, nested carrier and both RPC declarations",
+          "anchors": [
+            {
+              "line": 1,
+              "text": "syntax = \"proto3\";",
+              "lineSha256": "bf7901a1fd23ec4cee4e5e86db1e2586f5c6c623526319eb2ff68b74d15edad3"
+            },
+            {
+              "line": 3,
+              "text": "option go_package = \"./keyservice\";",
+              "lineSha256": "6ec5274f672df0afb7d214bec1893e8b25130a6a993abbfbcb4f09109d52b60d"
+            },
+            {
+              "line": 5,
+              "text": "message Key {",
+              "lineSha256": "ffe48fe12e8ea670d93ad42b4e85c59100fa5ed2d9b73a8c22e4f89a1355b310"
+            },
+            {
+              "line": 6,
+              "text": "\toneof key_type {",
+              "lineSha256": "0cb7a885aed374605d0410e0cca9933185386fadf7aaa60e4f1bf657fed38108"
+            },
+            {
+              "line": 7,
+              "text": "\t\tKmsKey kms_key = 1;",
+              "lineSha256": "ab889f887c071c1804e5fdb0f20b2b20e2dc2e8736cf29fc71785a6311e7bb05"
+            },
+            {
+              "line": 8,
+              "text": "\t\tPgpKey pgp_key = 2;",
+              "lineSha256": "8dab50811d63302a52266ce75d3f0b68226a1bf88fa3f31cab60558dfc62bcfc"
+            },
+            {
+              "line": 9,
+              "text": "\t\tGcpKmsKey gcp_kms_key = 3;",
+              "lineSha256": "ac642edcf6b8c24c681c74e52519a07efb42dd66e564c2dc466cd2a4151d86bc"
+            },
+            {
+              "line": 10,
+              "text": "\t\tAzureKeyVaultKey azure_keyvault_key = 4;",
+              "lineSha256": "170e3f8a195f9008f0978101422b8997aaccd9cbb58bf8425f41accde536873b"
+            },
+            {
+              "line": 11,
+              "text": "\t\tVaultKey vault_key = 5;",
+              "lineSha256": "85748c4f4cf5260423c2609931d1a1b2aea33b736dc3e83b2f677954a3d43889"
+            },
+            {
+              "line": 12,
+              "text": "\t\tAgeKey age_key = 6;",
+              "lineSha256": "1db6f7794655b8a4e1dd00bce9e0261fe0b2826f92784421c14dbdd706239ddd"
+            },
+            {
+              "line": 13,
+              "text": "\t\tHckmsKey hckms_key = 7;",
+              "lineSha256": "cfe22f32b2c12dc421aa60edddb579c02c0840bbc5e87706fe793462ca9d77ba"
+            },
+            {
+              "line": 14,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 21,
+              "text": "message KmsKey {",
+              "lineSha256": "2b44876d6ee0d1d5799943a9550b18d4623fca69142dcd37c31dbd5b85d07a9a"
+            },
+            {
+              "line": 22,
+              "text": "\tstring arn = 1;",
+              "lineSha256": "f1f6e2763f7339179b9b05ea89d69c82d4cc3c84e91e65139de11bc970b53e0f"
+            },
+            {
+              "line": 23,
+              "text": "\tstring role = 2;",
+              "lineSha256": "7307ba16d4e543cbe63db48530b65d0b1df8828d060f48f782f56861d2125824"
+            },
+            {
+              "line": 24,
+              "text": "\tmap<string, string> context = 3;",
+              "lineSha256": "6ac364156af72a228a96310dc111b44c7265b6a9752717d83cebaeb1f32e8d28"
+            },
+            {
+              "line": 25,
+              "text": "\tstring aws_profile = 4;",
+              "lineSha256": "f235524c777f56330fead7fe62057884e1275088d6b2f07b7ceff6c6fda94d34"
+            },
+            {
+              "line": 52,
+              "text": "message EncryptRequest {",
+              "lineSha256": "ccf0958c48ce05ee9a3ede4399d917d712461aaf13a04b5fd6a5369b681e3d77"
+            },
+            {
+              "line": 53,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 54,
+              "text": "\tbytes plaintext = 2;",
+              "lineSha256": "45d62e454795e6f7aa8473193d19a0965120fa0a9d5f417c7519f4ff19987463"
+            },
+            {
+              "line": 55,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 57,
+              "text": "message EncryptResponse {",
+              "lineSha256": "44c42c3513668f4104483905ae83271dca55fa042acf87a597fb8f9a029e5666"
+            },
+            {
+              "line": 58,
+              "text": "\tbytes ciphertext = 1;",
+              "lineSha256": "b2a5dd5025d3d86063b79908d7030ae90bfd7575f963b2549c2abaf78d2cd271"
+            },
+            {
+              "line": 59,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 61,
+              "text": "message DecryptRequest {",
+              "lineSha256": "47d3052f36ae6c200747bf17fef01cbbf46c893766ae3622ad7ad56d631dc0f7"
+            },
+            {
+              "line": 62,
+              "text": "\tKey key = 1;",
+              "lineSha256": "b5387d61b86567614d795c8c8d3982bd514fb1d09a6cd20dba1ecdc9caba5455"
+            },
+            {
+              "line": 63,
+              "text": "\tbytes ciphertext = 2;",
+              "lineSha256": "53128e70a3e7465134149af3276fb60a58d7cd5a9fac86d65e2e2d7d811ec8bd"
+            },
+            {
+              "line": 64,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 66,
+              "text": "message DecryptResponse {",
+              "lineSha256": "235a5991130f2eabb9af989c21f9c2732e6ad9135dcef93ca3fc914c653929d1"
+            },
+            {
+              "line": 67,
+              "text": "\tbytes plaintext = 1;",
+              "lineSha256": "84cf6f3d4d91dd0b52d4018ec9e6230a11147c1547679a44436b89058c6538b9"
+            },
+            {
+              "line": 68,
+              "text": "}",
+              "lineSha256": "d10b36aa74a59bcf4a88185837f658afaf3646eff2bb16c3928d0e9335e945d2"
+            },
+            {
+              "line": 70,
+              "text": "service KeyService {",
+              "lineSha256": "6ba22710b8eab779d2bb113e3830430c32788a9532d50bfd7efa893e36b18787"
+            },
+            {
+              "line": 71,
+              "text": "\trpc Encrypt (EncryptRequest) returns (EncryptResponse) {}",
+              "lineSha256": "b23147a1cfd51e5556c427777b553ca278ef3a0d2d42c9131eddb1187f8520e0"
+            },
+            {
+              "line": 72,
+              "text": "\trpc Decrypt (DecryptRequest) returns (DecryptResponse) {}",
+              "lineSha256": "6042cc558d0dca296ce98a22fc603d4c2c027986375e0709c8822e81a3c48e17"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice.pb.go",
+          "sha256": "fb25c89ee0e1eec53fa24e77fd34576aed95f1f103232258341c94cb96dbed3e",
+          "role": "official_upstream_generated_source",
+          "scope": "Map entries use key field 1 and value field 2",
+          "anchors": [
+            {
+              "line": 225,
+              "text": "\tContext    map[string]string `protobuf:\"bytes,3,rep,name=context,proto3\" json:\"context,omitempty\" protobuf_key:\"bytes,1,opt,name=key,proto3\" protobuf_val:\"bytes,2,opt,name=value,proto3\"`",
+              "lineSha256": "cd296f35fc98b86c5fe9056c3f06df9c27854ffd4a53f9998473f90f3df052b3"
+            }
+          ]
+        },
+        {
+          "path": "upstream/keyservice_grpc.pb.go",
+          "sha256": "e2aba26faa2ebde2884810ac3e5766b98b14d16f586e35cc8dd13ac62345d3bd",
+          "role": "official_upstream_generated_source",
+          "scope": "Full method constants and unary service descriptor",
+          "anchors": [
+            {
+              "line": 22,
+              "text": "\tKeyService_Encrypt_FullMethodName = \"/KeyService/Encrypt\"",
+              "lineSha256": "3fef8b411c8c2859f0da7e80b9da2f99eea2c40b1b8731cc8fa8b410d331af6c"
+            },
+            {
+              "line": 23,
+              "text": "\tKeyService_Decrypt_FullMethodName = \"/KeyService/Decrypt\"",
+              "lineSha256": "15c000e45e903e805d6e1b41eac08ebd162aa55ecb7781e3fe1102b0f7a0b973"
+            },
+            {
+              "line": 143,
+              "text": "\tServiceName: \"KeyService\",",
+              "lineSha256": "f9203a7a5ed6482d7279f3b16427f4b2229d56000923b63473a246afd1f319e1"
+            },
+            {
+              "line": 147,
+              "text": "\t\t\tMethodName: \"Encrypt\",",
+              "lineSha256": "06420ebe6292e609c3e632c678b6696d3ddc5d789c1d92ba4efe34e13aebee06"
+            },
+            {
+              "line": 151,
+              "text": "\t\t\tMethodName: \"Decrypt\",",
+              "lineSha256": "a15c74510e4751ce25ccfc981b582131836377c9bb7445367c75fde5b951bac8"
+            }
+          ]
+        }
+      ],
+      "assertionGroups": [
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_test.go",
+          "sha256": "2df7e0056c8637d98978b4ca64baf1665b624c3a05998b495bad3f2e440d5113",
+          "role": "existing_assertion",
+          "scope": "Actual service/method/metadata and handler assertions; no numeric field check",
+          "anchors": [
+            {
+              "line": 23,
+              "text": "\tif KeyService_ServiceDesc.ServiceName != \"KeyService\" {",
+              "lineSha256": "40b01fcb022a00cfdf09c7c89cfa5a1ca46f21dc9c8bdf284e626375edceaac7"
+            },
+            {
+              "line": 24,
+              "text": "\t\tt.Fatalf(\"ServiceName = %q, want \\\"KeyService\\\": sops dials by this name and would not find the service\",",
+              "lineSha256": "c1f7a03de4fbe8cce0faa76cbd459854b856aec88f6a10ae11a27c726c153a27"
+            },
+            {
+              "line": 25,
+              "text": "\t\t\tKeyService_ServiceDesc.ServiceName)",
+              "lineSha256": "11716a39eabb8ad7c6eb4b239c9a49652fb1fa72e68fadd9a4487f0450cb9e9d"
+            },
+            {
+              "line": 26,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 27,
+              "text": "\tif KeyService_ServiceDesc.Metadata != \"keyservice/keyservice.proto\" {",
+              "lineSha256": "2b282210a10ba84da105cd705e1260f45deb90f378805542b23fd7499060832c"
+            },
+            {
+              "line": 28,
+              "text": "\t\tt.Fatalf(\"Metadata = %v, want the upstream proto path\", KeyService_ServiceDesc.Metadata)",
+              "lineSha256": "1be93f78564bd708696742d02d4f141cdd8622dd0508ab5c7f897f5e965a5fc8"
+            },
+            {
+              "line": 29,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 30,
+              "text": "\tmethods := map[string]bool{}",
+              "lineSha256": "e4cf0cb9a2b66fef74b2a96cf5bf9ec0a7693230419dce800a56a59154651a3a"
+            },
+            {
+              "line": 31,
+              "text": "\tfor _, method := range KeyService_ServiceDesc.Methods {",
+              "lineSha256": "4db8cbd614f79b3c5ac09da7f8a6f292b287a1441742441d67896f46041d7986"
+            },
+            {
+              "line": 32,
+              "text": "\t\tif method.Handler == nil {",
+              "lineSha256": "c69118b23948f51f57048e87046cd47800b172b2d09a684b32d4105e1bcebccd"
+            },
+            {
+              "line": 33,
+              "text": "\t\t\tt.Fatalf(\"method %q has no handler\", method.MethodName)",
+              "lineSha256": "e134ebd334c90f6878f1a04780936f3516e51785183ba8943941fed70a0211ab"
+            },
+            {
+              "line": 34,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 35,
+              "text": "\t\tmethods[method.MethodName] = true",
+              "lineSha256": "97801efbb954e61cd2031182667ac5c7a310af45f9bcc3f19eeb8b30172f854c"
+            },
+            {
+              "line": 36,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 37,
+              "text": "\tfor _, want := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "4081e8a226a6592251b5d994e002ae81ad034c2633e86958381d33984123a716"
+            },
+            {
+              "line": 38,
+              "text": "\t\tif !methods[want] {",
+              "lineSha256": "f8337f743a585e38386970053547bf5d610619dfd711f81e2cbe775d42bae4e5"
+            },
+            {
+              "line": 39,
+              "text": "\t\t\tt.Fatalf(\"no %q method: sops calls /KeyService/%s and would get Unimplemented\", want, want)",
+              "lineSha256": "5ca3aaaa20c2144c7454b7b0c22422709250e3cfa920225dbaf843350eb9d1a6"
+            },
+            {
+              "line": 40,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 41,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 42,
+              "text": "\tif len(methods) != 2 {",
+              "lineSha256": "45e301e696a6c02e58efcd74cc2d361d4d66b00ba3c40bc4b03c956375d7d2bc"
+            },
+            {
+              "line": 43,
+              "text": "\t\tt.Fatalf(\"the descriptor exposes %d methods, want exactly Encrypt and Decrypt: %v\", len(methods), methods)",
+              "lineSha256": "260c520daaeba9fa2721e24f5c93eea137b48bc5b75d2cdcb5419af0943051b1"
+            },
+            {
+              "line": 44,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 45,
+              "text": "\tif KeyService_ServiceDesc.HandlerType == nil {",
+              "lineSha256": "000c098c7c09da348c245a539204b457c4c219ac275d637e83759dd2fcab8197"
+            },
+            {
+              "line": 46,
+              "text": "\t\tt.Fatal(\"HandlerType is nil, so grpc cannot type-check registrations\")",
+              "lineSha256": "7ffe26ccc07e9c7e1237816981e955599ab32039566b3fba463b83442b10e489"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Local deterministic serialization and decode of independent literals; includes map entry and role/profile tags",
+          "anchors": [
+            {
+              "line": 40,
+              "text": "\t\t{\"EncryptRequest\", sops3133RequestKey + \"1205636c656172\", &EncryptRequest{Key: key, Plaintext: []byte(\"clear\")}, &EncryptRequest{}},",
+              "lineSha256": "213efd4a7784d0dd5cfb67ec8c3bd07d1ffef649c07ab5ecbaf0e981588064fe"
+            },
+            {
+              "line": 41,
+              "text": "\t\t{\"EncryptResponse\", \"0a067365616c6564\", &EncryptResponse{Ciphertext: []byte(\"sealed\")}, &EncryptResponse{}},",
+              "lineSha256": "0be99c7cba4de487874aba9dcc9c708724961e2f90bbfca517e4b618f068b51b"
+            },
+            {
+              "line": 42,
+              "text": "\t\t{\"DecryptRequest\", sops3133RequestKey + \"12067365616c6564\", &DecryptRequest{Key: key, Ciphertext: []byte(\"sealed\")}, &DecryptRequest{}},",
+              "lineSha256": "91b02984855a75ad0fc91b5e3dd712a9ae45d1118a651f47fea70a4641843c83"
+            },
+            {
+              "line": 43,
+              "text": "\t\t{\"DecryptResponse\", \"0a05636c656172\", &DecryptResponse{Plaintext: []byte(\"clear\")}, &DecryptResponse{}},",
+              "lineSha256": "cbc4f2711ad6ee34b1a9fa9fb8a08a077719e1aab2a102162f4d0291994a8aca"
+            },
+            {
+              "line": 44,
+              "text": "\t\t// Wire-only control: these two nonempty fields are refused by the adapter's carrier rules.",
+              "lineSha256": "b4f7fc52c794a57b4007abfe634c4ad5528e85478da9ba267ac59607c8ed78f7"
+            },
+            {
+              "line": 45,
+              "text": "\t\t{\"RoleAndProfileTags\", \"0a0361726e1204726f6c651a060a016b120176220770726f66696c65\",",
+              "lineSha256": "4d31901401c17f7eb80ee0d57276f9e1ddcd86684c6e5f260b7d49aac07e0b87"
+            },
+            {
+              "line": 46,
+              "text": "\t\t\t&KmsKey{Arn: \"arn\", Role: \"role\", Context: map[string]string{\"k\": \"v\"}, AwsProfile: \"profile\"}, &KmsKey{}},",
+              "lineSha256": "2f99fd9fc02204aba981bbaab4c66dd702f3da833f062ef5ae11056c747289c9"
+            },
+            {
+              "line": 47,
+              "text": "\t} {",
+              "lineSha256": "c1ceb8b2113376ffee51d896fea8e25a87082f83afee041071315f639c79c50a"
+            },
+            {
+              "line": 48,
+              "text": "\t\tt.Run(tc.name, func(t *testing.T) {",
+              "lineSha256": "e515dc9cdb0e362932b29d16961409841a103ba4455b4d6df417c90450caa833"
+            },
+            {
+              "line": 49,
+              "text": "\t\t\twant, err := hex.DecodeString(tc.wire)",
+              "lineSha256": "cb32923b53f21243a61658183c6d5d579c65b15800e074aef2b8be229fa002fe"
+            },
+            {
+              "line": 50,
+              "text": "\t\t\tif err != nil {",
+              "lineSha256": "6303317aab8d58a8bcc5c2c1c7c83539df2328e9aa0ba6f8a5745517202ef0c7"
+            },
+            {
+              "line": 51,
+              "text": "\t\t\t\tt.Fatalf(\"invalid literal vector: %v\", err)",
+              "lineSha256": "a9a756eac38a0f549dbd812646b310b5bbe5cd07798744d1b45eccf91b969649"
+            },
+            {
+              "line": 52,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 53,
+              "text": "\t\t\tbuffer := proto.NewBuffer(nil)",
+              "lineSha256": "5fa1aa4557ae13c75830484baadec530ce4acd441f46e567b8d2c027a0bf06e7"
+            },
+            {
+              "line": 54,
+              "text": "\t\t\tbuffer.SetDeterministic(true)",
+              "lineSha256": "7fa753f9f3315426bb137dbf5c575a1d20522b293dac99841c5ab8c00f70cc34"
+            },
+            {
+              "line": 55,
+              "text": "\t\t\tif err := buffer.Marshal(tc.value); err != nil {",
+              "lineSha256": "b0510d105451da3ec5ee1e098b83286e7149942ecccb35a850f34df43b6aefdc"
+            },
+            {
+              "line": 56,
+              "text": "\t\t\t\tt.Fatalf(\"local deterministic marshal: %v\", err)",
+              "lineSha256": "c3f71f0d4b9a77432a2ec9e3b2c8a519bd554c9910c9806dda363e17604b5ecc"
+            },
+            {
+              "line": 57,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 58,
+              "text": "\t\t\tif !bytes.Equal(buffer.Bytes(), want) {",
+              "lineSha256": "9e8cf1cc8ae1c87f853a8e03ef4d42b07faa8ba2b62f0110763afc1c77c67ac4"
+            },
+            {
+              "line": 59,
+              "text": "\t\t\t\tt.Errorf(\"serialized wire differs from v3.13.3 vector: got %x, want %x\", buffer.Bytes(), want)",
+              "lineSha256": "e53323d01f2769ef42c358ab53495a848165fd5f0bab90dfd152177b4ec4eb52"
+            },
+            {
+              "line": 60,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 61,
+              "text": "\t\t\tif err := proto.Unmarshal(want, tc.decoded); err != nil {",
+              "lineSha256": "66abd75ddb978a105155edf1d5406acef07d97ede6e1e3fccc4bcf93b58989bb"
+            },
+            {
+              "line": 62,
+              "text": "\t\t\t\tt.Fatalf(\"decoding upstream literal: %v\", err)",
+              "lineSha256": "5c83c566fd15c0177723168cbc41d256039ce19d24272c92191e44c03c893340"
+            },
+            {
+              "line": 63,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 64,
+              "text": "\t\t\tif !proto.Equal(tc.decoded, tc.value) {",
+              "lineSha256": "7b92c7c40c2beb0bf0f8c9a61c658765a3c43ce51d40df33444b199bf6313d0f"
+            },
+            {
+              "line": 65,
+              "text": "\t\t\t\tt.Errorf(\"decoded upstream literal differs: got %v, want %v\", tc.decoded, tc.value)",
+              "lineSha256": "beece97d8853720f5aec3cf3e495778724c63ef4f21429da9fa1ee1e131c6159"
+            },
+            {
+              "line": 66,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        },
+        {
+          "path": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+          "sha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+          "role": "scratch_test_candidate",
+          "scope": "Registers on a real grpc.Server, checks exact unary full paths and interceptor identity with inert handler target",
+          "anchors": [
+            {
+              "line": 71,
+              "text": "func TestSOPS3133FullMethods(t *testing.T) {",
+              "lineSha256": "44f41e27608acaa286e997664db5c1a56942433c38e54349d8c5adda93d04d54"
+            },
+            {
+              "line": 72,
+              "text": "\tupstream := map[string]string{\"Encrypt\": \"/KeyService/Encrypt\", \"Decrypt\": \"/KeyService/Decrypt\"}",
+              "lineSha256": "a579d4ccb87e44b93930fbd071064e750529883af25ffe3a60686f5ffab79327"
+            },
+            {
+              "line": 73,
+              "text": "\tserver := grpc.NewServer()",
+              "lineSha256": "0591799bba8b1a94afafb70cd71a36b04440bf9f78f0e526b02e2098bdee5cde"
+            },
+            {
+              "line": 74,
+              "text": "\tRegisterKeyServiceServer(server, &recordingServer{})",
+              "lineSha256": "39074b9bb02a070f993d0dd525b115887c6d2ed3f9394af3a0806eee5a3c9d4b"
+            },
+            {
+              "line": 75,
+              "text": "\tregistered := map[string]bool{}",
+              "lineSha256": "0d71ff4b3ffa0632335b1253a565543591156c035da87cc12ed1fd7502e297c2"
+            },
+            {
+              "line": 76,
+              "text": "\tfor service, info := range server.GetServiceInfo() {",
+              "lineSha256": "926d5345a9cbcb924f0bb4d4ba5ebc8a03c807df10403e48e48010be164c6668"
+            },
+            {
+              "line": 77,
+              "text": "\t\tfor _, method := range info.Methods {",
+              "lineSha256": "b0da84099ec558a73b99d32bc98e552ddf06546568d657867fa3aaea46b71678"
+            },
+            {
+              "line": 78,
+              "text": "\t\t\tif !method.IsClientStream && !method.IsServerStream {",
+              "lineSha256": "e500637dda2a1e7b77ae6d027594b2206ceaa20931930fa22c1d0dd8e7a62715"
+            },
+            {
+              "line": 79,
+              "text": "\t\t\t\tregistered[\"/\"+service+\"/\"+method.Name] = true",
+              "lineSha256": "d033114ec9556c999b45d12c9c55f379e146185fbd90f149ae25f9ec9b458b29"
+            },
+            {
+              "line": 80,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 81,
+              "text": "\t\t}",
+              "lineSha256": "3713bbfd76dcaac1a6d8316dc5b8e2bccaf4b47f2c767f953af2ed65363ec925"
+            },
+            {
+              "line": 82,
+              "text": "\t}",
+              "lineSha256": "a32a3bb7121485ebcbc1a2b6af585ccc5f6a4c4bc1e997911fcdb895e6692611"
+            },
+            {
+              "line": 83,
+              "text": "\tfor _, method := range []string{\"Encrypt\", \"Decrypt\"} {",
+              "lineSha256": "7c4a6cf15ef8ce0630a430fffe4d47ec59844d17842f8401aa02f6fe0b8ee4f5"
+            },
+            {
+              "line": 84,
+              "text": "\t\tt.Run(method, func(t *testing.T) {",
+              "lineSha256": "59268a5dee85c9d8bbbdd605f2e6505e7f60f88a4757a621b2da9f96beea1b4b"
+            },
+            {
+              "line": 85,
+              "text": "\t\t\twant := upstream[method]",
+              "lineSha256": "bd8a111a458b4a787c8099465e1f8155a90e75128001a9fc12de13dbfd193b0d"
+            },
+            {
+              "line": 86,
+              "text": "\t\t\tif !registered[want] {",
+              "lineSha256": "ad74697073f7cacf1eed6bc58a7ba0066d140aeb64d943194061f8edf452cd5d"
+            },
+            {
+              "line": 87,
+              "text": "\t\t\t\tt.Fatalf(\"upstream unary method %q is not registered\", want)",
+              "lineSha256": "d9629e18252b6f2a951f3710324dc5af5fd7648d030385b47e58a39b5d2c158b"
+            },
+            {
+              "line": 88,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 89,
+              "text": "\t\t\treq := &recordingServer{}",
+              "lineSha256": "f8c63234c60a838b3bcb45426d09b0d0526164fd20485e21c30d19c2a2a3e54c"
+            },
+            {
+              "line": 90,
+              "text": "\t\t\tcalled := false",
+              "lineSha256": "5f3cd688b7816871fd7f1ed3164c07dc988be1a9c7a36dbbc49d21b8aca286ae"
+            },
+            {
+              "line": 91,
+              "text": "\t\t\tout, err := handlerFor(t, method)(req, context.Background(), func(any) error { return nil },",
+              "lineSha256": "8d8affe270ddb319b8af237fd15e2bfb6d66cb208feb1bac69814526db78d166"
+            },
+            {
+              "line": 92,
+              "text": "\t\t\t\tfunc(ctx context.Context, message any, info *grpc.UnaryServerInfo, next grpc.UnaryHandler) (any, error) {",
+              "lineSha256": "f32aa530166c64945633e4833002f53bc132b3cca33397a7c9cd25efbf5dad79"
+            },
+            {
+              "line": 93,
+              "text": "\t\t\t\t\tcalled = true",
+              "lineSha256": "1d151be4a8bac8719db72164c5cb259caec34b709a304eb95b183b75dee45d08"
+            },
+            {
+              "line": 94,
+              "text": "\t\t\t\t\tif info.FullMethod != want {",
+              "lineSha256": "2be69178be69925f9120e0961f646cb7a3bee821dcd30587b1afec76b893b689"
+            },
+            {
+              "line": 95,
+              "text": "\t\t\t\t\t\tt.Errorf(\"interceptor reports %q, want upstream method %q\", info.FullMethod, want)",
+              "lineSha256": "2f48a1e79e8e5be0205d01ce60aca460bb7de85dd7e8fe03c7577c67943a2df3"
+            },
+            {
+              "line": 96,
+              "text": "\t\t\t\t\t}",
+              "lineSha256": "0ba026ffd5b48649b6bfa2d1b007cba796e8abd05416c05edf59b0e46a00857d"
+            },
+            {
+              "line": 97,
+              "text": "\t\t\t\t\treturn next(ctx, message)",
+              "lineSha256": "6ea7382ac12960c6069e90f20143bdec5f16fd1eeda675ca6f9f165b65894a88"
+            },
+            {
+              "line": 98,
+              "text": "\t\t\t\t})",
+              "lineSha256": "63eb129eccf3082090f31298f4bf7b23b337026b70aba44b88f6124e76e12cf7"
+            },
+            {
+              "line": 99,
+              "text": "\t\t\tif err != nil || !called || out == nil {",
+              "lineSha256": "e332a327b822b49b56ce0d22bc269e25e6a1f2fecf2ade61158881abe5c53a66"
+            },
+            {
+              "line": 100,
+              "text": "\t\t\t\tt.Fatalf(\"unary dispatch did not complete: called=%t, result=%T, err=%v\", called, out, err)",
+              "lineSha256": "d303525d93eb0967d0701409a1a441e96ae42ce51aa9e6278d515931f8d542b3"
+            },
+            {
+              "line": 101,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            },
+            {
+              "line": 102,
+              "text": "\t\t\tif (req.encrypted != nil) != (method == \"Encrypt\") || (req.decrypted != nil) != (method == \"Decrypt\") {",
+              "lineSha256": "c8208a07077757a841f8987b933cc2825b219cebfe43d78264f0839db5eed745"
+            },
+            {
+              "line": 103,
+              "text": "\t\t\t\tt.Fatal(\"unary dispatch reached the wrong method\")",
+              "lineSha256": "17ce8ce5ed24884cf5bfc73b773c3ae1b5cb1b968e0c476946fcb0ef106c8d39"
+            },
+            {
+              "line": 104,
+              "text": "\t\t\t}",
+              "lineSha256": "4ffaefcc81db12fe7c511a40cb50482ac4aaf8afc62c96c253d46036f444a696"
+            }
+          ]
+        }
+      ],
+      "candidateSubtests": {
+        "vectors": [
+          "EncryptRequest",
+          "EncryptResponse",
+          "DecryptRequest",
+          "DecryptResponse",
+          "RoleAndProfileTags"
+        ],
+        "methods": [
+          "Encrypt",
+          "Decrypt"
+        ]
+      },
+      "candidateRunRecord": "runs/results.json",
+      "remainingEvidenceGap": "No exact revision-bound hosted run of the checksum-pinned upstream binary or full release/KMS operation qualification. Existing v3.13.x guard is not exact-patch evidence. No active verification promotion.",
+      "compatibilityExclusions": "Six unsupported upstream Key oneof arms, mixed oneof precedence, nonempty role/profile acceptance, other releases, and full CLI/TLS/KMS behavior are outside the admitted subset.",
+      "scopeDecision": "Type mismatch is intentional at the enclosing oneof; no numeric mismatch for the admitted arm. Keep the named upstream scope in the exact scenario links."
+    }
+  ]
+}

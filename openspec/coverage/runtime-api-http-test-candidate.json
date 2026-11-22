@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "status": "locally-implemented-candidate-tests; not-shipped-verification",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "productSourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "candidateTestPath": "internal/operations/http_capacity_replay_test.go",
+  "candidateTestSha256": "3cb24789c522779b130f61ed64b8c754e7c5ee977e429ad87862e72db76147b0",
+  "patchSha256": "8796ef51497f476abc8703cc872127cf9217826310bb3b748fd07dacf86ba381",
+  "cases": [
+    "HTTP.sign.busy",
+    "HTTP.wrap.busy",
+    "HTTP.unwrap.busy",
+    "HTTP.certificate-sign.busy",
+    "HTTP.key-agreement.busy",
+    "HTTP.wrap.already-reserved",
+    "HTTP.unwrap.already-reserved",
+    "HTTP.certificate-sign.already-reserved",
+    "HTTP.key-agreement.already-reserved"
+  ],
+  "executionTier": "local_nonroot_linux_http_integration_with_inert_backend",
+  "parentObservedSubtests": 11,
+  "mutationControls": [
+    {
+      "name": "capacity-widened",
+      "buildExit": 0,
+      "exit": 1,
+      "intendedFailingSubtests": 5,
+      "binarySha256": "9e8f46fc5ae4c28b4c7c56b14404bf3eb769442ce3ed9f2f4fff69420ad9dda8",
+      "logSha256": "a937bb24b39a775707fff528fae574b706851d4ab0ae321143b3928346690c8f"
+    },
+    {
+      "name": "busy-status",
+      "buildExit": 0,
+      "exit": 1,
+      "intendedFailingSubtests": 5,
+      "binarySha256": "6cd6ae9f005b1193b3b0252a9c3e2ef95eb054d167834fde8eb1e2537e4d02d4",
+      "logSha256": "4dc9862517829f5bf346b006adc3f4ddafb242d2df6c1ab7bebe7cfa43bc2b7e"
+    },
+    {
+      "name": "busy-retryable",
+      "buildExit": 0,
+      "exit": 1,
+      "intendedFailingSubtests": 5,
+      "binarySha256": "c75dd81c51ea4fa2f5c7b3fb2599209e74ef54808f8009b34311910613403e19",
+      "logSha256": "d17f2af36bddb4360308e15738248d87fe38e906de6e24e3f5927c12ea04361d"
+    },
+    {
+      "name": "forget-replay-index",
+      "buildExit": 0,
+      "exit": 1,
+      "intendedFailingSubtests": 4,
+      "binarySha256": "bf46e735e694619245b0b52ad3021a1378ed186994fa6d9fa04eea0080706fa9",
+      "logSha256": "7626585433f1c0e856c5e05927cc2918a9dc3a82a1eb6ea307c9e7f5ebc707e4"
+    }
+  ],
+  "scope": "Actual auth middleware with supplied verified peer state, router, handler, RBAC, registry, coordinator, FileState, admission wrapper, executor, audit; inert backend and admission state.",
+  "outsideProof": [
+    "TLS handshake",
+    "physical token or valid unwrap cryptography",
+    "real daemon process restart",
+    "live lease lifecycle",
+    "external collector",
+    "systemd or physical acceptance"
+  ],
+  "classificationChanges": false,
+  "hostedCi": "not-run-for-this-candidate",
+  "sourceBoundary": "Candidate test is additional to frozen source pin and has its own hash. Source snapshots are unchanged.",
+  "independentReview": "not performed; parent code inspection and fresh local build/run only"
+}
