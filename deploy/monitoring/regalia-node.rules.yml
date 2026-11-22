@@ -73,9 +73,7 @@ groups:
         annotations:
           summary: This node holds no runtime lease; the KMS daemon does not serve.
       - alert: RegaliaSurvivorRecoveryActive
-        expr: |
-          (regalia_admission_recovery == 1)
-          unless on(job, instance) (regalia_topology_nodes == 1)
+        expr: regalia_admission_recovery{topology_profile!="single-node"} == 1
         labels:
           severity: critical
         annotations:
@@ -120,14 +118,12 @@ groups:
       # from them or WITHHOLDING (a compromised sync that stops publishing, which no rule on that node alone can see).
       # Compared within one job (one cluster). Thirty minutes is many pull rounds (60 s) and ESP advances (seconds). A
       # node retired or revoked stops receiving epochs by design. Update the inventory when decommissioning it.
-      # Neither operand includes a statically single target or a verified size-one series, even when metadata disagrees.
+      # Both operands use the external inventory profile. Sync-written topology cannot exempt any target.
       - alert: RegaliaMembershipBehindFleet
         expr: |
-          (regalia_membership_epoch{topology_profile!="single-node"}
-            unless on(job, instance) (regalia_topology_nodes == 1))
+          regalia_membership_epoch{topology_profile!="single-node"}
           < on(job) group_left max by (job) (
             regalia_membership_epoch{topology_profile!="single-node"}
-            unless on(job, instance) (regalia_topology_nodes == 1)
           )
         for: 30m
         labels:
@@ -137,14 +133,13 @@ groups:
           description: "deploy/baremetal/README.md §7: compare `regalia-node check` on every node of the cluster; a node behind whose sync is running and reaches its peers is withholding."
       # The same, from root's own reading of the anchor (esp-advance.prom) on BOTH sides (regalia-kms-48): this node's sync
       # cannot hide it by writing a higher epoch in membership.prom than it anchored, and no peer's sync can make every
-      # honest node fire by writing an inflated one. The reference lags membership by the ESP advance (seconds).
+      # honest node fire by writing an inflated one. Sync cannot suppress either operand by changing its topology gauge.
+      # The external inventory alone excludes single-node targets. The reference lags membership by the ESP advance (seconds).
       - alert: RegaliaAnchorBehindFleet
         expr: |
-          (regalia_esp_anchor_epoch{topology_profile!="single-node"}
-            unless on(job, instance) (regalia_topology_nodes == 1))
+          regalia_esp_anchor_epoch{topology_profile!="single-node"}
           < on(job) group_left max by (job) (
             regalia_esp_anchor_epoch{topology_profile!="single-node"}
-            unless on(job, instance) (regalia_topology_nodes == 1)
           )
         for: 30m
         labels:
@@ -172,9 +167,7 @@ groups:
           summary: "{{ $labels.instance }}'s site configuration does not match the site document it booted with (or that document cannot be read): its tunnels are not brought up."
           description: "`journalctl -u regalia-site-check` names the differing keys and both files. After a move, replace /etc/regalia's site configuration with the new site's, then `systemctl restart regalia-site-check regalia-wg-apply`."
       - alert: RegaliaNextBootNeedsRecoveryKey
-        expr: |
-          (regalia_esp_boot_renderable == 0)
-          unless on(job, instance) (regalia_topology_nodes == 1)
+        expr: regalia_esp_boot_renderable{topology_profile!="single-node"} == 0
         labels:
           severity: warning
         annotations:

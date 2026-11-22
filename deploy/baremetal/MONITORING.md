@@ -90,10 +90,13 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   schedules; the rule adds no delay. A failed scrape means service is unavailable or unconfirmed to the
   monitor. Investigate the endpoint, network and TLS as well as the machine.
 - **Topology metadata** warns after five minutes for missing or invalid profiles on either job, or for
-  missing or conflicting live topology on a successfully scraped exporter with valid metadata. Verified
-  size-one series and targets explicitly labeled single-node are excluded from both sides of the two fleet
-  comparisons. Verified size one suppresses survivor and recovery-key alerts and emits informational
-  `RegaliaOwnerAssistedReboot`: an owner must be present on each boot. It does not page.
+  missing or conflicting live topology on a successfully scraped exporter with valid metadata. The external
+  inventory profile excludes single-node targets from both sides of the fleet comparisons and from survivor
+  and recovery-key alerts. Sync's own topology gauge cannot exempt a target or remove a comparison reference;
+  in particular, it cannot silence the root-produced anchor alert. Missing inventory labels retain legacy
+  coverage. Correct registration is a commissioning requirement; repair metadata when the consistency warning
+  fires. Live size one emits informational `RegaliaOwnerAssistedReboot`: an owner must be present on each boot.
+  It does not page or change which other alerts apply.
 - **Other targets** that cannot be scraped still raise `RegaliaNodeExporterDown` (critical, after 2 minutes).
   The delayed `RegaliaNotServing` and `RegaliaNotReady` rules also retain legacy coverage. The three shared
   alerts exclude explicitly registered single-node targets, which have the earlier composite page.

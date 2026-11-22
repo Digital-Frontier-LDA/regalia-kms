@@ -111,15 +111,24 @@ def cases():
                 inputs = [(metric, target, f"{value}+0x40"), (metric, legacy, f"{other}+0x40")]
                 if topology is not None:
                     inputs.append(("regalia_topology_nodes", target, "1+0x40"))
-                yield case(f"{alert} excludes {target.get('topology_profile')} topology {topology} from {side}",
-                           inputs, alert, at="32m")
+                # Applicability is external inventory, not a sync-written value.
+                # With multi/legacy metadata, sync cannot hide a lagging node or
+                # remove the maximum that makes another node's lag observable.
+                expected = [] if target.get("topology_profile") == "single-node" else [target if value < other else legacy]
+                yield case(f"{alert} uses inventory for {target.get('topology_profile')} topology {topology} on {side}",
+                           inputs, alert, expected, at="32m")
+                if topology is not None:
+                    pulse_inputs = inputs[:-1] + [("regalia_topology_nodes", target, "3+0x9 1 3+0x30")]
+                    yield case(f"{alert} sync topology cannot reset pending {side} for {target.get('topology_profile')}",
+                               pulse_inputs, alert, expected, at="32m")
 
     for specific, signal, value in (("RegaliaSurvivorRecoveryActive", "regalia_admission_recovery", 1),
                                     ("RegaliaNextBootNeedsRecoveryKey", "regalia_esp_boot_renderable", 0)):
-        yield case(f"{specific} suppressed on verified single despite wrong metadata",
-                   [(signal, mislabeled, f"{value}+0x40"), ("regalia_topology_nodes", mislabeled, "1+0x40")], specific)
-        yield case(f"{specific} keeps wrong-static-single verified multi coverage",
-                   [(signal, NODE, f"{value}+0x40"), ("regalia_topology_nodes", NODE, "3+0x40")], specific, [NODE])
+        for target in (mislabeled, unknown):
+            yield case(f"{specific} sync topology cannot suppress {target.get('topology_profile', 'legacy')} inventory",
+                       [(signal, target, f"{value}+0x40"), ("regalia_topology_nodes", target, "1+0x40")], specific, [target])
+        yield case(f"{specific} uses single inventory despite contradictory sync telemetry",
+                   [(signal, NODE, f"{value}+0x40"), ("regalia_topology_nodes", NODE, "3+0x40")], specific)
     yield case("owner info requires live verified size one",
                [("regalia_topology_nodes", mislabeled, "1+0x40"),
                 ("regalia_topology_nodes", dict(NODE, instance="multi:9100"), "3+0x40"),
