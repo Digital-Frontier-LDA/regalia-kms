@@ -22,7 +22,6 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -582,14 +581,5 @@ func handoverPending(ctx context.Context, sink audit.TrailSink, o options) error
 
 // certificateIdentity is how the collector names this host: the SHA-256 of its client certificate's DER.
 func certificateIdentity(path string) (string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("client certificate: %w", err)
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return "", errors.New("client certificate: not a PEM certificate")
-	}
-	sum := sha256.Sum256(block.Bytes)
-	return hex.EncodeToString(sum[:]), nil
+	return audit.CollectorCertificateIdentity(path)
 }
