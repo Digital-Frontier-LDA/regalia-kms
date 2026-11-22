@@ -164,6 +164,10 @@ type Status struct {
 	Reason string
 	// Epoch is the manifest epoch the file names, 0 when the file could not be read.
 	Epoch uint64
+	// Profile is the topology of the verified chain used by this admitted decision.
+	// Empty on refusal and for an admitted legacy peer with no configured chain;
+	// neither absence nor the lease's mode establishes a topology.
+	Profile string
 	// RequestedBoottimeMs is when the node asked for the lease it holds, 0 when not admitted.
 	RequestedBoottimeMs int64
 	// HSMSerials are this node's hardware tokens in the manifest, empty when not admitted.
@@ -518,6 +522,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	// AN ADMISSION IS GOOD ONLY FOR THE EPOCH IT WAS JUDGED UNDER (48 on #432): once the chain has moved, a file
 	// the lease service wrote under the previous epoch (a lease from a now-quarantined issuer, say) is refused,
 	// not served until it expires. A chain briefly ahead of the admission refuses too, until the next round.
+	var verifiedProfile string
 	if gate.options.ChainPath != "" {
 		epoch, digest, profile, err := gate.chainTip()
 		if err != nil {
@@ -533,13 +538,14 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 		if err := modeFitsProfile(document.Mode, profile); err != nil {
 			return refuse(err.Error())
 		}
+		verifiedProfile = profile
 	} else if document.Mode == ModeSingle {
 		// dx7.3: a self-issued lease serves only where the verified chain shows the single-node profile; with no chain
 		// configured, nothing here can show it (fail closed)
 		return refuse("an admission in mode single is served only against the membership chain's single-node profile, and no " +
 			"membership chain is configured")
 	}
-	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
+	return Status{Admitted: true, Epoch: document.Epoch, Profile: verifiedProfile, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
 		State: document.State}
 }
 
