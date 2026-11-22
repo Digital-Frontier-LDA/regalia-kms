@@ -96,7 +96,7 @@ jobs:
           # tzdata-legacy: right/UTC, which authtime requires before it calls time authenticated (a node
           # requirement on Debian 13); ubuntu-26.04's tzdata no longer carries it. Every job here runs authtime.
           sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
-            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
+            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0 dosfstools
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel had no vTPM proxy
           # before the 2026-10-18 images; where it has none, the test makes the device with swtpm's CUSE mode.
           sudo apt-get install -y -qq --no-install-recommends tpm-udev

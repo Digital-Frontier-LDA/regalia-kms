@@ -56,7 +56,7 @@ HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
   * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
     exercised here (part 1 does that), and tabrmd keeps a disconnected client's sessions reclaimable where
     the kernel flushes them, so nothing that uses a session across processes is proven by it (#65).
-  * the ESP is a fixture mount at /efi, backed by tmpfs if the runner has no mount: the unit's
+  * the ESP is a disposable VFAT loopback mount at /efi: the unit's
     RequiresMountsFor= and the write are exercised, not a vfat mount nor a boot from it (that is
     tests/test_baremetal_unlock_boot.py, boots 10-12).
   * the KMS daemon runs as the invoking user through systemd-run, not as the shipped regalia-kms.service
@@ -97,6 +97,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "e2e" / "lib"))
+import node_units_esp
 import tpmdiag                                                                       # noqa: E402  regalia-zga
 
 from deploy.baremetal import admission, attest, authtime, bootcreds, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sitecfg, sync, trails, wgsvc   # noqa: E402
@@ -106,9 +107,7 @@ PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
          "regalia-admission.service", "regalia-sync.service", "regalia-esp-advance.service", "regalia-esp-advance.path",
          "regalia-site-check.service")
-ESP = "/efi"                     # the unit's ESP; made by the test where the runner has none, and removed after (MADE)
-MADE = []
-ESP_MOUNTS = []
+ESP = "/efi"                     # the unit's ESP, backed by the fixture for the whole scenario
 SITE_CRED = pathlib.Path(ESP) / node.SITE_ON_ESP     # the measured site document regalia-site-check binds (#615)
 SITE_PROM = pathlib.Path(metrics.RUN_DIR) / "site-check" / "site-check.prom"
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
@@ -295,26 +294,23 @@ def main():
     work = pathlib.Path(tempfile.mkdtemp(prefix="node-units-"))
     os.chmod(work, 0o711)                  # the software TPM runs as tss, under it
     try:
-        return scenario(work, binaries, os.environ["SUDO_USER"])
+        with node_units_esp.mounted(work, pathlib.Path(ESP), sh):
+            try:
+                return scenario(work, binaries, os.environ["SUDO_USER"])
+            finally:
+                STOP.append(True)
+                for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
+                    sh("systemctl", "stop", name, check=False)
+                sh("ip", "netns", "del", NS, check=False)
+                dropins = [pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")] + \
+                          [pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name) for name in UNITS]
+                if any(d.exists() for d in dropins):
+                    for d in dropins:
+                        if d.exists():
+                            d.unlink()
+                    sh("systemctl", "daemon-reload", check=False)
+                sh("ip", "link", "del", "e2e-b0", check=False)
     finally:
-        STOP.append(True)
-        for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
-            sh("systemctl", "stop", name, check=False)
-        sh("ip", "netns", "del", NS, check=False)
-        if ESP_MOUNTS:
-            sh("umount", ESP)
-        if MADE:
-            shutil.rmtree(MADE[0], ignore_errors=True)
-        elif not ESP_MOUNTS and SITE_CRED.exists():
-            SITE_CRED.unlink()
-        dropins = [pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")] + \
-                  [pathlib.Path("/etc/systemd/system/%s.d/e2e-tcti.conf" % name) for name in UNITS]
-        if any(d.exists() for d in dropins):
-            for d in dropins:
-                if d.exists():
-                    d.unlink()
-            sh("systemctl", "daemon-reload", check=False)
-        sh("ip", "link", "del", "e2e-b0", check=False)
         print("\nnode-units-systemd: %d passed, %d failed" % (passed, failed))
 
 
@@ -478,12 +474,6 @@ def provision(work):
     pathlib.Path("/etc/regalia/site.json").write_text(json.dumps(site))
     # the ESP's measured site document, rendered from the same site as enrolment renders it: regalia-wg-apply Requires=
     # regalia-site-check, which compares the two (#615). Section 3b moves it.
-    if not os.path.exists(ESP):
-        os.mkdir(ESP, 0o755)
-        MADE.append(ESP)
-    if sh("mountpoint", "-q", ESP, check=False).returncode != 0:
-        sh("mount", "-t", "tmpfs", "-o", "mode=0700", "tmpfs", ESP)
-        ESP_MOUNTS.append(ESP)
     SITE_CRED.parent.mkdir(parents=True, exist_ok=True)
     SITE_CRED.write_bytes(bootcreds.site_document(sitecfg.validate(site), "/dev/disk/by-partlabel/regalia-root"))
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
@@ -1014,9 +1004,7 @@ def part2(work, binaries, user, ctx, servers, status):
     store.commit(signed(m2))
     freshness.accept(hbt.beat(m2, 2, issued=int(time.time())), m2)
     before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
-    if not os.path.exists(ESP):
-        os.mkdir(ESP, 0o755)
-        MADE.append(ESP)
+    node_units_esp.require_vfat(pathlib.Path(ESP), sh)
     anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"])
     ok(anchor.value() == 1, "a's TPM anchor is at epoch 1 before the catch-up", anchor.value())
     sh("systemctl", "start", "regalia-esp-advance.path", "regalia-wg-apply.path", "regalia-sync.service")
