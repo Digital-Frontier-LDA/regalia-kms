@@ -18,7 +18,7 @@
 
 ## 4. Verify integrated hosted behavior
 
-- [ ] 4.1 Collect authorized, fresh exact-head non-draft CI on B. Verify evaluated commit/tree and parent linkage, both independent local source preflights, exact resolver output and false authority/coverage flags, scoped tests, and successful logged aggregate needs. Record source/tool hashes, step/job/run/attempt and total build-test time under 20 minutes. Preserve 9115/3378 records as historical.
+- [x] 4.1 Collect authorized, fresh exact-head non-draft CI on B. Verify evaluated commit/tree and parent linkage, both independent local source preflights, exact resolver output and false authority/coverage flags, scoped tests, and successful logged aggregate needs. Record source/tool hashes, step/job/run/attempt and total build-test time under 20 minutes. Preserve 9115/3378 records as historical.
 
 ## Workflow follow-up
 

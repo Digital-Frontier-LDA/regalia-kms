@@ -72,7 +72,7 @@
       "KMS-CI-011",
       "KMS-CI-012"
     ],
-    "status": "Local adoption candidate. Hosted execution and review remain pending.",
+    "status": "Adoption B hosted execution passed at 321bbba1, run 45008483298 attempt 1. Independent review and merge remain pending.",
     "verificationAuthority": "not-assessed",
     "coverageComplete": false,
     "source": {

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "active": false,
-  "status": "finite non-draft hosted proof accepted at PR 764 head 91151a4d; tooling-domain integration and merge review pending",
+  "status": "Finite hosted proof accepted for tooling adoption B at 321bbba1; independent review and PR 764 dependency remain open.",
   "id": "TOOLS.openspec-reference-checker",
   "candidateDocsRevision": "f66a5cd6a3bdf223baf5d46d9622739d868ea29a",
   "candidateDocsTree": "5aeb6c3d1b3c18865e9f3611f91027b3c1c0ceb9",
@@ -375,7 +375,7 @@
       "KMS-CI-011",
       "KMS-CI-012"
     ],
-    "status": "Local adoption candidate. Hosted execution and review remain pending.",
+    "status": "Adoption B hosted execution passed at 321bbba1, run 45008483298 attempt 1. Independent review and merge remain pending.",
     "verificationAuthority": "not-assessed",
     "coverageComplete": false,
     "adoptingSourceRecord": {
@@ -384,7 +384,7 @@
     },
     "currentCliProposal": {
       "path": "openspec/coverage/reference-integrity-cli-proposal.json",
-      "fileSha256": "8f21e0624377a640079c0e3b04292527c538fab9ea2c6fd1fb750f516e83ce1d"
+      "fileSha256": "3b9e8692385b4aa42f1c8e444b88184a137b72a1cabf761ef7ba744a5b4cf7f5"
     },
     "pinnedFiles": [
       {
@@ -436,6 +436,13 @@
     "specs": [
       "openspec/specs/delivery/software-build-and-ci/spec.md",
       "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md"
-    ]
+    ],
+    "hostedObservation": {
+      "path": "openspec/coverage/tooling-domain-hosted-observation.json",
+      "sha256": "d541d671ff7fbdad0d4389c663347c71c181e8108d50138fff7f246238da3179",
+      "executedHead": "321bbba167a6a95295bc49b5ccea4aacf0a5f57d",
+      "run": 45008483298,
+      "qualification": "Finite hosted tooling observation only; no verification promotion."
+    }
   }
 }
