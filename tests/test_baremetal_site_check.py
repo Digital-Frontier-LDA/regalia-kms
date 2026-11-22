@@ -3,6 +3,7 @@ which regalia-site-check.service runs and regalia-wg-apply.service Requires=. Ac
 both hold; refused on any difference, and when the document is missing, unreadable or not one the initrd reads."""
 import copy
 import os
+import shlex
 import shutil
 import tempfile
 import unittest
@@ -94,18 +95,23 @@ UNITS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def directives(unit, key):
     with open(os.path.join(UNITS, unit)) as f:
-        return [line.split("=", 1)[1].strip() for line in f if line.startswith(key + "=")]
+        lines = f.read().replace("\\\n", " ").splitlines()
+    return [line.split("=", 1)[1].strip() for line in lines if line.startswith(key + "=")]
 
 
 class UnitTests(unittest.TestCase):
     def test_the_measured_document_is_bound_and_not_optional(self):
         # no "-": a missing document fails the unit at setup, never starts it without the file
         self.assertEqual(directives("regalia-site-check.service", "BindReadOnlyPaths"), ["/efi/" + node.SITE_ON_ESP])
-        self.assertEqual(directives("regalia-site-check.service", "RequiresMountsFor"), ["/efi"])
 
     def test_it_checks_the_esp_it_binds(self):
+        # The mount guard and document reader share a single ExecStart namespace.
         (start,) = directives("regalia-site-check.service", "ExecStart")
-        self.assertTrue(start.endswith(" site-check --esp /efi"), start)
+        self.assertTrue(shlex.split(start)[-1].endswith(" site-check --esp /efi"), start)
+
+    def test_it_attempts_the_mount_before_reading_the_esp(self):
+        self.assertIn("efi.mount", directives("regalia-site-check.service", "Wants"))
+        self.assertIn("efi.mount", directives("regalia-site-check.service", "After"))
 
     def test_wg_apply_requires_it_and_starts_after_it(self):
         # Requires= alone would start both at once; After= alone would start wg-apply on a failed check
