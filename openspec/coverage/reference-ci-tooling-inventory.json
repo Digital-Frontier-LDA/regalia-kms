@@ -342,8 +342,8 @@
   },
   "currentSupportingFileBindings": {
     "sourceDomain": "local-tooling-candidate-worktree",
-    "baseDocsRevision": "91151a4d0ed7871ac517d895cf7bcfd3b56fdbaa",
-    "scope": "Current local bindings. The hosted observation fixes the earlier executed RATCHET bytes; testedCandidate retains its earlier run bindings.",
+    "baseDocsRevision": "c6f7f72c0a039d28ddb607198ec6c0d615c29884",
+    "scope": "Current adoption documentation bindings. Earlier testedCandidate and hosted records retain their executed revisions and bytes.",
     "files": {
       "tools/openspec-ci/install-runtime.sh": {
         "fileSha256": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760",
@@ -354,13 +354,88 @@
         }
       },
       "openspec/coverage/RATCHET.md": {
-        "fileSha256": "9690b3191d8a299cde75a4e0f858710e89fbccabb766f9985f6997648ad29b67",
+        "fileSha256": "40bfa6c058ca91e41fad309b0115711c979f5eb1d0c0eee95865d1956f7fa481",
         "anchor": {
           "line": 19,
-          "text": "python3 -BEs tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3",
-          "lineSha256": "2eb924272d64d0887fe8a5a6872d7c8914f9d44d7196a77cad912abc7ad50a78"
+          "text": "python3 -BEs tools/check_openspec_references.py \\",
+          "lineSha256": "66371ff10abdce3851ae33a087d54052f76841cca0101091c76cfe0336373b44"
         }
       }
     }
+  },
+  "currentToolingDomain": {
+    "sourceDomain": "tooling",
+    "sourceRevision": "c6f7f72c0a039d28ddb607198ec6c0d615c29884",
+    "sourceTree": "c02d38ea4a0aad7d2fbe9d84527f19b96749b5d8",
+    "catalogOwner": "runtime",
+    "authoringOwner": "tooling",
+    "requirementIds": [
+      "KMS-CI-009",
+      "KMS-CI-010",
+      "KMS-CI-011",
+      "KMS-CI-012"
+    ],
+    "status": "Local adoption candidate. Hosted execution and review remain pending.",
+    "verificationAuthority": "not-assessed",
+    "coverageComplete": false,
+    "adoptingSourceRecord": {
+      "path": "openspec/coverage/tooling-authoring.json",
+      "fileSha256": "285573902d14c40bd208bc54a93a5f1b94f1713b5873690916cc08c92ef90d3b"
+    },
+    "currentCliProposal": {
+      "path": "openspec/coverage/reference-integrity-cli-proposal.json",
+      "fileSha256": "8f21e0624377a640079c0e3b04292527c538fab9ea2c6fd1fb750f516e83ce1d"
+    },
+    "pinnedFiles": [
+      {
+        "path": ".github/workflows/ci.yml",
+        "fileSha256": "da78b11f47a36ff5ac00319933ac7a292600c5b22c77c59e82b373b84b5894e1"
+      },
+      {
+        "path": "tests/test_check_openspec_references.py",
+        "fileSha256": "64f6e8dbe11788702e890e4b36a2ffdf3cc8e7fa622daf3fd2bcbfd010a6616c"
+      },
+      {
+        "path": "tools/check_openspec_references.py",
+        "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e"
+      },
+      {
+        "path": "tools/openspec-ci/check-lock.cjs",
+        "fileSha256": "8bd521601116fcab317a854853e5fd972e52d61faee2b0a59155339ce01cd594"
+      },
+      {
+        "path": "tools/openspec-ci/check-result.py",
+        "fileSha256": "03b0204f9398f542c577de9440555da1c3c9383641eaf59903f5bbfb0e16757e"
+      },
+      {
+        "path": "tools/openspec-ci/check-source.sh",
+        "fileSha256": "f8b77cbedda54fd7255aa436e22c1b8829dc3b4e060f214b2ef10af46a1a3e5c"
+      },
+      {
+        "path": "tools/openspec-ci/install-runtime.sh",
+        "fileSha256": "a40190a76ddec8a6da7057b787758954f2f2e186960e1300def4821e87330760"
+      },
+      {
+        "path": "tools/openspec-ci/package-lock.json",
+        "fileSha256": "73308b1729ed26821ebbb86f60348e94a03c3206d511cca8c766ee78e8f0acca"
+      },
+      {
+        "path": "tools/openspec-ci/package.json",
+        "fileSha256": "4e0a3be134dc227be2836c6daa894eea390ec7b9c60b113cb1926d5b53592621"
+      },
+      {
+        "path": "tools/openspec-ci/plan-tooling-source.py",
+        "fileSha256": "fdc8da2d88fa503fb1affb64c0b22c859164347d0609f7b0fcb8718592265f12"
+      },
+      {
+        "path": "tools/openspec-ci/wiring.test.cjs",
+        "fileSha256": "26c561170b4ac733b87ebea2a99f8b4ac8016cf11601fd5f10f48e3973bec895"
+      }
+    ],
+    "scope": "Requirement-level source and assertion bindings are in the distinct tooling shard. Source domains and execution records are independent; the earlier testedCandidate, source, and hostedEvidence records retain their own scope and revisions.",
+    "specs": [
+      "openspec/specs/delivery/software-build-and-ci/spec.md",
+      "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md"
+    ]
   }
 }

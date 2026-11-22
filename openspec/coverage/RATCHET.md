@@ -13,13 +13,19 @@
 
 ## Local reference check
 
-Run from the repository root:
+For the adopted snapshot, run from a local checkout root whose object database contains both pinned commits. The checker reads local objects and never fetches missing ones. The same checkout may supply both explicitly named domains:
 
 ```sh
-python3 -BEs tools/check_openspec_references.py --snapshot . --source-repo . --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3
+python3 -BEs tools/check_openspec_references.py \
+  --snapshot . --source-repo . \
+  --source-revision 0a32a901d1240eec51ddff323274e2ad935116f3 \
+  --tooling-source-repo . \
+  --tooling-source-revision c6f7f72c0a039d28ddb607198ec6c0d615c29884
 ```
 
-This checks the declared catalog, authoring, current case links and byte-bound product/candidate/external references. It reports `verificationAuthority: not-assessed` and `coverageComplete: false`. It does not validate evidence truth, approve N/A, enforce a legacy budget, preserve deleted obligations, or compare changed public behavior. The earlier checker reviews and findings remain unresolved. Its [CLI inventory proposal](reference-integrity-cli-proposal.json) is outside the frozen product interface inventory pending explicit tooling integration.
+For a pre-adoption snapshot with neither the tooling shard nor the adopted tooling requirements, use the original three options without the tooling pair. The adopted snapshot requires both tooling options.
+
+This checks the declared catalog, authoring, current case links and byte-bound product/candidate/external references. It reports `verificationAuthority: not-assessed` and `coverageComplete: false`. It does not validate evidence truth, approve N/A, enforce a legacy budget, preserve deleted obligations, or compare changed public behavior. The earlier checker reviews and findings remain unresolved. Its [CLI inventory proposal](reference-integrity-cli-proposal.json) records the separate tooling domain while the frozen product inventory remains unchanged; this adoption does not close tooling discovery or evidence authority.
 
 ## Implementation sequence and pass/fail acceptance
 

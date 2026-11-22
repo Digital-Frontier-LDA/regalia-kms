@@ -59,5 +59,82 @@
     "line": 651,
     "text": "    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)",
     "lineSha256": "d8245733ee67dafa18136d6c475c6f8a21280ac8c228c06ba5b6306e35525b1c"
+  },
+  "currentToolingDomain": {
+    "sourceDomain": "tooling",
+    "sourceRevision": "c6f7f72c0a039d28ddb607198ec6c0d615c29884",
+    "sourceTree": "c02d38ea4a0aad7d2fbe9d84527f19b96749b5d8",
+    "catalogOwner": "runtime",
+    "authoringOwner": "tooling",
+    "requirementIds": [
+      "KMS-CI-009",
+      "KMS-CI-010",
+      "KMS-CI-011",
+      "KMS-CI-012"
+    ],
+    "status": "Local adoption candidate. Hosted execution and review remain pending.",
+    "verificationAuthority": "not-assessed",
+    "coverageComplete": false,
+    "source": {
+      "path": "tools/check_openspec_references.py",
+      "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+      "anchors": [
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 773,
+          "symbol": "main",
+          "supports": "Disables long option abbreviation.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)",
+          "lineSha256": "d8245733ee67dafa18136d6c475c6f8a21280ac8c228c06ba5b6306e35525b1c"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 777,
+          "symbol": "main",
+          "supports": "Accepts an explicitly named local tooling checkout.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    parser.add_argument(\"--tooling-source-repo\", help=\"Explicit local Git checkout for declared tooling\")",
+          "lineSha256": "1448a1b0ce2338b5431dc43c277b53e95f25929dd711646661382a0557d67c7f"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 778,
+          "symbol": "main",
+          "supports": "Accepts the declared immutable tooling commit.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "    parser.add_argument(\"--tooling-source-revision\", help=\"Full declared tooling commit ID\")",
+          "lineSha256": "db7b249351b21a21d77d89825d60007c3e0ec8506c52a18e629bde17b64943ec"
+        },
+        {
+          "path": "tools/check_openspec_references.py",
+          "line": 782,
+          "symbol": "main",
+          "supports": "Rejects partial optional pairs as usage.",
+          "fileSha256": "0d3a8188b9de0cd1d4477c32bfdf50ed70f2fe35e84f0f5a0b437541e523574e",
+          "text": "        parser.error(\"--tooling-source-repo and --tooling-source-revision must be supplied together\")",
+          "lineSha256": "f893ae455b11af78f4fc544520dee865a546f799862a712ce2972eaec266281c"
+        }
+      ]
+    },
+    "interface": {
+      "requiredOptions": [
+        "--snapshot",
+        "--source-repo",
+        "--source-revision"
+      ],
+      "optionalPairedOptions": [
+        "--tooling-source-repo",
+        "--tooling-source-revision"
+      ],
+      "argumentAbbreviations": false,
+      "enabledResultKeys": [
+        "toolingSourceRevision",
+        "toolingSourceTree"
+      ],
+      "legacy": "When the snapshot has neither the tooling shard nor adopted tooling IDs, do not supply the pair.",
+      "enabled": "Supply both tooling flags with an explicitly named local checkout root and its declared full commit when checking an adopted snapshot."
+    },
+    "datedRecordPolicy": "The earlier candidateSha256, entrypoint, parserPolicy and related fields above describe the earlier local CLI candidate. They are not refreshed or reused as A execution claims."
   }
 }
