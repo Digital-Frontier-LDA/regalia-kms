@@ -29,6 +29,7 @@ cat > "$overlay/scripts/local-bottom/bcw-fixture" <<'HOOK'
 set -eu
 if [ "${1:-}" = prereqs ]; then exit 0; fi
 root="$rootmnt"
+printf 'BCW_INITRAMFS root mounted, installing guest fixture\n' > /dev/console
 units="$root/etc/systemd/system"
 mkdir -p "$units/regalia-site-check.service.d" "$units/regalia-wg-apply.service.d" \
     "$root/usr/local/lib/bcw" "$root/usr/lib/regalia-kms/deploy/baremetal" \
@@ -47,6 +48,7 @@ printf '{}\n' > "$root/etc/regalia/node.json"
 printf 'measured\n' > "$root/efi/loader/credentials/regalia.site.cred"
 # The full WireGuard unit resolves this group before launching the fixture.
 chroot "$root" /usr/bin/grep -q '^tss:' /etc/group || printf 'tss:x:995:\n' >> "$root/etc/group"
+printf 'BCW_INITRAMFS switching to the fixture root\n' > /dev/console
 HOOK
 chmod +x "$overlay/scripts/local-bottom/bcw-fixture"
 printf '%s\n' '/scripts/local-bottom/bcw-fixture "$@"' > "$overlay/scripts/local-bottom/ORDER"
@@ -163,14 +165,22 @@ GUEST
 cat "$fixtures/initrd.img" "$scratch/overlay.cpio.gz" > "$scratch/initrd.img"
 accel="${REGALIA_BCW_ACCEL:-tcg}"
 case "$accel" in hvf) cpu=host;; tcg) cpu=max;; *) exit 2;; esac
-"$deadline" 150 qemu-system-aarch64 \
+# Include cold TCG boot and shutdown in the host deadline. The guest's
+# service and actual idle-expiry limits are independent and remain shorter.
+echo "BCW_HOST launching QEMU ($accel), case $scenario, 300s wall deadline"
+qemu_status=0
+"$deadline" --kill-after=10 300 qemu-system-aarch64 \
     -machine virt,gic-version=3 -accel "$accel" -cpu "$cpu" -smp 2 -m 1024 \
     -display none -serial stdio -monitor none -nic none -no-reboot -snapshot \
     -kernel "$fixtures/vmlinuz" -initrd "$scratch/initrd.img" \
     -drive "if=none,id=root,file=$fixtures/root.raw,format=raw" -device virtio-blk-pci,drive=root \
     -drive "if=none,id=esp,file=$fixtures/esp.raw,format=raw" -device virtio-blk-pci,drive=esp \
-    -append 'root=LABEL=bcw-root rw console=ttyAMA0 systemd.unit=bcw-test.service panic=1 quiet' \
-    | tee "$scratch/console.log"
+    -append 'root=LABEL=bcw-root rw console=ttyAMA0 earlycon loglevel=6 systemd.show_status=yes systemd.unit=bcw-test.service panic=1' \
+    | tee "$scratch/console.log" || qemu_status=$?
+if ((qemu_status != 0)); then
+    echo "site-check-idle-qemu: $scenario exited at the QEMU boundary (status $qemu_status)" >&2
+    exit "$qemu_status"
+fi
 if ! grep -Eq "(^|: )BCW_RESULT $scenario 0[[:space:]]*$" "$scratch/console.log"; then
     echo "site-check-idle-qemu: $scenario did not produce its guest success marker" >&2
     exit 1

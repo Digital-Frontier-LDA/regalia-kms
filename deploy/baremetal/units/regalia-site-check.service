@@ -20,7 +20,7 @@ WorkingDirectory=/usr/lib/regalia-kms
 Environment=PATH=/usr/sbin:/usr/bin
 # Inspect the actual VFAT mount in the same sandbox as the document reader. Neither an autofs
 # stub nor a file on the underlying rootfs is this boot's ESP.
-ExecStart=/usr/bin/sh -ec 'if ! /usr/bin/findmnt --kernel --nocanonicalize --mountpoint /efi --types vfat --noheadings --output TARGET >/dev/null; then \
+ExecStart=/bin/sh -ec 'if ! /usr/bin/findmnt --kernel --nocanonicalize --mountpoint /efi --types vfat --noheadings --output TARGET >/dev/null; then \
     echo "regalia-site-check: /efi is not mounted as the boot ESP" >&2; exit 1; fi; \
     exec /usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json site-check --esp /efi'
 User=root
