@@ -17,47 +17,16 @@ import (
 	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 )
-
-// receiptKeyLine is trails.py receipt_keys' rule for one pinned key: an Ed25519 public key, 64 lowercase hex.
-var receiptKeyLine = regexp.MustCompile(`^[0-9a-f]{64}$`)
-
-// readReceiptKeys reads the pinned receipt keys as trails.py prune does: one a line, '#' comments, at least one.
-func readReceiptKeys(path string) ([]ed25519.PublicKey, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("receipt keys: %w", err)
-	}
-	var keys []ed25519.PublicKey
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-		if line == "" {
-			continue
-		}
-		if !receiptKeyLine.MatchString(line) {
-			return nil, fmt.Errorf("receipt keys: %s: %q is not an Ed25519 public key in hex", path, line)
-		}
-		key, _ := hex.DecodeString(line)
-		keys = append(keys, ed25519.PublicKey(key))
-	}
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("receipt keys: %s pins no receipt key", path)
-	}
-	return keys, nil
-}
 
 // endpoint is the whole configuration of one host's collector endpoint, validated.
 type endpoint struct {
@@ -70,45 +39,15 @@ type endpoint struct {
 }
 
 func loadEndpoint(collector, site, certPath, keyPath, caPath, receiptPath string, now time.Time) (endpoint, error) {
-	var e endpoint
-	if collector == "" || site == "" || certPath == "" || keyPath == "" || caPath == "" || receiptPath == "" {
-		return e, errors.New("-collector, -site, -tls-cert, -tls-key, -server-ca and -receipt-keys are required")
-	}
-	if err := audit.ValidateSinkURL(collector); err != nil {
-		return e, fmt.Errorf("collector %q: %w (https://host[:port], no path, query, fragment or user)", collector, err)
-	}
-	if !streamPattern.MatchString(site + ".x") {
-		return e, fmt.Errorf("site %q: not a site the collector accepts (%s)", site, streamPattern)
-	}
-	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	value, err := audit.LoadCollectorEndpoint(audit.CollectorEndpointOptions{
+		Collector: collector, Site: site, CertificatePath: certPath, PrivateKeyPath: keyPath,
+		CAPath: caPath, ReceiptKeysPath: receiptPath,
+	}, now)
 	if err != nil {
-		return e, fmt.Errorf("client certificate and key: %w", err)
+		return endpoint{}, err
 	}
-	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
-	if err != nil {
-		return e, fmt.Errorf("client certificate: %w", err)
-	}
-	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return e, fmt.Errorf("client certificate: valid %s to %s, not now", leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
-	}
-	pemBytes, err := os.ReadFile(caPath)
-	if err != nil {
-		return e, fmt.Errorf("collector CA: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(pemBytes) {
-		return e, fmt.Errorf("collector CA: %s holds no usable certificate", caPath)
-	}
-	receiptKeys, err := readReceiptKeys(receiptPath)
-	if err != nil {
-		return e, err
-	}
-	identity, err := certificateIdentity(certPath)
-	if err != nil {
-		return e, err
-	}
-	return endpoint{collector: collector, site: site, certificate: certificate, leaf: leaf, identity: identity, roots: roots,
-		receiptKeys: receiptKeys}, nil
+	return endpoint{collector: value.Collector, site: value.Site, certificate: value.Certificate,
+		leaf: value.Leaf, identity: value.Identity, roots: value.Roots, receiptKeys: value.ReceiptKeys}, nil
 }
 
 func (e endpoint) sink(stream string) (*audit.HTTPSink, error) {
