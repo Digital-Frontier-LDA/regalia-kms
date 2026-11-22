@@ -66,6 +66,7 @@ class TopologyMetrics(unittest.TestCase):
         )
         for name, size, predicate in cases:
             with self.subTest(name=name):
+                self.target.unlink(missing_ok=True)  # each signed case must publish its own file
                 self.sync.store.load = Mock(return_value=accepted(predicate))
                 self.sync.membership_metrics()
                 self.assert_size(size)
