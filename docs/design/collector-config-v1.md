@@ -1,0 +1,14 @@
+# Collector descriptor v1
+
+The internal audit package decodes a canonical collector descriptor. This component checks document shape, names and paths before credential loading. The daemon, shipper and service units do not consume the descriptor in this change.
+
+The document is a single UTF-8 JSON object of at most 16 KiB. It has the exact case-sensitive fields `schema`, `node_id`, `site`, `generation`, `origin`, `ca_path`, `receipt_keys_path`, `daemon` and `node_shipper`. Each role has exactly `certificate_path` and `private_key_path`. All leaf values are nonempty strings. Duplicate keys, including keys equal after JSON unescaping, unknown keys, missing values, nulls and trailing content are refused.
+
+- `schema` is `regalia.collector-config/v1`. The node ID follows the daemon's lowercase node ID grammar. The site follows the collector grammar used by the C1 endpoint loader, including room for its `.x` suffix check.
+- `generation` is 32 lowercase hexadecimal digits. It identifies a configuration generation and conveys no history or authorization.
+- `origin` follows the C1 HTTPS origin rule, including its optional trailing slash. Canonical input also requires a nonempty parsed hostname and forbids literal query or fragment delimiters, even when empty.
+- Paths are clean absolute POSIX file names without control characters. Public paths must be proper descendants of `/var/lib/regalia-etc/regalia/collector-v1/generations/<generation>/public`. Daemon paths must be under `/var/lib/regalia-etc/regalia-kms/collector-v1/<generation>`. Shipper paths must be under `/var/lib/regalia-etc/regalia/collector-v1/generations/<generation>/shipper`. A role's two paths must differ. These are lexical checks. The later loader must check file type, symlinks, aliases on disk, ownership, access and actual credential identities.
+
+`audit.DecodeCollectorDescriptor(data)` returns an `audit.CollectorDescriptor`. Its `NodeID()`, `Site()` and `Generation()` methods expose the decoded names. `EndpointOptions(role)` returns the selected role's C1 inputs and the shared origin, site, CA and receipt-key paths. `CollectorRoleDaemon` and `CollectorRoleNodeShipper` are the only supported roles. `ValidateStreams(trails)` requires a nonempty, duplicate-free projection and checks each complete `site.trail` with the collector's stream grammar. The caller is responsible for supplying the actual trusted trail registry projection. The zero descriptor refuses role mapping and stream validation.
+
+Failures are fixed typed `CollectorDescriptorError` values. The diagnostics do not contain the supplied document, paths or values. Decoding does not use the filesystem, clock or network. A decoded descriptor or C1 option value does not attest to credential validity, a working transport, running services, collector reachability or authorization.
