@@ -329,8 +329,8 @@ class AnchorLag(EspCase):
             self.advance()
             s.membership_metrics()
         self.assertEqual([(w, dict((name, v) for name, _, v in samples)) for w, samples, _ in written],
-                         [("sync", {"regalia_membership_epoch": 2, "regalia_membership_anchor_epoch": 1}),
-                          ("sync", {"regalia_membership_epoch": 2, "regalia_membership_anchor_epoch": 2})])
+                         [("sync", {"regalia_membership_epoch": 2, "regalia_topology_nodes": 3, "regalia_membership_anchor_epoch": 1}),
+                          ("sync", {"regalia_membership_epoch": 2, "regalia_topology_nodes": 3, "regalia_membership_anchor_epoch": 2})])
         self.assertEqual(written[0][2], node.metrics.path("sync", "membership.prom"))
         self.assertIn("regalia_membership_anchor_epoch 1", node.metrics.render("sync", written[0][1]))
         with unittest.mock.patch.object(node.metrics, "publish", side_effect=OSError("full")):

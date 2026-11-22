@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "deploy" / "monitoring" / "regalia-node.rules.yml"
 # series a node writes for context, with no alert of their own (each says why)
 CONTEXT = {
+    "regalia_topology_nodes": "the genesis-fixed designed size; context for topology-aware monitoring, not live availability",
     "regalia_heartbeat_max_lifetime_seconds": "what the manifest allows",
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",

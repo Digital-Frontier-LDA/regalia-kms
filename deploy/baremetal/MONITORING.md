@@ -33,6 +33,14 @@ A scrape interval of 15 to 60 s suits both. The textfiles are written at their w
 60 s); the rules carry their own staleness checks (`RegaliaNodeMetricsStale`, `RegaliaAuditShipMetricsStale`),
 so a scrape interval does not hide a writer that stopped.
 
+`regalia_topology_nodes` in sync's `membership.prom` reports the designed cluster size from the verified
+membership manifest: one for a single-node topology, three for legacy manifests, and the declared size for
+a v5 multi-node topology. Retired entries and revocation do not change that genesis-fixed size. This is
+context, not a count of available nodes. It disappears with an unavailable scrape; it cannot by itself
+identify a down single-node target. Profile-specific outage and collector-relative alerts, and the
+single-node collector configuration policy, remain separate work in regalia-kms-dx7.9. The rules below
+retain their existing behavior in this telemetry slice.
+
 **The scrape job is `regalia-node`.** Scrape the three nodes' node_exporter in one job of exactly that name
 (`job_name: regalia-node`). The rules that tell a node missing a writer from a node that is down (every
 `Regalia…Missing` alert, and `RegaliaNodeExporterDown` itself) select `up{job="regalia-node"}`: under any other
