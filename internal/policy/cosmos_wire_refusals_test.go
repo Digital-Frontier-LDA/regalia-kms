@@ -101,6 +101,7 @@ func TestASignDocFieldOnTheWrongWireTypeIsRefused(t *testing.T) {
 }
 
 // TxBody carries repeated Any at field 1 and nothing else.
+// spec: cosmos-authinfo-parser/unknown-field-at-any-level-is-refused
 func TestATxBodyFieldOtherThanAMessageIsRefused(t *testing.T) {
 	message := encodeAny("/cosmos.bank.v1beta1.MsgSend", encodeMsgSend("cosmos1source", "cosmos1dest", "uatom", 900_000))
 	t.Run("an unexpected field number", func(t *testing.T) {

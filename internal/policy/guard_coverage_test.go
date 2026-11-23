@@ -111,6 +111,7 @@ func TestANegativeAmountGetsTheRightDiagnosis(t *testing.T) {
 	}
 }
 
+// spec: cosmos-authinfo-parser/unknown-field-at-any-level-is-refused
 func TestAnUnknownSignDocFieldIsRefused(t *testing.T) {
 	// C97 from the broad pass: an unexpected top-level field was silently accepted —
 	// `return nil` for the refusal. Consequence: two SignDocs that hash differently parse

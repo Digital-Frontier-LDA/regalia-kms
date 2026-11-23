@@ -109,6 +109,7 @@ func canonicalSignDoc() []byte {
 	return encodeSignDoc("cosmoshub-4", 42, canonicalMsgSendTxBody())
 }
 
+// spec: cosmos-authinfo-parser/recognized-fee-fields-surface-to-policy
 func TestParseCosmosSignDocAcceptsCanonicalMsgSend(t *testing.T) {
 	got, err := ParseCosmosSignDoc(canonicalSignDoc())
 	if err != nil {
@@ -157,6 +158,7 @@ func TestParseCosmosSignDocRejectsEmptyAndTruncated(t *testing.T) {
 	}
 }
 
+// spec: cosmos-authinfo-parser/unknown-field-at-any-level-is-refused
 func TestParseCosmosSignDocRejectsMissingRequiredFields(t *testing.T) {
 	body := encodeLengthDelimited(1, canonicalMsgSendTxBody())
 	auth := encodeLengthDelimited(2, encodeAuthInfo())
