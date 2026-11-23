@@ -52,6 +52,7 @@ func baseRequest(now time.Time) Request {
 	}
 }
 
+// spec: policy-state-journal/sequence-gap
 func TestEvaluateRejectsOutOfOrderCosmosSequenceBeforeHardwareReservation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy-state.jsonl")
 	state, err := OpenFileState(path)
@@ -78,6 +79,8 @@ func TestEvaluateRejectsOutOfOrderCosmosSequenceBeforeHardwareReservation(t *tes
 	}
 }
 
+// spec: cosmos-fee-policy/gas-limit-above-configured-maximum
+// spec: cosmos-fee-policy/fee-exceeds-per-transaction-cap
 func TestEvaluateRejectsCosmosFeeAndGasOutsidePolicy(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	for name, test := range map[string]struct {
@@ -208,6 +211,8 @@ func TestCosmosSequenceReservationsFollowActivePassiveEpochs(t *testing.T) {
 	}
 }
 
+// spec: policy-state-journal/sequence-repeat
+// spec: policy-state-journal/next-sequence-is-accepted
 func TestCosmosSequenceStateSurvivesSignerRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy-state.jsonl")
 	state, err := OpenFileState(path)
@@ -291,6 +296,7 @@ func TestEvaluateRejectsMismatchesBeforeState(t *testing.T) {
 // RULE. The rule is what the audit record carries ("policy-DENIED:cosmos-destination"), so a denial
 // that named the wrong dimension, or the old catch-all "cosmos", would send whoever reads it to the
 // wrong line of the policy. The table must cover every rule CosmosRules lists.
+// spec: cosmos-fee-policy/transfer-exceeds-per-transaction-cap
 func TestCosmosPolicyRejectsEveryControlledDimension(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	tests := map[string]struct {

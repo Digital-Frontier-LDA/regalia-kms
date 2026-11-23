@@ -19,6 +19,7 @@ func reservation(nonce, date string, amount, cap uint64) Reservation {
 	}
 }
 
+// spec: cosmos-fee-policy/daily-cap-reached
 func TestFileStatePersistsReplayAndQuotaAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy-state.jsonl")
 	state, err := OpenFileState(path)
@@ -67,6 +68,7 @@ func TestFileStateRejectsCorruptJournal(t *testing.T) {
 	}
 }
 
+// spec: cosmos-fee-policy/daily-cap-reached
 func TestFileStateSerializesConcurrentQuotaReservations(t *testing.T) {
 	state, err := OpenFileState(filepath.Join(t.TempDir(), "policy-state.jsonl"))
 	if err != nil {

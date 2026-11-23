@@ -715,6 +715,7 @@ func TestAnUnreadableHighWaterMarkIsNotAnAbsentOne(t *testing.T) {
 // Nothing measured that ordering. This uses the harness's write-side primitive — the descriptor
 // is closed underneath a live state, which is what a write fault looks like from inside Reserve —
 // and then asks the sidecar what it recorded.
+// spec: policy-state-journal/append-is-durable-before-success
 func TestAFailedAppendLeavesTheHighWaterMarkBehindTheJournal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy-state.jsonl")
 	state, err := OpenFileState(path)

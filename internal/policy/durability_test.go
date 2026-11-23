@@ -14,6 +14,7 @@ import (
 // nothing about TRUNCATION: any valid prefix is itself a valid chain. Deleting the tail therefore
 // reopened cleanly with the replay record and the daily cap restored — a replay and an overspend
 // obtained with `truncate`, by anyone who can write the file the service already trusts.
+// spec: policy-state-journal/truncated-journal
 func TestTruncatedJournalIsDetectedRatherThanResettingQuota(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.jsonl")
 

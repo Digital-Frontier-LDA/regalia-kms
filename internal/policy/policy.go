@@ -240,6 +240,15 @@ func New(policies []Policy, state State, now func() time.Time) (*Engine, error) 
 				if denom == "" || feeCap == 0 {
 					return nil, errors.New("Cosmos fee caps are incomplete")
 				}
+				// A fee-only denomination — one with a fee cap but no per-transaction
+				// transfer cap — is refused at load. Without a transfer cap the
+				// denomination has no per-day bound, so cumulative daily fee spend in
+				// it is unbounded; the rule forces every fee denom to also be a
+				// transfer-capped denom (see cosmos-fee-policy spec, "Fee
+				// denominations are bounded by transfer denominations for daily caps").
+				if _, capped := policy.Cosmos.MaxPerTransaction[denom]; !capped {
+					return nil, fmt.Errorf("Cosmos fee cap for %q has no matching per-transaction transfer cap", denom)
+				}
 			}
 			if len(policy.Cosmos.MaxPerTransaction) != len(policy.Cosmos.MaxPerDay) {
 				return nil, errors.New("Cosmos daily and transaction denominations must match")

@@ -232,6 +232,31 @@ func TestACosmosPolicyWithPerDayDenominationsNotMatchingPerTransactionIsRefused(
 	requireBaseCompiles(t)
 }
 
+// TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad is the sole-detector for the
+// fee-denom-subset-of-transfer-denom rule in policy.go New: a denomination that has a fee
+// cap but no per-transaction transfer cap is refused at policy load. Without the check a
+// fee-only denom has no per-day bound, so cumulative daily fee spend in it is unbounded —
+// the cosmos-fee-policy spec requires the refusal ("Fee denominations are bounded by
+// transfer denominations for daily caps"), and before this test the rule had no detector.
+//
+// spec: cosmos-fee-policy/fee-only-denomination-is-refused-at-policy-load
+func TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad(t *testing.T) {
+	// Add "uosmo" to the fee caps only. It has no per-transaction transfer cap, so the
+	// new subset rule is the only guard that can fire. (It is also absent from
+	// MaxPerDay, but the subset check runs first and names the fee cap, so the message
+	// assertion pins this rule rather than the size-mismatch rule that follows.)
+	err := compileErr(t, func(p *Policy) {
+		p.Cosmos.MaxFee = map[string]uint64{"uatom": 10_000, "uosmo": 5_000}
+	})
+	if err == nil {
+		t.Fatal("a Cosmos policy with a fee-only denomination compiled — a fee cap with no per-transaction transfer cap leaves the denomination's daily fee spend unbounded")
+	}
+	if !strings.Contains(err.Error(), "no matching per-transaction transfer cap") {
+		t.Fatalf("refused by a different rule: %v", err)
+	}
+	requireBaseCompiles(t)
+}
+
 // TestACosmosPolicyWithADailyCapLessThanItsTransactionCapIsRefused is the sole-detector for the
 // dailyCap<transactionCap operand of policy.go:192. The other three operands of that line share
 // the same message and the same return; the existing TestCosmosDimensionsMustBeExplicit covers
