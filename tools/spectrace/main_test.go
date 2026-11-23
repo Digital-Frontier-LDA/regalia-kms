@@ -224,3 +224,44 @@ func TestCollectLinksFailsOnUnparsableFile(t *testing.T) {
 		t.Fatal("an unparsable test file returned no error")
 	}
 }
+
+// An -allow key whose scenario a test now claims is stale and fails; an allowed key
+// that is still uncovered is acknowledged; a key naming no scenario is bad.
+func TestEvaluateReportsStaleAllowKeys(t *testing.T) {
+	scenarios := []triple{
+		{Capability: "demo", Slug: "covered-and-allowed"},
+		{Capability: "demo", Slug: "allowed-only"},
+	}
+	links := []link{{Capability: "demo", Slug: "covered-and-allowed"}}
+	allow := map[string]bool{
+		"demo/covered-and-allowed": true,
+		"demo/allowed-only":        true,
+		"demo/no-such-scenario":    true,
+	}
+	r := evaluate(scenarios, links, allow)
+	if !reflect.DeepEqual(r.staleAllow, []string{"demo/covered-and-allowed"}) {
+		t.Errorf("staleAllow = %v, want [demo/covered-and-allowed]", r.staleAllow)
+	}
+	if len(r.acknowledgedList) != 1 || r.acknowledgedList[0].Slug != "allowed-only" {
+		t.Errorf("acknowledged = %#v, want only allowed-only", r.acknowledgedList)
+	}
+	if !reflect.DeepEqual(r.badAllow, []string{"demo/no-such-scenario"}) {
+		t.Errorf("badAllow = %v, want [demo/no-such-scenario]", r.badAllow)
+	}
+	if len(r.orphans) != 0 || len(r.dangling) != 0 {
+		t.Errorf("orphans = %v, dangling = %v; want none", r.orphans, r.dangling)
+	}
+	// A stale key alone fails the gate.
+	only := evaluate(scenarios[:1], links, map[string]bool{"demo/covered-and-allowed": true})
+	if !only.failed() {
+		t.Error("a report whose only problem is a stale -allow key did not fail")
+	}
+}
+
+// The control: with no -allow keys there is nothing stale.
+func TestEvaluateHasNoStaleKeysWithoutAllow(t *testing.T) {
+	r := evaluate([]triple{{Capability: "demo", Slug: "a"}}, []link{{Capability: "demo", Slug: "a"}}, map[string]bool{})
+	if len(r.staleAllow) != 0 || len(r.orphans) != 0 || r.failed() {
+		t.Errorf("staleAllow = %v, orphans = %v, failed = %v; want none and a pass", r.staleAllow, r.orphans, r.failed())
+	}
+}

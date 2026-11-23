@@ -205,33 +205,25 @@ func collectLinks(testsRoot string) ([]link, []malformed, error) {
 	return all, bad, nil
 }
 
-func main() {
-	specsRoot := flag.String("specs", "../openspec/specs", "root directory of openspec specs")
-	testsRoot := flag.String("tests", ".", "root directory of Go test files")
-	quiet := flag.Bool("q", false, "print only failures and the summary")
-	allow := flag.String("allow", "", "comma-separated scenario keys (cap/slug) that are KNOWN post-landing — their spec states behavior a pending change will implement, so no test exists yet. They are reported as 'acknowledged' and do not fail the gate. This is a deliberate, visible exception: every key here is a debt that a pending change must retire.")
-	flag.Parse()
+// report is the result of joining the spec scenarios against the test links.
+type report struct {
+	orphans, acknowledgedList []triple
+	dangling                  []link
+	dupSlugs, badAllow        []string
+	// staleAllow lists -allow keys whose scenario a test now claims. The
+	// exemption is no longer needed, and keeping it would let the test's later
+	// removal go unnoticed, so it fails the run until the key is deleted.
+	staleAllow []string
+}
 
-	// The acknowledged set: scenarios whose coverage is a known, named debt.
-	acknowledged := map[string]bool{}
-	if *allow != "" {
-		for _, k := range strings.Split(*allow, ",") {
-			k = strings.TrimSpace(k)
-			if k != "" {
-				acknowledged[k] = true
-			}
-		}
-	}
+// failed reports whether the join fails the gate: any orphan, dangling link,
+// duplicate slug, bad -allow key or stale -allow key.
+func (r report) failed() bool {
+	return len(r.orphans)+len(r.dangling)+len(r.dupSlugs)+len(r.badAllow)+len(r.staleAllow) > 0
+}
 
-	scenarios, err := collectSpecs(*specsRoot)
-	if err != nil {
-		fatalf("read specs: %v", err)
-	}
-	links, badLinks, err := collectLinks(*testsRoot)
-	if err != nil {
-		fatalf("read tests: %v", err)
-	}
-
+// evaluate joins scenarios and links under the acknowledged (-allow) set.
+func evaluate(scenarios []triple, links []link, acknowledged map[string]bool) report {
 	// Index scenarios by (capability, slug) -> scenario (detect duplicate slugs).
 	scenByKey := make(map[string]triple)
 	var dupSlugs []string
@@ -282,11 +274,6 @@ func main() {
 		return dangling[i].FileLine < dangling[j].FileLine
 	})
 
-	if !*quiet {
-		fmt.Printf("spectrace: %d scenarios across %s, %d spec links in tests under %s\n",
-			len(scenarios), *specsRoot, len(links), *testsRoot)
-	}
-
 	// An -allow key that names no scenario is a typo or a scenario that was
 	// renamed away — it would silently stop being enforced. Report it and fail
 	// so the allow-list cannot drift from the spec.
@@ -297,6 +284,53 @@ func main() {
 		}
 	}
 	sort.Strings(badAllow)
+	var staleAllow []string
+	for k := range acknowledged {
+		if covered[k] {
+			staleAllow = append(staleAllow, k)
+		}
+	}
+	sort.Strings(staleAllow)
+	return report{orphans: orphans, acknowledgedList: acknowledgedList, dangling: dangling,
+		dupSlugs: dupSlugs, badAllow: badAllow, staleAllow: staleAllow}
+}
+
+func main() {
+	specsRoot := flag.String("specs", "../openspec/specs", "root directory of openspec specs")
+	testsRoot := flag.String("tests", ".", "root directory of Go test files")
+	quiet := flag.Bool("q", false, "print only failures and the summary")
+	allow := flag.String("allow", "", "comma-separated scenario keys (cap/slug) that are KNOWN post-landing — their spec states behavior a pending change will implement, so no test exists yet. They are reported as 'acknowledged' and do not fail the gate. This is a deliberate, visible exception: every key here is a debt that a pending change must retire. A key whose scenario a test now claims is STALE and fails the run, as does a key that names no scenario.")
+	flag.Parse()
+
+	// The acknowledged set: scenarios whose coverage is a known, named debt.
+	acknowledged := map[string]bool{}
+	if *allow != "" {
+		for _, k := range strings.Split(*allow, ",") {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				acknowledged[k] = true
+			}
+		}
+	}
+
+	scenarios, err := collectSpecs(*specsRoot)
+	if err != nil {
+		fatalf("read specs: %v", err)
+	}
+	links, badLinks, err := collectLinks(*testsRoot)
+	if err != nil {
+		fatalf("read tests: %v", err)
+	}
+
+	r := evaluate(scenarios, links, acknowledged)
+	orphans, acknowledgedList, dangling := r.orphans, r.acknowledgedList, r.dangling
+	dupSlugs, badAllow, staleAllow := r.dupSlugs, r.badAllow, r.staleAllow
+
+	if !*quiet {
+		fmt.Printf("spectrace: %d scenarios across %s, %d spec links in tests under %s\n",
+			len(scenarios), *specsRoot, len(links), *testsRoot)
+	}
+
 	if len(badAllow) > 0 {
 		fmt.Fprintln(os.Stderr, "unknown -allow keys (name no scenario):")
 		for _, k := range badAllow {
@@ -313,33 +347,32 @@ func main() {
 		}
 	}
 
-	fail := false
-	if len(badAllow) > 0 {
-		fail = true
+	fail := r.failed() || len(badLinks) > 0
+	if len(staleAllow) > 0 {
+		fmt.Fprintln(os.Stderr, "stale -allow keys (a test now claims the scenario; delete the exemption):")
+		for _, k := range staleAllow {
+			fmt.Fprintf(os.Stderr, "  - %s\n", k)
+		}
 	}
 	if len(dupSlugs) > 0 {
-		fail = true
 		fmt.Fprintln(os.Stderr, "duplicate scenario slugs (ambiguous join key):")
 		for _, d := range dupSlugs {
 			fmt.Fprintln(os.Stderr, "  - "+d)
 		}
 	}
 	if len(badLinks) > 0 {
-		fail = true
 		fmt.Fprintf(os.Stderr, "malformed annotations (%d) — a `// spec:` key that is not exactly <capability>/<slug>:\n", len(badLinks))
 		for _, b := range badLinks {
 			fmt.Fprintf(os.Stderr, "  - %s:%d  %s\n", b.FilePath, b.FileLine, b.Raw)
 		}
 	}
 	if len(dangling) > 0 {
-		fail = true
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("dangling links (%d) — test claims a scenario not in the spec:", len(dangling)))
 		for _, l := range dangling {
 			fmt.Fprintf(os.Stderr, "  - %s:%d  ->  %s/%s\n", l.FilePath, l.FileLine, l.Capability, l.Slug)
 		}
 	}
 	if len(orphans) > 0 {
-		fail = true
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("orphan scenarios (%d) — spec scenario with no test:", len(orphans)))
 		for _, s := range orphans {
 			fmt.Fprintf(os.Stderr, "  - %s  [%s:%d]\n      requirement: %s\n",
@@ -348,8 +381,8 @@ func main() {
 	}
 
 	if fail {
-		fmt.Fprintf(os.Stderr, "\nspectrace: FAIL — %d orphan scenario(s), %d dangling link(s), %d duplicate slug(s), %d bad allow-key(s), %d malformed annotation(s)\n",
-			len(orphans), len(dangling), len(dupSlugs), len(badAllow), len(badLinks))
+		fmt.Fprintf(os.Stderr, "\nspectrace: FAIL — %d orphan scenario(s), %d dangling link(s), %d duplicate slug(s), %d bad allow-key(s), %d stale allow-key(s), %d malformed annotation(s)\n",
+			len(orphans), len(dangling), len(dupSlugs), len(badAllow), len(staleAllow), len(badLinks))
 		os.Exit(1)
 	}
 	fmt.Printf("spectrace: OK — %d scenarios covered, %d acknowledged post-landing, no dangling links\n",
