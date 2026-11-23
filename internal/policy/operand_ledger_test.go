@@ -1644,6 +1644,7 @@ func wireOperandRows() []operandLeaf {
 				"attacker-supplied bytes. The row goes through the exported parser so the panic arrives " +
 				"as the boundary's refusal rather than aborting the test binary and truncating the " +
 				"failing set — the message is what separates the two.",
+			// spec: cosmos-authinfo-parser/length-exceeding-input-is-refused
 			run: func(t *testing.T) {
 				// body_bytes claiming 64 bytes with 4 present: no overflow, just past the end.
 				truncated := append(append(encodeTag(1, 2), encodeVarint(64)...), []byte("body")...)
