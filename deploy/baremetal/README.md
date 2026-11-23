@@ -818,7 +818,10 @@ the client are on the console with no kernel argument. It is not secret. When a 
   tunnels. `regalia-site-check.service`, a oneshot at boot that `regalia-wg-apply` `Requires=` and starts
   `After=`, compares every key the two hold (`node.site_compared()`: `host_ipv4` and `boot_mesh` today) and
   refuses on any difference, and when the document is missing or unreadable (bound with no `-`, so a missing
-  one fails the unit at setup). Either way the tunnels stay down.
+  one fails the unit at setup). Either way the tunnels stay down. Its result is kept for the boot, through the
+  ESP's idle unmount: the unit `Wants=` `efi.mount`, never `Requires=` it, so the automount's stop does not
+  clear it and wg-apply's later runs never re-run it against a document a site-advance wrote since
+  (regalia-kms-bcw); a failed or missing mount still fails it at setup, by the document's path.
   - Seen as `RegaliaSiteMismatch` (`regalia_site_check_ok == 0`: it ran and refused) or
     `RegaliaSiteCheckMetricsMissing` (no `site-check.prom` since boot: it never ran). Both are `warning` for now.
   - **Recovering a refused node**, at its console or over SSH (the tunnels are down, the host is not):
@@ -827,7 +830,9 @@ the client are on the console with no kernel argument. It is not secret. When a 
     sheet's), then `systemctl restart regalia-site-check regalia-wg-apply`. Never edit the ESP's document to
     match instead: it is measured, and the peers accept only a PCR 12 the root has approved.
   - Proven by unit tests (`tests/test_baremetal_site_check.py`) and under a real systemd
-    (`e2e/node-units-systemd.py` section 3b: accept, refuse, a missing document at setup, and the recovery).
+    (`e2e/node-units-systemd.py` section 3b: accept, refuse, a missing document at setup, and the recovery;
+    section 3c: the result kept through an idle unmount of an automounted `/efi`, a `Requires=efi.mount` mutant
+    failing that check, and a failed or missing mount failing at setup).
     No physical host has run it.
 
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
