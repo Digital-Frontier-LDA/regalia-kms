@@ -10,6 +10,14 @@ The KMS accepts `application/vnd.cosmos.tx+protobuf` only for a canonical Cosmos
 `chain_id`, and `account_number`, rejects unknown fields and wrong wire types, and rejects repeated
 scalar fields. `TxBody` must contain at least one message encoded as `google.protobuf.Any`.
 
+Only the canonical encoding is accepted: the four fields in field-number order, every tag, length
+and varint in its minimal form, and a field holding its zero value (`account_number` 0, an empty
+string or bytes) left out, which is how a generated encoder writes it and how a chain rebuilds it to
+verify. A document that means the same transaction in any other encoding (fields reordered, a
+non-minimal varint, an explicit `account_number` 0) is refused (`ErrCosmosSignDoc`, audit outcome
+`policy-cosmos-malformed`) before policy, so it spends no nonce, sequence or quota. It is refused, not
+re-encoded: the KMS signs only bytes the caller sent.
+
 The complete SignDoc is parsed before policy evaluation. A malformed or unsupported document is
 refused before hardware use. The independent generated fixture in
 [`internal/policy/testdata/signdoc-akashnet2-msgsend.hex`](internal/policy/testdata/signdoc-akashnet2-msgsend.hex)
@@ -39,7 +47,26 @@ signer. This is intentional: a policy cannot constrain a message it cannot inspe
 - replay nonce reservation;
 - verified approver signatures;
 - canonical SignDoc parsing before policy and hardware.
-- SHA-256 hashing of the canonical SignDoc before the hardware signing operation.
+- SHA-256 hashing of the canonical SignDoc before the hardware signing operation. The token signs
+  that digest with pre-hashed ECDSA (`CKM_ECDSA`), so the signature is over exactly the digest a
+  Cosmos verifier computes;
+- in-daemon verification of every signature before success (below).
+
+## Signature verification before success
+
+Before a Cosmos signature is returned, the daemon reads the object's public key from the token
+(`public-key`) and verifies the signature against SHA-256 of the canonical SignDoc. When the binding
+pins `public_key_sha256`, the key read must hash to the pin. The signature must be raw `r||s`, and for
+secp256k1 its `s` must be low, as the Cosmos SDK requires; `p256` and `p384` are verified too, and
+any other algorithm fails closed. A signature that does not verify is never success: the caller gets a
+non-retryable `INTERNAL` error with no signature, and the audit trail records
+`signature-unverified`. It is a token or daemon defect for an operator to look at, not an outage.
+
+Policy's reservation for that request stands, as it does for an indeterminate hardware result: its
+nonce and the account sequence it carried are spent, while the chain never saw a valid transaction
+for that sequence. A request carrying the sequence the chain still expects is then refused as a
+repeat, until an operator re-initialises the expected sequence from a trusted chain observation, as
+at commissioning (below).
 
 ## Sequence, fee, and gas semantics
 

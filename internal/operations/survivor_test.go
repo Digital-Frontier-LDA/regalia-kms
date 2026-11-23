@@ -101,7 +101,7 @@ func TestALoneSurvivorSignsNoSequenceBearingRequest(t *testing.T) {
 			}
 			router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
 				Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}}}
-			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte(tokenSays)}
+			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte(tokenSays), signer: testSigner(t)}
 			// as the daemon builds it (cmd/regalia-kms main.go): the admission runner and RequireAdmission on one gate
 			coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder,
 				admission.NewRunner(gate, directRunner{}), hardware, "sha256:policy", nil, func() time.Time { return now })
@@ -115,7 +115,8 @@ func TestALoneSurvivorSignsNoSequenceBearingRequest(t *testing.T) {
 			result, err := coordinator.Execute(context.Background(), request)
 
 			if mode == admission.ModeLease {
-				if err != nil || string(result.Data) != tokenSays || hardware.calls != 1 {
+				// The token's answer is a real signature now (the daemon verifies it): 64 bytes of r||s.
+				if err != nil || len(result.Data) != 64 || hardware.calls != 1 {
 					t.Fatalf("under a lease the request was not signed: %v (token calls %d)", err, hardware.calls)
 				}
 				if len(state.reservations) != 1 || state.reservations[0].Sequence == nil || *state.reservations[0].Sequence != transaction.Sequence {

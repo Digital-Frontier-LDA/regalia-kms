@@ -91,7 +91,7 @@ func approvalsHarness(t *testing.T, now time.Time, required int, keys *approval.
 		Binding: registry.Binding{DeviceID: "hsm-1"},
 	}}
 	recorder := &fakeAudit{}
-	hardware := &fakeHardware{output: []byte("signature")}
+	hardware := &fakeHardware{output: []byte("signature"), signer: testSigner(t)}
 	coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine,
 		recorder, directRunner{}, hardware, "sha256:policy", keys, func() time.Time { return now })
 	if err != nil {

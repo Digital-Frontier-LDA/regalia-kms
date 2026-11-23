@@ -14,6 +14,8 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 type fakeAuthorizer struct {
@@ -95,10 +97,24 @@ type fakeHardware struct {
 	data   []byte
 	output []byte
 	err    error
+	// signer, when set, makes this a token that really signs Cosmos digests with it and answers
+	// "public-key" (not counted in calls): the coordinator verifies every Cosmos signature before it
+	// counts (regalia-kms-35b), so arbitrary output bytes are refused as signature-unverified.
+	signer *secp256k1.PrivateKey
 }
 
-func (value *fakeHardware) Execute(_ context.Context, _ registry.Route, _ string, _ string, _ string, data, _ []byte) ([]byte, string, error) {
+func (value *fakeHardware) Execute(_ context.Context, _ registry.Route, operation string, _ string, contentType string, data, _ []byte) ([]byte, string, error) {
+	if value.signer != nil && operation == "public-key" {
+		return secp256k1SPKI(value.signer.PubKey()), "application/pkix", nil
+	}
 	value.calls++
+	if value.signer != nil && contentType == cosmosContentType && value.err == nil {
+		value.data = append(value.data[:0], data...)
+		signature := secp256k1ecdsa.Sign(value.signer, data)
+		r, s := signature.R(), signature.S()
+		rBytes, sBytes := r.Bytes(), s.Bytes()
+		return append(rBytes[:], sBytes[:]...), "application/octet-stream", nil
+	}
 	value.data = append(value.data[:0], data...)
 	return append([]byte(nil), value.output...), "application/octet-stream", value.err
 }
@@ -383,7 +399,7 @@ func TestACosmosDenialIsAuditedUnderTheDimensionThatRefusedIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production", Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}}}
-			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("signature")}
+			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("signature"), signer: testSigner(t)}
 			coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder, directRunner{}, hardware, "sha256:policy", nil, func() time.Time { return now })
 			if err != nil {
 				t.Fatal(err)

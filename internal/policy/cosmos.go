@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -153,7 +154,47 @@ func parseSignDoc(input []byte) (*CosmosTransaction, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ONLY THE CANONICAL ENCODING IS SIGNED (regalia-kms-35b). The token signs sha256 of these exact
+	// bytes, and a verifier does not see them: a chain rebuilds the SignDoc from TxRaw and its own
+	// state, fields 1-4 in number order, minimal varints, zero and empty values left out, and checks
+	// the signature against sha256 of THAT. The checks above settle presence, uniqueness and wire
+	// type, never order or encoding, so a reordered document meaning the same transaction parsed and
+	// was signed, and the chain refused a signature it could never reproduce -- after this daemon
+	// had spent the account sequence on it.
+	//
+	// CHECKED LAST, so a document that is wrong in what it says (no messages, an unknown type) is
+	// refused with that diagnosis rather than with this one. Nothing is signed before this returns.
+	//
+	// REFUSED, NOT RE-ENCODED. Signing a re-encoding would sign bytes the caller did not send and
+	// cannot have checked; refusing makes the request bytes the canonical bytes by construction, so
+	// the coordinator's sha256 over request.Data is the digest a verifier computes. One comparison
+	// covers every non-canonical shape: field order, non-minimal tags, lengths and varints, an
+	// explicit account_number 0, and a present-but-empty field. body and auth_info are the chain's
+	// own bytes (TxRaw carries them verbatim), so only this outer layer decides verifiability.
+	if !bytes.Equal(input, canonicalSignDocBytes(bodyBytes, authBytes, chainID, accountNumber)) {
+		return nil, fmt.Errorf("%w: non-canonical SignDoc encoding", ErrCosmosSignDoc)
+	}
 	return &CosmosTransaction{ChainID: chainID, AccountNumber: accountNumber, Sequence: sequence, Fee: fee, GasLimit: gasLimit, Messages: messages}, nil
+}
+
+// canonicalSignDocBytes is the SignDoc encoding a Cosmos verifier recomputes: proto3 as a generated
+// encoder emits it, fields in number order, each length and varint minimal, and a field holding
+// its zero value (empty bytes or string, account_number 0) left out.
+func canonicalSignDocBytes(body, authInfo []byte, chainID string, accountNumber uint64) []byte {
+	out := make([]byte, 0, len(body)+len(authInfo)+len(chainID)+32)
+	if len(body) > 0 {
+		out = appendLengthDelimited(out, 1, body)
+	}
+	if len(authInfo) > 0 {
+		out = appendLengthDelimited(out, 2, authInfo)
+	}
+	if chainID != "" {
+		out = appendLengthDelimited(out, 3, []byte(chainID))
+	}
+	if accountNumber != 0 {
+		out = appendVarint(appendVarint(out, 4<<3), accountNumber)
+	}
+	return out
 }
 
 func parseAuthInfo(input []byte) (uint64, []Coin, uint64, error) {

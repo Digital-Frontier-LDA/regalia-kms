@@ -108,7 +108,7 @@ func bridgeCoordinator(t *testing.T) (*Coordinator, *fakePolicy, *fakeRouter) {
 	semantic := &fakePolicy{decision: policy.Decision{
 		Allowed: true, Code: policy.CodeAllowed, PolicyID: "cosmos-hot-wallet", Rule: "allow",
 	}}
-	hardware := &fakeHardware{output: []byte("signature")}
+	hardware := &fakeHardware{output: []byte("signature"), signer: testSigner(t)}
 	coordinator, coordErr := New(
 		fakeAuthorizer{allowed: true}, router, semantic,
 		&fakeAudit{}, directRunner{}, hardware,
