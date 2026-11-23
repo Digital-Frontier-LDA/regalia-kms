@@ -15,6 +15,7 @@ import (
 // reopened cleanly with the replay record and the daily cap restored — a replay and an overspend
 // obtained with `truncate`, by anyone who can write the file the service already trusts.
 // spec: policy-state-journal/truncated-journal
+// spec: policy-state-journal/truncated-journal-is-refused-at-open
 func TestTruncatedJournalIsDetectedRatherThanResettingQuota(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.jsonl")
 
@@ -101,6 +102,7 @@ func TestRewrittenJournalOfEqualLengthIsDetected(t *testing.T) {
 // Replay and quota are enforced from maps loaded at open, so a second process keeps its own copy:
 // both grant the same nonce and both spend the full daily cap. That is a double-spend obtained by
 // starting the service twice — a deployment mistake, not an attack — so it must fail at startup.
+// spec: policy-state-journal/second-process-is-refused
 func TestASecondProcessCannotOpenTheSameJournal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.jsonl")
 	first, err := OpenFileState(path)

@@ -261,6 +261,7 @@ func policyOperandRows() []operandLeaf {
 				"guard and the ambiguous-object guard four lines below it at once -- so neither was " +
 				"pinned, and defeating either one alone left the suite green. One fixture, two operands, " +
 				"pins neither. This row separates them: same id, different object.",
+			// spec: cosmos-fee-policy/duplicate-policy-id-is-refused-at-load
 			run: func(t *testing.T) {
 				first := basePolicy()
 				second := basePolicy()
@@ -285,6 +286,7 @@ func policyOperandRows() []operandLeaf {
 			why: "The other half of the pair above. Same (object, operation), different ids: only this " +
 				"guard can refuse it. Without it the second policy silently replaces the first in the " +
 				"map, so which of two declared rules is enforced depends on slice order.",
+			// spec: cosmos-fee-policy/ambiguous-object-operation-pair-is-refused-at-load
 			run: func(t *testing.T) {
 				first := basePolicy()
 				second := basePolicy()
@@ -1642,6 +1644,7 @@ func wireOperandRows() []operandLeaf {
 				"attacker-supplied bytes. The row goes through the exported parser so the panic arrives " +
 				"as the boundary's refusal rather than aborting the test binary and truncating the " +
 				"failing set — the message is what separates the two.",
+			// spec: cosmos-authinfo-parser/length-exceeding-input-is-refused
 			run: func(t *testing.T) {
 				// body_bytes claiming 64 bytes with 4 present: no overflow, just past the end.
 				truncated := append(append(encodeTag(1, 2), encodeVarint(64)...), []byte("body")...)

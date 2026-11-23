@@ -240,6 +240,7 @@ func TestACosmosPolicyWithPerDayDenominationsNotMatchingPerTransactionIsRefused(
 // transfer denominations for daily caps"), and before this test the rule had no detector.
 //
 // spec: cosmos-fee-policy/fee-only-denomination-is-refused-at-policy-load
+// spec: cosmos-fee-policy/fee-only-denomination-is-refused-by-the-load-time-validation
 func TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad(t *testing.T) {
 	// Add "uosmo" to the fee caps only. It has no per-transaction transfer cap, so the
 	// new subset rule is the only guard that can fire. (It is also absent from
@@ -264,6 +265,7 @@ func TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad(t *testing.T) {
 // not provoke. Without this row a policy could declare a 500_000-atom daily cap and a 1_000_000-
 // atom per-transaction cap, both for the same denom, and the request-time guard would refuse
 // every transaction while the policy author believes the broader number authorises it.
+// spec: cosmos-fee-policy/per-day-cap-below-per-transaction-cap-is-refused-at-load
 func TestACosmosPolicyWithADailyCapLessThanItsTransactionCapIsRefused(t *testing.T) {
 	err := compileErr(t, func(p *Policy) {
 		// Keep the denom in both maps so the !exists sibling is silenced. The remaining

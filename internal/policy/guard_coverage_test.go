@@ -82,6 +82,7 @@ func TestMaxFutureSecondsBounds(t *testing.T) {
 	})
 }
 
+// spec: cosmos-authinfo-parser/length-exceeding-input-is-refused
 func TestAnOverflowingLengthFieldIsRefusedNotPanicked(t *testing.T) {
 	// The only fixture shape where end < offset is the SOLE objecting operand: a varint
 	// length of 2^63. int(length) is then negative, end wraps below offset, the upper
