@@ -111,7 +111,76 @@ class Check(unittest.TestCase):
             json.dump(dict(self.bundle, signing_key=first["nodes"][0]["signing_key"]["key"]), f)
         self.assertEqual(self.check(self.envelope(first)), first)
         second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first), issued_at="2026-10-05T09:00:00Z")
-        self.refused("a single-node manifest enrols its node only at epoch 1 for now, not epoch 2", [self.envelope(first), self.envelope(second)])
+        self.refused("a single-node manifest enrols its node at epoch 1, or as the replacement that follows the owner's revocation "
+                     "of its only node, not at epoch 2", [self.envelope(first), self.envelope(second)])
+
+    def sole_chain(self, gap=False, after=False, change=None):
+        """regalia-kms-dx7.19: a single-node chain. Epoch 1: b alone. Epoch 2, the owner's quorum: b REVOKED_STOLEN. Epoch 3,
+        root-signed: this host (d) enrolled, b kept as its tombstone. `gap`: a root-signed epoch between the revocation
+        and the replacement; `after`: a root-signed epoch after it; `change(manifest)`: edits the replacement."""
+        from tests import test_baremetal_membership_v4 as v4
+        from tests import test_baremetal_membership_v5 as v5
+        self.document = dict(document(), nodes={n: document()["nodes"]["a"] for n in "bd"})
+        pv = measurements.version(self.document)
+        mine = dict(v5.one("d", i=3), ek_name=self.bundle["ek_name"], ak_name=self.bundle["ak_name"],
+                    wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex(),
+                    hsm_serials=self.bundle["hsm_serials"], ssh_host_pub=self.bundle["ssh_host_pub"])
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump(dict(self.bundle, node_id="d", signing_key=mine["signing_key"]["key"]), f)
+        first = v5.single5(1, "", [v5.one("b", i=1)], nid="b", policy_version=pv)
+        stolen = v5.single5(2, m.digest(first), [v5.one("b", "REVOKED_STOLEN", i=1)], nid="b", policy_version=pv)
+        chain = [self.envelope(first), v4.quorum(stolen, v5.O1)]
+        previous = stolen
+        if gap:
+            previous = dict(copy.deepcopy(stolen), epoch=3, prev_digest=m.digest(stolen), issued_at="2026-10-05T09:00:00Z")
+            chain.append(self.envelope(previous))
+        third = v5.single5(previous["epoch"] + 1, m.digest(previous), [copy.deepcopy(stolen["nodes"][0]), mine], nid="d", policy_version=pv)
+        if change:
+            change(third)
+        chain.append(self.envelope(third))
+        if after:
+            later = dict(copy.deepcopy(third), epoch=third["epoch"] + 1, prev_digest=m.digest(third), issued_at="2026-10-06T09:00:00Z")
+            chain.append(self.envelope(later))
+        return chain
+
+    def check_replace(self, chain, replace):
+        return enrol.check_manifest(self.d, chain, self.root, enrol.fingerprint(self.root), self.document, replace)
+
+    def test_a_single_node_replacement_after_the_owners_revocation_is_enrolled_as_the_replacement_typed(self):
+        """regalia-kms-dx7.19: the owner revokes the only node (b, REVOKED_STOLEN), the root's next epoch enrols this host in
+        its place. It enrols only with --replace b: without it, or with another ID, it is refused before anything is written."""
+        chain = self.sole_chain()
+        self.assertEqual(self.check_replace(chain, "b"), chain[-1]["manifest"])
+        with self.assertRaisesRegex(enrol.Refused, "the replacement of b after the owner's revocation: enrolled only with "
+                                    "`commit --replace b`"):
+            self.check_replace(chain, None)
+        with self.assertRaisesRegex(enrol.Refused, "does not replace a .it replaces b after its revocation.: not the replacement typed"):
+            self.check_replace(chain, "a")
+        self.assertEqual(enrol.sole_node_replacement(chain, self.root, "d"), "b")
+
+    def test_a_single_node_enrolment_after_epoch_one_is_refused_unless_it_immediately_follows_the_revocation(self):
+        """regalia-kms-dx7.19: only the root's epoch right after the owner's revocation, at the chain's tip, is the sole
+        node's replacement: a gap epoch, or a tip past it, stays refused before anything is written."""
+        for name, chain in (("a gap epoch", self.sole_chain(gap=True)), ("a later tip", self.sole_chain(after=True))):
+            with self.subTest(name):
+                self.assertIsNone(enrol.sole_node_replacement(chain, self.root, "d"))
+                with self.assertRaisesRegex(enrol.Refused, "does not replace b: not the replacement typed"):
+                    self.check_replace(chain, "b")
+                with self.assertRaisesRegex(enrol.Refused, "a single-node manifest enrols its node at epoch 1, or as the replacement"):
+                    self.check_replace(chain, None)
+
+    def test_a_single_node_replacement_keeps_the_tombstone_and_takes_fresh_identities(self):
+        """regalia-kms-dx7.19: the tombstone is kept as revoked, and the replacement reuses no identity the chain listed."""
+        def edit_tombstone(manifest):
+            manifest["nodes"][0]["wg_boot_pub"] = "5d" * 32
+
+        def reuse(manifest):
+            manifest["nodes"][1]["wg_boot_pub"] = manifest["nodes"][0]["wg_boot_pub"]
+        for name, change, reason in (("the tombstone edited", edit_tombstone, "tombstone"),
+                                     ("an identity of b reused", reuse, "wg_boot_pub of d is already used")):
+            with self.subTest(name):
+                with self.assertRaisesRegex(enrol.Refused, reason):
+                    self.check_replace(self.sole_chain(change=change), "b")
 
     def test_a_signing_key_a_manifest_before_v4_does_not_name_is_said(self):
         """51's read of #358: a host with a signing key checked against a v3 (or older) manifest passes, and is told its key

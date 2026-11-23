@@ -54,9 +54,30 @@ class Case(unittest.TestCase):
 
 
 class TheFirstCounter(Case):
-    def define(self, probed, bootstrap=False, owner_auth="given", now=hbt.T0 + 60):
-        return enrol.define_first_counter(self.config, self.man, probed, self.d, self.auth if owner_auth == "given" else owner_auth,
-                                          bootstrap, run=self.tpm, now=lambda: now)
+    def define(self, probed, bootstrap=False, owner_auth="given", now=hbt.T0 + 60, manifest=None, **kw):
+        return enrol.define_first_counter(self.config, manifest or self.man, probed, self.d,
+                                          self.auth if owner_auth == "given" else owner_auth, bootstrap, run=self.tpm, now=lambda: now, **kw)
+
+    def test_a_sole_node_replacement_starts_at_zero_with_no_heartbeat(self):
+        """regalia-kms-dx7.19: the replacement of a single node after the owner's revocation is its epoch's only heartbeat
+        signer, so no source holds one: its counter starts at 0 without --bootstrap. Any other enrolment after epoch 1 with
+        nothing verified stays refused, --bootstrap or not (the control), and nothing is defined."""
+        third = dict(self.man, epoch=3, prev_digest="ab" * 32)
+        nobody = ([], ["no other node exists"])
+        with self.assertRaisesRegex(enrol.Refused, "no source gave a heartbeat that verifies under epoch 3 \\(no other node exists\\)"):
+            self.define(nobody, manifest=third)
+        with self.assertRaisesRegex(enrol.Refused, "--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch 3"):
+            self.define(nobody, bootstrap=True, manifest=third)
+        self.assertEqual(self.present(*self.counter_indices()), [])
+        self.assertEqual(self.define(nobody, manifest=third, sole_replacement=True), 0)
+        self.assertEqual(len(self.present(*self.counter_indices())), 2)
+        self.assertIsNone(self.define(nobody, manifest=third, sole_replacement=True))   # a resumed commit: adopted as it is
+
+    def test_a_sole_node_replacement_does_not_take_a_half_defined_counter(self):
+        lo, _ = self.counter_indices()
+        self.tpm.nv[lo] = [0x10, None, 8]
+        with self.assertRaisesRegex(enrol.Refused, "the heartbeat counter is half defined"):
+            self.define(([], []), manifest=dict(self.man, epoch=3, prev_digest="ab" * 32), sole_replacement=True)
 
     def test_from_a_heartbeat_the_root_parent_verifies(self):
         self.assertEqual(self.define(([{"source": "b", "envelope": hbt.beat(self.man, 7)}], [])), 6)
