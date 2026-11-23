@@ -433,3 +433,146 @@ class RestorePendingAtEnrolment(unittest.TestCase):
         from deploy.baremetal import restore
         self.assertEqual(enrol.RESTORE_PENDING, restore.PENDING)
         self.assertEqual(enrol.stored(enrol.RESTORE_PENDING), restore.STORED_PENDING)
+
+
+class BootstrapRefusal(unittest.TestCase):
+    """COUNCIL on #775: --bootstrap is the network's genesis (epoch 1, no replacement) and is refused, writing nothing,
+    when the VERIFIED chain already proves otherwise: a later epoch (heartbeats were issued), a replacement (--replace or
+    the sole node's revocation), or this TPM's own recorded prior heartbeat counter. Each arm refuses BEFORE any write."""
+
+    def setUp(self):
+        import tempfile
+        self.d = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+        with open(self.d + "/journal.json", "w") as f:
+            f.write('{"schema": "regalia.enrol-journal/v1", "node_id": "a", "steps": {"identity": {"state": "done"}}}\n')
+        with open(self.d + "/bundle.json", "w") as f:
+            f.write("{}")
+
+    def run_commit(self, chain, bootstrap=True, sole=None, replace=None, counter=None):
+        out = io.StringIO()
+        manifest = chain
+        with patch.object(enrol, "_bundle", lambda directory: {"node_id": "a"}), \
+                patch.object(enrol, "identity", lambda journal, directory, run: None), \
+                patch.object(enrol, "recheck_signing_key", lambda journal, directory, run: None), \
+                patch.object(enrol, "check_manifest", lambda directory, chain_, root_key, typed, document, replace_=None: manifest), \
+                patch.object(enrol, "sole_node_replacement", lambda envelopes, root_key, node_id: sole), \
+                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: counter), \
+                patch.object(enrol, "commit_owner_auth", lambda *a, **k: None), \
+                patch.object(enrol, "signing_note", lambda directory, manifest_: None), \
+                patch.object(enrol, "hold_restore_pending", lambda *a, **k: False), \
+                patch.object(enrol, "install_config", lambda *a, **k: self.fail("install_config wrote before the refusal")):
+            result = {"error": None, "writes": None}
+            try:
+                enrol.commit(self.d, [object()], "root_key", "typed", None, None, None,
+                             bootstrap=bootstrap, replace=replace, out=out,
+                             as_sync=lambda config, chain_, owner_auth=None: self.fail("the sync step wrote before the refusal"))
+            except (enrol.Refused, membership.Refused) as error:
+                result["error"] = str(error)
+            result["writes"] = sorted(n for n in os.listdir(self.d) if n not in ("bundle.json", "journal.json"))
+            return result
+
+    def test_a_later_epoch_refuses_before_any_write(self):
+        """The verified chain's epoch is above 1: heartbeats were issued, so this is not a first bring-up."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 2,
+                                  "topology": {"profile": membership.SINGLE_NODE}})
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_replacement_refuses_before_any_write(self):
+        """The manifest is a replacement (--replace typed): its old node held the history, so it is not a first bring-up.
+        Epoch 1: the arm under test is the replacement, not the epoch (a replacement's epoch is 1 only when the chain
+        was rolled back, which the guard does not special-case; the test isolates the arm)."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b")
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_the_owners_revoked_sole_node_refuses_before_any_write(self):
+        """The chain revoked the sole node and names this one in its place (the dx7.19 case): the history was the lost disk's."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 3,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, sole="b")
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_recorded_prior_heartbeat_refuses_before_any_write(self):
+        """This TPM already counts heartbeats from an earlier life of the same manifest: its counter outlives the disk."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=1)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_the_genesis_lets_the_commit_proceed(self):
+        """The owner's genesis step is unchanged: epoch 1, no replacement, no recorded counter -- the refusal is the first
+        thing commit does, then every step runs and the marker stays off (--bootstrap: no etcd history existed)."""
+        manifest = {"schema": membership.SCHEMA_V5, "epoch": 1, "topology": {"profile": membership.SINGLE_NODE}}
+        writes = []
+
+        def identity(journal, directory, run):
+            writes.append("identity")
+
+        def recheck_signing_key(journal, directory, run):
+            writes.append("signing_key")
+
+        def check_manifest(directory, chain, root_key, typed, document, replace=None):
+            writes.append("check_manifest")
+            return manifest
+
+        def install_config(journal, node_id, root_key, example, site, prefix=""):
+            writes.append("install_config")
+            return {"state_dir": self.d + "/state"}
+
+        def _hand_over(state_dir, sync):
+            writes.append("hand_over")
+
+        def store_documents(state_dir, document, sync):
+            writes.append("store_documents")
+
+        def define_anchors(node_json, chain, directory, owner_auth, run):
+            writes.append("define_anchors")
+            return []
+
+        class Doc:
+            doc = {"node_id": "a"}
+
+            @staticmethod
+            def state(step):
+                return "done"
+
+            started = staticmethod(lambda step: None)
+            done = staticmethod(lambda step, **kw: None)
+
+        def anchor(config, chain, owner_auth=None):
+            writes.append("anchor")
+            return 1, membership.digest(manifest)
+
+        result = {"epoch": None, "error": None}
+        with patch.object(enrol, "identity", identity), \
+                patch.object(enrol, "recheck_signing_key", recheck_signing_key), \
+                patch.object(enrol, "check_manifest", check_manifest), \
+                patch.object(enrol, "commit_owner_auth", lambda *a, **k: None), \
+                patch.object(enrol, "sole_node_replacement", lambda envelopes, root_key, node_id: None), \
+                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: None), \
+                patch.object(enrol, "signing_note", lambda directory, manifest: None), \
+                patch.object(enrol, "install_config", install_config), \
+                patch.object(enrol, "hold_restore_pending", lambda manifest, marker, node_json, bootstrap, out: False), \
+                patch.object(enrol, "_hand_over", _hand_over), \
+                patch.object(enrol, "store_documents", store_documents), \
+                patch.object(enrol, "define_anchors", define_anchors), \
+                patch.object(enrol, "run_probe_as_sync", lambda config: ([], ["no other node exists"])), \
+                patch.object(enrol, "define_first_counter",
+                             lambda config, manifest, probed, directory, owner_auth, bootstrap, run, sole_replacement: 0), \
+                patch.object(enrol, "Journal", lambda directory, node_id: Doc()), \
+                patch.object(enrol, "_bundle", lambda directory: {"node_id": "a"}), \
+                patch.object(enrol, "_no_sync_process", lambda run: None):
+            try:
+                result["epoch"] = enrol.commit(self.d, [object()], "root_key", "typed", None, None, None,
+                                               bootstrap=True, out=io.StringIO(), as_sync=anchor)
+            except (enrol.Refused, membership.Refused) as error:
+                result["error"] = str(error)
+        self.assertIsNone(result["error"], result["error"])
+        self.assertEqual(result["epoch"], (1, membership.digest(manifest)))
+        # the guard ran (nothing written between check_manifest and install_config), and the steps did
+        self.assertListEqual(writes, ["identity", "signing_key", "check_manifest", "install_config",
+                                      "hand_over", "store_documents", "define_anchors", "anchor"])
+        self.assertFalse(os.path.lexists(self.d + "/restore-pending"))

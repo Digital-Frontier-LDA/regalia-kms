@@ -89,13 +89,26 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     - **Written** by `enrol commit` under single-node **without `--bootstrap`** (a replacement disk), as its first
       persistent write, before `node.json`; by `restore.py run` when there is no live store, before it stops anything; and
       by hand with `restore.py mark-pending` (root, at the console). `--bootstrap` is the cluster's genesis only, when no
-      etcd history ever existed. Never use it to re-enrol a lost disk: no marker is written then.
+      etcd history ever existed. Never use it to re-enrol a lost disk: the commit is refused when the verified chain
+      proves non-genesis (see below), and no marker is written on the one residual case where it is not refused.
     - **Lifted for etcd alone** by the restore's `/run` drop-in, whose empty `ConditionPathExists=` resets the
       conditions before it and lists the unit's own two gates again. systemd reads drop-ins in file-name order whatever their
       directory, so `10-restore-pending.conf` sorts before `50-restore.conf`. The order is pinned by a test.
     - **Removed** only by `restore.py run`, once the restored store is exchanged into place and before etcd's restart.
       The daemon then starts only on the raised epoch read back. Every refusal keeps it. When the exchange's fsync failed,
       the refusal says when it may be removed by hand: only once the live etcd reads the raised epoch.
+    - **`--bootstrap` is refused when the verified chain proves non-genesis.** `enrol commit --bootstrap` is the
+      network's genesis: epoch 1, no replacement, no heartbeat ever issued. When the root's chain already proves
+      otherwise — a later epoch (heartbeats were issued), a replacement (`--replace`, or the sole node's revocation),
+      or this TPM's own recorded heartbeat counter — the commit is refused before anything is written. The refusal
+      names the correct path: `enrol commit` without `--bootstrap` (which writes the marker), or `restore.py run`
+      once the restore's exchange has raised the epoch.
+    - **The same-epoch-1 residual.** A re-enrolment on the very same epoch-1 manifest that the original genesis used
+      (the owner rolled the chain back, or reused it) cannot be told apart from genesis: the epoch is 1, no
+      replacement is named, and no heartbeat was ever issued under that manifest. The refusal does not fire, and
+      no marker is written. In that case the operator holds the marker by hand: `restore.py mark-pending` (root, at
+      the console) before the reboot, then `restore.py run` once the restored store is ready. This is the one case
+      where the operator must act; the docs and the `mark-pending` subcommand exist for it.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
 
 ## The disks: an fdatasync measurement plan for the DL360s (before production)

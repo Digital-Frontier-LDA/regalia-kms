@@ -2311,6 +2311,19 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # regalia-kms-dx7.19: a single-node replacement after the owner's revocation starts its own heartbeat counter
     sole = replace is not None and sole_node_replacement(chain if isinstance(chain, list) else [chain], root_key,
                                                          journal.doc["node_id"]) == replace
+    # --bootstrap is the network's GENESIS (epoch 1, no replacement): the owner's own first bring-up, where no etcd
+    # history exists to lose (regalia-kms-dx7.26). When the verified chain proves otherwise -- a later epoch (heartbeats
+    # were issued), a replacement (--replace typed, or the sole node's revocation) or this node's own recorded heartbeat
+    # counter from an earlier life -- it is refused here, before anything is written. The refusal names the marker
+    # (restore.py mark-pending) and the re-enrolment's own path (enrol commit without --bootstrap). A re-enrolment on the
+    # SAME epoch-1 manifest cannot be told apart from genesis: the operator holds the marker by hand (ETCD.md).
+    if bootstrap and (manifest["epoch"] != 1 or replace or sole
+                      or first_epoch(chain if isinstance(chain, list) else [chain], root_key,
+                                     journal.doc["node_id"]) is not None):
+        raise Refused("--bootstrap is the network's genesis (epoch 1, no replacement): the verified manifest proves this "
+                       "is not one, so it is refused before anything is written. A re-enrolment of a lost disk runs "
+                       "`enrol commit` without --bootstrap (the marker written as its first persistent write); "
+                       "`restore.py mark-pending` holds the marker while it is decided. Nothing was written")
     owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run, directory)
     note = signing_note(directory, manifest)
     if note:
