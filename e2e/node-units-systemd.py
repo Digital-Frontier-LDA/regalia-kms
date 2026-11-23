@@ -511,13 +511,15 @@ ESP_FIXTURE = [pathlib.Path("/run/systemd/system/efi.mount"), pathlib.Path("/run
 
 
 def esp_fixture_down():
-    """Section 3c's automounted ESP gone: its units stopped and removed (also from main's cleanup, on any exit)."""
+    """Section 3c's automounted ESP gone: its units stopped and removed (also from main's cleanup, on any exit). Only
+    while its files are there: after 3c, efi.mount is the transient unit of the test's tmpfs, which main unmounts itself."""
+    if not any(p.exists() for p in ESP_FIXTURE):
+        return
     sh("systemctl", "stop", "efi.automount", "efi.mount", check=False)
-    if any(p.exists() for p in ESP_FIXTURE):
-        for p in ESP_FIXTURE:
-            if p.exists():
-                p.unlink()
-        sh("systemctl", "daemon-reload", check=False)
+    for p in ESP_FIXTURE:
+        if p.exists():
+            p.unlink()
+    sh("systemctl", "daemon-reload", check=False)
     sh("systemctl", "reset-failed", "efi.mount", "efi.automount", check=False)
 
 
