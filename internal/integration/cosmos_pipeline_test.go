@@ -23,6 +23,8 @@ import (
 // reservation -> digest -> signer -> verification. The hardware-tagged integration tests replace
 // the signer with PKCS#11; keeping this test independent makes the policy boundary falsifiable on
 // every platform while making the hardware dependency explicit.
+// spec: cosmos-signing-contract/canonical-signdoc-produces-a-deterministic-digest
+// spec: cosmos-signing-contract/signature-verifies-against-the-evaluated-document
 func TestCosmosPolicyToSignerToVerification(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "policy", "testdata", "signdoc-akashnet2-msgsend.hex"))
 	if err != nil {

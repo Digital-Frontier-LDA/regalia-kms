@@ -1700,6 +1700,7 @@ func wireOperandRows() []operandLeaf {
 // exactly once in the file the row names, and the operand must occur inside that guard. Both
 // directions matter: a guard that was edited breaks the first check, and an operand renamed
 // within an intact guard breaks the second.
+// spec: cosmos-fee-policy/transfer-exceeds-per-transaction-cap
 func TestEveryOperandLedgerRowStillNamesLiveSource(t *testing.T) {
 	sources := map[string]string{}
 	for _, name := range faultInjectionSources(t) {
