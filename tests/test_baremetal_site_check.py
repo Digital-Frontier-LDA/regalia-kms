@@ -101,7 +101,21 @@ class UnitTests(unittest.TestCase):
     def test_the_measured_document_is_bound_and_not_optional(self):
         # no "-": a missing document fails the unit at setup, never starts it without the file
         self.assertEqual(directives("regalia-site-check.service", "BindReadOnlyPaths"), ["/efi/" + node.SITE_ON_ESP])
-        self.assertEqual(directives("regalia-site-check.service", "RequiresMountsFor"), ["/efi"])
+
+    def test_the_esp_is_wanted_not_required_so_an_idle_unmount_keeps_the_result(self):
+        # regalia-kms-bcw: the image's efi.automount unmounts the ESP after TimeoutIdleSec. A dependency that carries a
+        # stop (Requires= and those below; RequiresMountsFor= adds a Requires=) would stop this unit with it and clear
+        # its once-per-boot result, and wg-apply's next run would start it again, against a document a site-advance may
+        # have written since this boot measured its own. Wants= starts and orders the mount and carries no stop; a
+        # missing or failed mount still fails the unit, at the bind above, by the document's path.
+        unit = "regalia-site-check.service"
+        self.assertIn("efi.mount", directives(unit, "Wants"))
+        self.assertIn("efi.mount", directives(unit, "After"))
+        for key in ("Requires", "Requisite", "BindsTo", "PartOf", "PropagatesStopTo", "RequiresMountsFor"):
+            with self.subTest(key=key):
+                named = " ".join(directives(unit, key)).split()
+                self.assertFalse({"efi.mount", "/efi"} & set(named), "%s=%s carries the ESP's idle stop" % (key, named))
+        self.assertEqual(directives(unit, "RemainAfterExit"), ["yes"])
 
     def test_it_checks_the_esp_it_binds(self):
         (start,) = directives("regalia-site-check.service", "ExecStart")

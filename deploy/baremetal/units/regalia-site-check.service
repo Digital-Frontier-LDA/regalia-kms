@@ -7,10 +7,12 @@
 [Unit]
 Description=Regalia KMS: the site configuration against the measured site document
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
-# the ESP at /efi (the image's generator's automount, regalia-kms-9tv): required and ordered, so a failed generation
-# (a missing identity, an unsupported layout) fails this by name, not with a missing bind
-RequiresMountsFor=/efi
-Requires=efi.mount
+# the ESP at /efi (the image's generator's automount, regalia-kms-9tv): wanted and ordered, NOT required
+# (regalia-kms-bcw). The automount unmounts it after TimeoutIdleSec, and a Requires= (or RequiresMountsFor=) would carry
+# that stop here, clear the result below, and let wg-apply's next run start this again against a document a
+# site-advance has written since this boot measured its own. A failed or missing mount (a missing identity, an
+# unsupported layout) still fails this, at the bind below, by the document's path.
+Wants=efi.mount
 After=efi.mount
 
 [Service]

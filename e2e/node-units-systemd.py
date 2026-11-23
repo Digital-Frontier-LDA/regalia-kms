@@ -301,6 +301,7 @@ def main():
         for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
+        esp_fixture_down()
         if ESP_MOUNTS:
             sh("umount", ESP)
         if MADE:
@@ -505,6 +506,130 @@ def provision(work):
     return {"cfg": cfg, "epoch": epoch, "public": {n: keys[n][1] for n in keys}, "private": {n: keys[n][0] for n in keys},
             "manifest": manifest, "envelope": envelope, "document": document, "b_tcti": b_tcti, "ids": ids}
 
+ESP_FIXTURE = [pathlib.Path("/run/systemd/system/efi.mount"), pathlib.Path("/run/systemd/system/efi.automount"),
+               pathlib.Path("/run/systemd/system/regalia-site-check.service.d/e2e-mutant.conf")]
+
+
+def esp_fixture_down():
+    """Section 3c's automounted ESP gone: its units stopped and removed (also from main's cleanup, on any exit). Only
+    while its files are there: after 3c, efi.mount is the transient unit of the test's tmpfs, which main unmounts itself."""
+    if not any(p.exists() for p in ESP_FIXTURE):
+        return
+    sh("systemctl", "stop", "efi.automount", "efi.mount", check=False)
+    for p in ESP_FIXTURE:
+        if p.exists():
+            p.unlink()
+    sh("systemctl", "daemon-reload", check=False)
+    sh("systemctl", "reset-failed", "efi.mount", "efi.automount", check=False)
+
+
+def idle_esp(work, agreed):
+    """3c (regalia-kms-bcw): the image's ESP is an automount that unmounts after TimeoutIdleSec (the generator's
+    efi.automount, 120 s). site-check's result is once per boot (RemainAfterExit=yes); a stop carried from efi.mount
+    would clear it, and wg-apply's next run would start it again against whatever document the ESP holds by then (a
+    site-advance writes the next site's before the reboot). Here the ESP is the same shape: efi.automount with
+    TimeoutIdleSec=5 over efi.mount, a bind of a directory that keeps its contents across the unmounts."""
+    header("3c  regalia-site-check keeps its result through an idle /efi unmount (regalia-kms-bcw)")
+    if not ESP_MOUNTS:
+        raise SystemExit("node-units-systemd: 3c replaces the test's own tmpfs /efi with an automount; this runner had a mount "
+                         "at /efi already, which the test does not take over")
+    backing = work / "esp"
+    on_backing = backing / node.SITE_ON_ESP
+    on_backing.parent.mkdir(parents=True)
+    on_backing.write_bytes(agreed)
+    moved = sitecfg.validate(json.loads(pathlib.Path("/etc/regalia/site.json").read_text()))
+    moved["host_ipv4"] = "192.0.2.77"                  # what a site-advance leaves on the ESP before the reboot
+    moved = bootcreds.site_document(moved, "/dev/disk/by-partlabel/regalia-root")
+    sh("umount", ESP)
+    ESP_MOUNTS.remove(ESP)
+
+    def mount_unit(what):
+        ESP_FIXTURE[0].write_text("[Mount]\nWhat=%s\nWhere=%s\nType=none\nOptions=bind\n" % (what, ESP))
+    mount_unit(backing)
+    ESP_FIXTURE[1].write_text("[Automount]\nWhere=%s\nDirectoryMode=0700\nTimeoutIdleSec=5\n" % ESP)
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "start", "efi.automount")
+    check = ("ActiveState", "Result", "InvocationID", "ExecMainStartTimestampMonotonic")
+
+    def checked_now():
+        on_backing.write_bytes(agreed)
+        sh("systemctl", "reset-failed", "regalia-site-check.service", check=False)
+        started = sh("systemctl", "restart", "regalia-site-check.service", check=False)
+        return started.returncode == 0 and show("regalia-site-check.service", *check)
+
+    def idled():
+        # the positive control: efi.mount really went (nothing here holds /efi open), so a pass is not one without the unmount
+        return until(lambda: show("efi.mount", "ActiveState")["ActiveState"] == "inactive", 30, 1) is True
+
+    def after_the_unmount(first):
+        """The ESP now holds the next site's document; wg-apply runs again. (kept: site-check is the run it was;
+        wg-apply: (its run succeeded, the journal))"""
+        on_backing.write_bytes(moved)
+        before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
+        applied = sh("systemctl", "start", "regalia-wg-apply.service", check=False)
+        wg = show("regalia-wg-apply.service", "InvocationID", "ExecMainStatus")
+        kept = show("regalia-site-check.service", *check) == first
+        return kept, (applied.returncode == 0 and wg["InvocationID"] != before and wg["ExecMainStatus"] == "0", before)
+
+    first = checked_now()
+    ok(isinstance(first, dict) and first["ActiveState"] == "active" and first["Result"] == "success",
+       "site-check passes on the automounted ESP", journal("regalia-site-check.service")[-300:])
+    ok(idled(), "control: /efi idles out (efi.mount inactive after TimeoutIdleSec=5)", show("efi.mount", "ActiveState", "Result"))
+    kept, (applied, _) = after_the_unmount(first)
+    named = "AC1: after the idle unmount, wg-apply's next run does not re-run site-check (the same invocation, still active)"
+    ok(kept, named, (first, show("regalia-site-check.service", *check), journal("regalia-site-check.service")[-400:]))
+    ok(applied, "and that wg-apply run succeeds on the kept result, the moved document unread",
+       journal("regalia-wg-apply.service")[-400:])
+
+    # the mutant, in the test: the coupling the unit had (Requires=efi.mount), as a drop-in. The same check must fail.
+    ESP_FIXTURE[2].parent.mkdir(parents=True, exist_ok=True)
+    ESP_FIXTURE[2].write_text("[Unit]\nRequires=efi.mount\n")
+    sh("systemctl", "daemon-reload")
+    first = checked_now()
+    ok(isinstance(first, dict) and idled(), "MUTANT (Requires=efi.mount): site-check passes, then /efi idles out", first)
+    kept, (applied, before) = after_the_unmount(first)
+    refused = sh("journalctl", "_SYSTEMD_INVOCATION_ID=" + show("regalia-site-check.service", "InvocationID")["InvocationID"],
+                 "-o", "cat", "--no-pager", check=False).stdout
+    ok(not kept and "differ in host_ipv4" in refused and not applied
+       and show("regalia-wg-apply.service", "InvocationID")["InvocationID"] == before,
+       "MUTANT: the AC1 check fails under it, as it must: the idle stop reached site-check, wg-apply re-ran it against the "
+       "moved document, it refused, and wg-apply did not run", ("AC1 check kept" if kept else "AC1 check failed", refused[-300:], applied))
+    ESP_FIXTURE[2].unlink()
+    sh("systemctl", "daemon-reload")
+
+    # AC2: no mount at the check's first run still fails it closed, by the document's path: a failed efi.mount, then none
+    for case in ("efi.mount fails (What= missing)", "no efi.mount or efi.automount at all"):
+        sh("systemctl", "stop", "regalia-site-check.service", "efi.mount", check=False)
+        if case.startswith("efi.mount fails"):
+            mount_unit(work / "no-such-esp")
+            sh("systemctl", "daemon-reload")
+        else:
+            esp_fixture_down()
+        sh("systemctl", "reset-failed", "regalia-site-check.service", "efi.mount", check=False)
+        if SITE_PROM.exists():
+            SITE_PROM.unlink()
+        cursor = sh("journalctl", "-n", "1", "-o", "cat", "--show-cursor", "--no-pager").stdout.rsplit("-- cursor: ", 1)[1].strip()
+        started = sh("systemctl", "start", "regalia-site-check.service", check=False)
+        result = show("regalia-site-check.service", "ExecMainStatus", "ActiveState")
+        sh("journalctl", "--sync", check=False)
+        said = sh("journalctl", "-u", "regalia-site-check.service", "--after-cursor", cursor, "--no-pager", check=False).stdout   # this start's lines only
+        before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
+        applied = sh("systemctl", "start", "regalia-wg-apply.service", check=False)
+        ok(started.returncode != 0 and result == {"ExecMainStatus": "226", "ActiveState": "failed"} and str(SITE_CRED) in said
+           and not SITE_PROM.exists() and applied.returncode != 0
+           and show("regalia-wg-apply.service", "InvocationID")["InvocationID"] == before,
+           "AC2, %s: site-check fails at setup (226), the journal names %s, no site-check.prom, wg-apply does not run"
+           % (case, SITE_CRED), (result, said[-500:], SITE_PROM.exists(), applied.returncode))
+
+    # back to the earlier ESP: the test's tmpfs with the agreeing document, and a passing check, for the sections after
+    esp_fixture_down()
+    sh("mount", "-t", "tmpfs", "-o", "mode=0700", "tmpfs", ESP)
+    ESP_MOUNTS.append(ESP)
+    SITE_CRED.parent.mkdir(parents=True, exist_ok=True)
+    SITE_CRED.write_bytes(agreed)
+    sh("systemctl", "reset-failed", "regalia-site-check.service", check=False)
+    sh("systemctl", "restart", "regalia-site-check.service")
+
 
 def scenario(work, binaries, user):
     print(tpmdiag.versions(), flush=True)                                            # regalia-zga: the stack it ran on
@@ -688,6 +813,7 @@ def scenario(work, binaries, user):
     sh("systemctl", "reset-failed", "regalia-site-check.service", check=False)
     ok(sh("systemctl", "restart", "regalia-site-check.service", check=False).returncode == 0,
        "the recovery: the two in agreement again, the check passes", journal("regalia-site-check.service")[-300:])
+    idle_esp(work, agreed)
 
     header("4  regalia-admission")
     # the CUSE TPM has no resource manager: one unit at a time from here (see the docstring)
