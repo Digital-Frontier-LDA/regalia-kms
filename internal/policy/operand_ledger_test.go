@@ -261,6 +261,7 @@ func policyOperandRows() []operandLeaf {
 				"guard and the ambiguous-object guard four lines below it at once -- so neither was " +
 				"pinned, and defeating either one alone left the suite green. One fixture, two operands, " +
 				"pins neither. This row separates them: same id, different object.",
+			// spec: cosmos-fee-policy/duplicate-policy-id-is-refused-at-load
 			run: func(t *testing.T) {
 				first := basePolicy()
 				second := basePolicy()
@@ -285,6 +286,7 @@ func policyOperandRows() []operandLeaf {
 			why: "The other half of the pair above. Same (object, operation), different ids: only this " +
 				"guard can refuse it. Without it the second policy silently replaces the first in the " +
 				"map, so which of two declared rules is enforced depends on slice order.",
+			// spec: cosmos-fee-policy/ambiguous-object-operation-pair-is-refused-at-load
 			run: func(t *testing.T) {
 				first := basePolicy()
 				second := basePolicy()
