@@ -80,6 +80,22 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     refusal names it. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
     as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
     directory is kept for inspection, and a new run refuses until it is moved away.
+  - **The boot guard: `/etc/regalia/restore-pending`** (regalia-kms-dx7.26). Etcd's configuration says
+    `initial-cluster-state: new` under single-node, so etcd started on an empty data directory forms a new, empty
+    one-member cluster, and the daemon would serve on it at state epoch 0. While the marker exists, neither
+    `regalia-etcd.service` nor `regalia-kms.service` starts, at any boot (`10-restore-pending.conf` in each unit's
+    drop-in directory: `ConditionPathExists=!`, so the units read skipped, not failed). It persists: `/etc/regalia`
+    links to `/var`, and every writer writes its `/var` name.
+    - **Written** by `enrol commit` under single-node **without `--bootstrap`** (a replacement disk), as its first
+      persistent write, before `node.json`; by `restore.py run` when there is no live store, before it stops anything; and
+      by hand with `restore.py mark-pending` (root, at the console). `--bootstrap` is the cluster's genesis only, when no
+      etcd history ever existed. Never use it to re-enrol a lost disk: no marker is written then.
+    - **Lifted for etcd alone** by the restore's `/run` drop-in, whose empty `ConditionPathExists=` resets the
+      conditions before it and lists the unit's own two gates again. systemd reads drop-ins in file-name order whatever their
+      directory, so `10-restore-pending.conf` sorts before `50-restore.conf`. The order is pinned by a test.
+    - **Removed** only by `restore.py run`, once the restored store is exchanged into place and before etcd's restart.
+      The daemon then starts only on the raised epoch read back. Every refusal keeps it. When the exchange's fsync failed,
+      the refusal says when it may be removed by hand: only once the live etcd reads the raised epoch.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
 
 ## The disks: an fdatasync measurement plan for the DL360s (before production)

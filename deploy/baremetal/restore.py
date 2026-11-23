@@ -23,7 +23,8 @@ THE NODE, at its console, by root (`run`). Each step is refused unless the one b
   1. THE STATEMENT holds (opstate.verify_restore) under this node's current manifest, which is single-node (a multi-node
      cluster's etcd comes back by a take-over and a rejoin), and now is inside its window.
   2. THE SNAPSHOT is the one it names (SHA-256), and etcd's configuration is the single-node one (etcdconf.check).
-  3. THE DAEMON, THEN etcd, STOPPED. A refusal from here until step 5 starts both again, as they were.
+  3. THE DAEMON, THEN etcd, STOPPED. A refusal from here until step 5 starts both again, as they were (with a live store;
+     with none, neither: see THE BOOT GUARD).
   4. THE RESTORE INTO STAGING: `etcdutl snapshot restore` into STAGING (inside etcd's state directory), with the member
      name, peer URL, initial cluster and token of the checked configuration. The live data directory is not touched.
   5. etcd ON THE STAGING STORE: a runtime drop-in (/run: gone at the next boot) points regalia-etcd.service at a copy of
@@ -54,6 +55,12 @@ not yet running (LIMITATIONS.md).
 A crash or a refusal from step 5 on leaves the daemon stopped. A reboot drops the drop-in, and etcd comes back on the
 live directory: the old store before step 7, the restored one holding R after it. A second run refuses while STAGING
 exists: the operator looks at it first.
+
+THE BOOT GUARD (regalia-kms-dx7.26). With no live store, etcd started at a boot would form a new, empty cluster and the
+daemon serve on it at state epoch 0. So before step 3 stops anything, the run writes PENDING (/etc/regalia/restore-pending,
+by its /var name, its directory fsynced): while it exists neither unit starts (units/*/10-restore-pending.conf). The
+drop-in of step 5 resets those conditions for etcd alone; step 7 removes PENDING once the exchange is done, before etcd's
+restart. Every refusal keeps it. `enrol commit` writes it too for a single-node replacement, and `mark-pending` by hand.
 """
 import argparse
 import fcntl
@@ -71,6 +78,10 @@ Refused, require = membership.Refused, membership.require
 UNIT, DAEMON = takeover.UNIT, takeover.DAEMON
 ETCDCTL, ETCDUTL, ENDPOINT = takeover.ETCDCTL, takeover.ETCDUTL, takeover.ENDPOINT
 DROPIN = takeover.DROPIN_DIR + "/50-restore.conf"
+# regalia-kms-dx7.26: while it exists neither etcd nor the daemon starts, at any boot (units/*/10-restore-pending.conf).
+# Written by its /var name before a lost-disk restore stops anything, removed once the restored store is exchanged in
+PENDING, STORED_PENDING = etcdconf.RESTORE_PENDING, etcdconf.STORED_RESTORE_PENDING
+PENDING_SCHEMA = "regalia.restore-pending/v1"
 RESTORE_CONFIG = "/run/regalia-etcd/restore.conf.yml"
 STAGING = etcdconf.DATA_DIR + "/restore"              # inside the unit's StateDirectory: etcd may write there, nobody else
 MEMBER = etcdconf.DATA_DIR + "/member"
@@ -200,7 +211,23 @@ def staged_config(config_text):
 
 
 def dropin():
-    return "[Service]\nExecStart=\nExecStart=%s --config-file %s\n" % (takeover.ETCD, RESTORE_CONFIG)
+    """The runtime drop-in that runs etcd on STAGING. Its empty ConditionPathExists= resets every condition read before it,
+    the restore-pending marker's included (10-restore-pending.conf sorts before 50-restore.conf, whatever the directory:
+    systemd reads drop-ins in file-name order), and lists the unit's own two gates again."""
+    return ("[Unit]\nConditionPathExists=\nConditionPathExists=%s\nConditionPathExists=/etc/regalia/node.json\n"
+            "[Service]\nExecStart=\nExecStart=%s --config-file %s\n" % (etcdconf.CONFIG_PATH, takeover.ETCD, RESTORE_CONFIG))
+
+
+def mark_pending(host, reason, now):
+    """The restore-pending marker, written whole and its directory fsynced: from here a reboot starts neither etcd nor the
+    daemon. Its content is for the operator; the units read only that it exists."""
+    host.write(STORED_PENDING, json.dumps({"schema": PENDING_SCHEMA, "reason": reason, "written_at": stamp(now)}, sort_keys=True) + "\n")
+    host.sync_dir(os.path.dirname(STORED_PENDING))
+
+
+def clear_pending(host):
+    host.remove(STORED_PENDING)
+    host.sync_dir(os.path.dirname(STORED_PENDING))
 
 
 def one_member(host, node_id):
@@ -241,14 +268,15 @@ def _state(host, unit):
 
 def _first_steps_back(host, error, live=True):
     """Before etcd runs on staging, a refusal (or a command that timed out, or a file error) starts etcd and the daemon
-    again on the live store, untouched, as they were (etcd only when there is a live store: never a new empty cluster).
+    again on the live store, untouched, as they were. With no live store neither is started: etcd would form a new empty
+    cluster, and the restore-pending marker holds both skipped (a start would be skipped, and still exit 0).
     The refusal stays the one raised; a start that fails is added to it, with each unit's state as read back."""
     try:
         host.remove(VERIFIED_SNAPSHOT)          # only a copy: the snapshot itself is where it was, and a retry is not blocked
     except OSError:
         pass
     failed = []
-    for unit in ((UNIT, DAEMON) if live else (DAEMON,)):
+    for unit in ((UNIT, DAEMON) if live else ()):
         try:
             _start(host, unit)
         except (Refused, subprocess.SubprocessError, OSError) as again:
@@ -257,6 +285,9 @@ def _first_steps_back(host, error, live=True):
         states = ", ".join("%s %s" % (unit, _state(host, unit)) for unit in (UNIT, DAEMON))
         raise Refused("%s; and starting again failed (%s): as read back, %s; the live store is untouched and %s is kept for "
                       "inspection" % (_reason(error), "; ".join(failed), states, STAGING)) from error
+    if not live:
+        raise Refused("%s; %s and %s are left stopped, and %s holds them so at every boot until a restore exchanges a store "
+                      "holding a raised state epoch" % (_reason(error), UNIT, DAEMON, PENDING)) from error
     if isinstance(error, Refused):
         raise error
     raise Refused("%s; started again on the untouched live store: %s" % (_reason(error), ", ".join(
@@ -285,8 +316,8 @@ def _off_staging(host, error, live=True):
         raise Refused("%s; and putting etcd back on its live store failed (%s): remove %s, reload systemd and restart %s by hand; "
                       "the daemon is stopped" % (_reason(error), "; ".join(failed), DROPIN, UNIT)) from error
     if not live:
-        raise Refused("%s; etcd is left stopped (there is no live store to put it back on) and so is the daemon; %s is kept"
-                      % (_reason(error), STAGING)) from error
+        raise Refused("%s; etcd is left stopped (there is no live store to put it back on) and so is the daemon; %s is kept, "
+                      "and %s holds both stopped at every boot" % (_reason(error), STAGING, PENDING)) from error
     raise Refused("%s; etcd is back on its live store, the daemon is left stopped (start %s once %s has been looked at)"
                   % (_reason(error), DAEMON, STAGING)) from error
 
@@ -353,6 +384,10 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
     else:
         say("there is no live store (%s): the lost-disk case. The statement's floor (the collector's highest and the owner's "
             "ledger's) stands for its state epoch; the statement is single-use by procedure (module docstring)" % MEMBER)
+        # before anything stops: from here until the exchange, a reboot starts neither etcd (it would form a new, empty
+        # cluster) nor the daemon (regalia-kms-dx7.26)
+        mark_pending(host, "restore run: no live store (the lost disk); removed once the restored store is exchanged in", now)
+        say("%s written: etcd and the daemon stay stopped at every boot until the exchange" % PENDING)
     # 3. the daemon, then etcd; 4. the snapshot, verified as it is copied, restored into staging
     say("%s stopped (%s)" % (DAEMON, takeover._stop(host, DAEMON)))
     try:
@@ -405,14 +440,24 @@ def run(host, signed, chain, node_id, snapshot, now, sign, facts=None, clock=Non
         raise Refused("the restored store is live (%s), but the fsync of its directory failed (%s): whether the rename survives a power "
                       "loss is not known. etcd and the daemon are stopped. Once the file system is sound: start %s on its normal "
                       "configuration, check that no restore or take-over drop-in is active (systemctl show -p DropInPaths %s), read "
-                      "the state epoch from the live etcd (it must be %d), and only then start %s" % (MEMBER, error, UNIT, UNIT, epoch,
-                                                                                                  DAEMON)) from None
+                      "the state epoch from the live etcd (it must be %d), and only then start %s. If %s is there, it holds both "
+                      "skipped: remove %s by hand only once the live etcd reads state epoch %d (start etcd for that read with "
+                      "systemd-run or a /run drop-in like %s, never by removing it first)"
+                      % (MEMBER, error, UNIT, UNIT, epoch, DAEMON, PENDING, PENDING, epoch, DROPIN)) from None
     except OSError as error:
         # the rename did not happen: the live store is as it was. etcd goes back on it (never onto a missing one), the
         # daemon stays stopped, and STAGING (holding the restored store at R) is kept
         _off_staging(host, Refused("the exchange of %s/member and %s failed (%s): the live store is as it was; the daemon is not "
                                    "started" % (STAGING, MEMBER, error)), live=live_exists)
     facts.update(exchanged=how)
+    # the restored store holding R is live: the marker goes before etcd's restart, which it would skip; the daemon is still
+    # started only on R read back from the live store (step 8)
+    try:
+        clear_pending(host)
+    except OSError as error:
+        raise Refused("the restored store is live (%s), but %s could not be removed (%s): etcd and the daemon stay stopped. Remove "
+                      "it, start %s, read the state epoch from the live etcd (it must be %d), and only then start %s"
+                      % (MEMBER, PENDING, error, UNIT, epoch, DAEMON)) from None
     if how == "exchanged":
         say("the restored store is live; the store it replaced is kept in %s/member" % STAGING)
     else:
@@ -471,6 +516,13 @@ class Host(takeover.Host):
     def exists(self, path):
         return os.path.lexists(path)
 
+    def sync_dir(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
     def exchange(self, staged, live):
         """`staged` becomes `live` in one rename: the two exchanged (renameat2 RENAME_EXCHANGE) when `live` exists, else
         renamed into place; then their directories fsynced. Never a moment with no live directory. Returns "exchanged" or
@@ -527,6 +579,8 @@ def main(argv=None, host=None, now=None, signer=None):
     go.add_argument("--config", required=True, help="the node's configuration (node.json)")
     go.add_argument("--statement", required=True, help="the owner's signed restore statement (JSON)")
     go.add_argument("--snapshot", required=True, help="the etcd snapshot the statement names")
+    sub.add_parser("mark-pending", help="(root, at the node's console) hold etcd and the daemon stopped at every boot until a "
+                   "restore exchanges a store with a raised state epoch: a replacement disk, before its first reboot")
     s = sub.add_parser("sign-statement", help="(off the nodes) the owner's restore statement, its epoch from the ledger")
     s.add_argument("--chain", required=True, help="the node's signed chain")
     s.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
@@ -541,6 +595,11 @@ def main(argv=None, host=None, now=None, signer=None):
         s.add_argument(flag, **kw)
     args = parser.parse_args(argv)
     try:
+        if args.command == "mark-pending":
+            mark_pending(host or Host(), "restore mark-pending, at the console", now if now is not None else int(time.time()))
+            print("WRITTEN: %s; %s and %s stay stopped at every boot until `restore run` exchanges a restored store"
+                  % (PENDING, UNIT, DAEMON))
+            return 0
         if args.command == "sign-statement":
             from deploy.baremetal import keyfd, manifest as manifest_tool, owner, p11sign
             owner.off_the_nodes()

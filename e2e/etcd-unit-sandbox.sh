@@ -17,6 +17,9 @@
 #   the socket is /run/regalia-etcd/client.sock:0, mode 0770, group regalia-etcd-client;
 #   a process in that group puts and reads a key through it; one outside the group is refused;
 #   the data directory is 0700, owned by regalia-etcd; every file in it is unreadable by others.
+#   with /etc/regalia/restore-pending there, the image's 10-restore-pending.conf drop-ins skip etcd and a stub daemon
+#   (ConditionResult=no); restore.py's /run drop-in, read after them, starts etcd on staging and the daemon stays skipped;
+#   with the marker removed both start (regalia-kms-dx7.26).
 # It removes what it made by its exact paths (the user and the groups too).
 # shellcheck disable=SC2319  # file-wide: `ok $?` reads the check made just before it, on purpose
 set -euo pipefail
@@ -32,11 +35,22 @@ UNIT=/run/systemd/system/regalia-etcd.service
 CONF=/etc/regalia/etcd.conf.yml
 CERTS=/etc/regalia/etcd
 CRED=/etc/credstore.encrypted
-made_regalia_dir=0 made_cred_dir=0 made_cert_dir=0
+made_regalia_dir=0 made_cred_dir=0 made_cert_dir=0 made_node_json=0
+# regalia-kms-dx7.26: the restore-pending guard. The shipped drop-ins go under /etc (the unit is under /run, restore's
+# drop-in too): systemd reads drop-ins from every directory in FILE-NAME order, which is what is shown
+MARK=/etc/regalia/restore-pending
+NODE_JSON=/etc/regalia/node.json
+ETCD_GUARD=/etc/systemd/system/regalia-etcd.service.d
+KMS_STUB=/run/systemd/system/regalia-kms.service
+KMS_GUARD=/etc/systemd/system/regalia-kms.service.d
+RESTORE_DROPIN=/run/systemd/system/regalia-etcd.service.d/50-restore.conf
 passed=0 failed=0
 ok(){ if [ "$1" = 0 ]; then passed=$((passed + 1)); echo "  PASS $2"; else failed=$((failed + 1)); echo "  FAIL $2"; fi; }
 cleanup(){
-  systemctl stop regalia-etcd.service 2>/dev/null || true
+  systemctl stop regalia-etcd.service regalia-kms.service 2>/dev/null || true
+  rm -f -- "$MARK" "$ETCD_GUARD/10-restore-pending.conf" "$KMS_GUARD/10-restore-pending.conf" "$KMS_STUB" "$RESTORE_DROPIN"
+  rmdir "$ETCD_GUARD" "$KMS_GUARD" "$(dirname "$RESTORE_DROPIN")" 2>/dev/null
+  [ "$made_node_json" = 1 ] && rm -f -- "$NODE_JSON"
   rm -f -- "$UNIT" "$CONF" "$CRED/regalia-etcd-peer.key" "$CERTS/peer.crt" "$CERTS/peers.pem"
   [ "$made_cert_dir" = 1 ] && rmdir "$CERTS" 2>/dev/null
   [ "$made_regalia_dir" = 1 ] && rmdir /etc/regalia 2>/dev/null
@@ -51,7 +65,8 @@ cleanup(){
 trap cleanup EXIT
 
 # what the image holds: the binaries and the unit, from the archive itself
-tar -xf "$TAR" -C "$W" ./usr/bin/etcd ./usr/bin/etcdctl ./usr/lib/systemd/system/regalia-etcd.service
+tar -xf "$TAR" -C "$W" ./usr/bin/etcd ./usr/bin/etcdctl ./usr/lib/systemd/system/regalia-etcd.service \
+  ./usr/lib/systemd/system/regalia-etcd.service.d/10-restore-pending.conf ./usr/lib/systemd/system/regalia-kms.service.d/10-restore-pending.conf
 sed 's|^ExecStart=/usr/bin/etcd |ExecStart='"$W"'/usr/bin/etcd |' "$W/usr/lib/systemd/system/regalia-etcd.service" > "$UNIT"
 [ "$(diff "$W/usr/lib/systemd/system/regalia-etcd.service" "$UNIT" | grep -c '^[<>]')" = 2 ]; ok $? "the unit is the image's, with only ExecStart's path changed"
 # the user, the groups and the socket directory, as the image's sysusers.d and tmpfiles.d lines make them
@@ -119,6 +134,47 @@ client "$(getent group nogroup | cut -d: -f3)" get sandbox >/dev/null 2>&1; [ $?
 echo "### the data directory"
 [ "$(stat -c '%a %U' /var/lib/regalia-etcd)" = "700 regalia-etcd" ]; ok $? "/var/lib/regalia-etcd is 0700, regalia-etcd's"
 [ -z "$(find /var/lib/regalia-etcd -perm /o=rwx)" ]; ok $? "nothing in it is open to others"
+
+echo "### the restore-pending guard (regalia-kms-dx7.26)"
+# the image's own drop-ins; a stub daemon (sleep) carries the kms one. The marker present: both are skipped
+for u in regalia-etcd regalia-kms; do d=/etc/systemd/system/$u.service.d; mkdir -p "$d"
+  install -m 0644 "$W/usr/lib/systemd/system/$u.service.d/10-restore-pending.conf" "$d/10-restore-pending.conf"; done
+printf '[Unit]\nDescription=a stub regalia-kms.service (the sandbox)\n[Service]\nExecStart=/bin/sleep infinity\n' > "$KMS_STUB"
+[ -e "$NODE_JSON" ] || { printf '{}\n' > "$NODE_JSON"; made_node_json=1; }
+systemctl stop regalia-etcd.service
+printf '{"schema": "regalia.restore-pending/v1"}\n' > "$MARK"
+systemctl daemon-reload
+skipped(){ timeout 90 systemctl start "$1" && sleep 1 && [ "$(systemctl is-active "$1")" != active ] && \
+           [ "$(systemctl show -p ConditionResult --value "$1")" = no ]; }
+started(){ timeout 90 systemctl start "$1" && sleep 1 && [ "$(systemctl is-active "$1")" = active ] && \
+           [ "$(systemctl show -p ConditionResult --value "$1")" = yes ]; }
+skipped regalia-etcd.service; ok $? "with the marker, etcd is skipped (ConditionResult=no), not started on an empty store"
+skipped regalia-kms.service; ok $? "with the marker, the daemon is skipped (ConditionResult=no)"
+# restore's own drop-in (restore.dropin(), only etcd's path changed to the extracted binary) on staging: etcd starts
+python3 -I - "$W" > "$W/50-restore.conf" <<'EOF'
+import sys
+sys.path.insert(0, ".")
+from deploy.baremetal import restore, takeover
+print(restore.dropin().replace("ExecStart=%s " % takeover.ETCD, "ExecStart=%s/usr/bin/etcd " % sys.argv[1]), end="")
+EOF
+mkdir -p "$(dirname "$RESTORE_DROPIN")"
+install -m 0644 "$W/50-restore.conf" "$RESTORE_DROPIN"
+install -m 0600 -o regalia-etcd -g regalia-etcd "$CONF" /run/regalia-etcd/restore.conf.yml
+systemctl daemon-reload
+dropins="$(systemctl show -p DropInPaths --value regalia-etcd.service)"
+case "$dropins" in *"$ETCD_GUARD/10-restore-pending.conf $RESTORE_DROPIN"*) true;; *) false;; esac
+ok $? "systemd reads 10-restore-pending.conf before restore's 50-restore.conf ($dropins)"
+started regalia-etcd.service; ok $? "with restore's drop-in, etcd starts on staging though the marker is there (ConditionResult=yes)"
+skipped regalia-kms.service; ok $? "and the daemon is still skipped"
+systemctl stop regalia-etcd.service
+rm -f -- "$RESTORE_DROPIN" /run/regalia-etcd/restore.conf.yml
+systemctl daemon-reload
+skipped regalia-etcd.service; ok $? "the drop-in gone and the marker still there: etcd is skipped again"
+rm -f -- "$MARK"
+systemctl daemon-reload
+started regalia-etcd.service; ok $? "the marker removed (the restore's exchange): etcd starts"
+started regalia-kms.service; ok $? "and so does the daemon"
+systemctl stop regalia-kms.service
 
 echo
 echo "etcd-unit-sandbox: $passed passed, $failed failed"

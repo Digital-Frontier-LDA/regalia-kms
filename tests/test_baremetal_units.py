@@ -514,3 +514,79 @@ class NodeMetricsDirectories(unittest.TestCase):
                       (UNITS / "00-regalia-etc.tmpfiles.conf").read_text())
         # the guard must not have dropped the group: the textfile directories stay readable (the test above)
         self.assertEqual(dropin["Service"]["SupplementaryGroups"], "regalia-metrics")
+
+
+class RestorePendingGate(unittest.TestCase):
+    """regalia-kms-dx7.26: on a single-node host with no live store (a replacement disk, or a lost-disk restore under way),
+    etcd started on the empty data directory would form a new, empty one-member cluster at state epoch 0 and the daemon
+    would serve on it. /etc/regalia/restore-pending (persistent: /etc/regalia links to /var) holds BOTH units skipped at
+    every boot; restore.py's /run drop-in, 50-restore.conf, lifts it for etcd alone on its staging store. systemd reads the
+    unit, then its drop-ins from every directory sorted by FILE NAME, and an empty Condition...= resets every condition read
+    before it (systemd.unit(5)): so the marker's drop-in must sort BEFORE 50-restore.conf (check 25a6a1e8 on the plan)."""
+
+    MARKER = "/etc/regalia/restore-pending"
+    KMS = UNITS.parents[1] / "systemd" / "regalia-kms.service"
+
+    @staticmethod
+    def conditions(main, dropins):
+        """The unit's effective Condition*= list, as systemd builds it: `main` first, then `dropins` ({file name: text},
+        from any directory) in file-name order; an empty Condition...= drops every condition before it."""
+        held = []
+        for text in [main] + [dropins[name] for name in sorted(dropins)]:
+            section = None
+            for line in text.splitlines():
+                line = line.strip()
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1]
+                elif section == "Unit" and line.startswith("Condition") and "=" in line:
+                    key, value = line.split("=", 1)
+                    held = [] if value == "" else held + [(key, value)]
+        return held
+
+    @staticmethod
+    def holds(conditions, present):
+        """Whether every condition holds with `present` the paths that exist (ConditionPathExists= and its ! form only)."""
+        for key, value in conditions:
+            assert key == "ConditionPathExists", key
+            negated = value.startswith("!")
+            if (value.lstrip("!") in present) == negated:
+                return False
+        return True
+
+    def shipped(self, unit_dir):
+        directory = UNITS / unit_dir
+        return {p.name: p.read_text() for p in sorted(directory.iterdir()) if p.name.endswith(".conf")}
+
+    def etcd(self, restoring=False):
+        from deploy.baremetal import restore
+        dropins = self.shipped("regalia-etcd.service.d")
+        if restoring:
+            dropins[os.path.basename(restore.DROPIN)] = restore.dropin()
+        return self.conditions((UNITS / "regalia-etcd.service").read_text(), dropins)
+
+    def kms(self):
+        return self.conditions(self.KMS.read_text(), self.shipped("regalia-kms.service.d"))
+
+    ENROLLED = {"/etc/regalia/etcd.conf.yml", "/etc/regalia/node.json"}
+
+    def test_the_marker_holds_etcd_and_the_daemon_skipped(self):
+        for name, conditions in (("regalia-etcd.service", self.etcd()), ("regalia-kms.service", self.kms())):
+            with self.subTest(name):
+                self.assertIn(("ConditionPathExists", "!" + self.MARKER), conditions)
+                self.assertFalse(self.holds(conditions, self.ENROLLED | {self.MARKER}), "%s starts with the marker present" % name)
+                self.assertTrue(self.holds(conditions, self.ENROLLED), "%s does not start without the marker" % name)
+
+    def test_restore_s_drop_in_lifts_the_marker_for_etcd_alone(self):
+        conditions = self.etcd(restoring=True)
+        self.assertNotIn(("ConditionPathExists", "!" + self.MARKER), conditions)
+        self.assertTrue(self.holds(conditions, self.ENROLLED | {self.MARKER}), "etcd does not start on staging with the marker present")
+        # the reset drops the unit's own gates too: they hold again after it, so an unenrolled host still skips etcd
+        self.assertFalse(self.holds(conditions, {"/etc/regalia/node.json", self.MARKER}))
+        self.assertFalse(self.holds(conditions, {"/etc/regalia/etcd.conf.yml", self.MARKER}))
+        self.assertFalse(self.holds(self.kms(), self.ENROLLED | {self.MARKER}), "the daemon has no restore drop-in: it stays skipped")
+
+    def test_the_marker_s_drop_in_sorts_before_restore_s_reset(self):
+        from deploy.baremetal import restore
+        names = sorted(list(self.shipped("regalia-etcd.service.d")) + [os.path.basename(restore.DROPIN)])
+        self.assertEqual(names, ["10-restore-pending.conf", "50-restore.conf", "per-host.conf"])
+        self.assertIn("10-restore-pending.conf", self.shipped("regalia-kms.service.d"))

@@ -175,6 +175,7 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
     def installed(self, etc, public, signature_path):
         """commit's configuration paths under this test's directory, and the running image's PCR key and signature."""
         with patch.object(enrol, "CONFIG_DIR", etc), patch.object(enrol, "NODE_JSON", etc + "node.json"), \
+                patch.object(enrol, "RESTORE_PENDING", etc + "restore-pending"), \
                 patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
                 patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), patch.object(signkey, "PCR_SIGNATURE_PATHS", (signature_path,)):
             yield
@@ -270,6 +271,8 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
             area = subprocess.run(["tpm2_nvreadpublic", example["nv_epoch"]], check=True, capture_output=True, text=True).stdout
             self.assertIn("authorization policy: " + signkey.policy(pem).hex().upper(), area)
             self.assertTrue(enrol.Journal(self.dir, "a").get("heartbeat_first")["bootstrap"])
+            # regalia-kms-dx7.26: genesis (--bootstrap) holds nothing back: etcd and the daemon start at the first boot
+            self.assertFalse(os.path.lexists(etc + "restore-pending"))
             self.assertEqual(bootnet.unlock_endpoints(site, man), {"owner": "10.89.0.9:7443"})
             wg = bootnet.boot_wg_conf(site, man)
             self.assertEqual(wg.count("[Peer]"), 1)
@@ -337,7 +340,19 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                 self.assertEqual(enrol.Journal(self.dir, "a").doc, before_journal)
                 self.assertEqual(handed, [])
                 return
-            self.assertEqual(commit("b"), (3, membership.digest(third)))
+            installing = enrol.install_config
+
+            def install_config(*args, **kw):
+                # regalia-kms-dx7.26: the marker is the commit's first persistent write, before node.json exists
+                self.assertTrue(os.path.isfile(etc + "restore-pending"), "node.json is installed before the restore-pending marker")
+                self.assertFalse(os.path.lexists(etc + "node.json"))
+                return installing(*args, **kw)
+
+            with patch.object(enrol, "install_config", install_config):
+                self.assertEqual(commit("b"), (3, membership.digest(third)))
+            with open(etc + "restore-pending") as f:
+                self.assertEqual(json.load(f)["schema"], "regalia.restore-pending/v1")
+            self.assertIn("RESTORE-PENDING:", out.getvalue())
             self.assertEqual(handed, [None], "the policy-writing sync step receives no owner authorization")
             here = node.Node(node.load(etc + "node.json"))
             self.assertEqual(here.store().load(), third)
@@ -362,3 +377,59 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
             self.assertEqual(heartbeat.verify(envelope, third)["sequence"], 1)
             self.assertEqual((beat.held_sequence(freshness, third), freshness.counter.value(), signer.signed()), (1, 1, 1))
             self.assertEqual(trail[-1]["outcome"], "ALLOW")
+
+
+class RestorePendingAtEnrolment(unittest.TestCase):
+    """regalia-kms-dx7.26: a single-node commit without --bootstrap (a replacement disk: no live etcd history on it) writes
+    /etc/regalia/restore-pending before node.json, so neither etcd nor the daemon starts at any boot until a restore has
+    exchanged a store holding a raised state epoch. Genesis (--bootstrap), a resumed commit and multi-node write nothing."""
+
+    def setUp(self):
+        import tempfile
+        self.d = os.path.realpath(tempfile.mkdtemp())        # enrolment follows no link on the way down (macOS: /var)
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+        self.marker, self.node_json = self.d + "/restore-pending", self.d + "/node.json"
+        self.single = {"schema": membership.SCHEMA_V5, "epoch": 3, "topology": {"profile": membership.SINGLE_NODE}}
+
+    def hold(self, manifest_=None, bootstrap=False):
+        out = io.StringIO()
+        held = enrol.hold_restore_pending(manifest_ or self.single, self.marker, self.node_json, bootstrap, out)
+        return held, out.getvalue()
+
+    def test_a_replacement_writes_it_whole(self):
+        held, said = self.hold()
+        self.assertTrue(held)
+        with open(self.marker) as f:
+            doc = json.load(f)
+        self.assertEqual((doc["schema"], sorted(doc)), ("regalia.restore-pending/v1", ["reason", "schema", "written_at"]))
+        self.assertIn("RESTORE-PENDING: %s written" % self.marker, said)
+        self.assertEqual(sorted(os.listdir(self.d)), ["restore-pending"])          # no temporary file left
+
+    def test_genesis_writes_nothing(self):
+        self.assertEqual(self.hold(dict(self.single, epoch=1), bootstrap=True), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_multi_node_writes_nothing(self):
+        self.assertEqual(self.hold(dict(self.single, topology={"profile": membership.MULTI_NODE})), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_a_resumed_commit_writes_nothing(self):
+        """node.json is there: an earlier run of this commit decided, before it installed node.json. A genesis resumed
+        without --bootstrap is not held back."""
+        with open(self.node_json, "w") as f:
+            f.write("{}")
+        self.assertEqual(self.hold(dict(self.single, epoch=1)), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_bootstrap_keeps_a_marker_already_there_and_says_so(self):
+        with open(self.marker, "w") as f:
+            f.write("{}")
+        held, said = self.hold(dict(self.single, epoch=1), bootstrap=True)
+        self.assertFalse(held)
+        self.assertTrue(os.path.isfile(self.marker))
+        self.assertIn("NOTE: %s is kept" % self.marker, said)
+
+    def test_the_path_is_the_units_and_the_restore_s(self):
+        from deploy.baremetal import restore
+        self.assertEqual(enrol.RESTORE_PENDING, restore.PENDING)
+        self.assertEqual(enrol.stored(enrol.RESTORE_PENDING), restore.STORED_PENDING)
