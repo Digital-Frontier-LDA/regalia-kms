@@ -1,0 +1,395 @@
+// Command spectrace enforces the spec-to-test join key.
+//
+// Every OpenSpec scenario (a `#### Scenario:` block under a `### Requirement:`
+// in openspec/specs/<capability>/spec.md) is a testable claim. A scenario is
+// *covered* when some Go test carries an annotation of the form:
+//
+//	// spec: <capability>/<scenario-slug>
+//
+// where <scenario-slug> is the scenario title lowercased with every run of
+// non-alphanumeric characters collapsed to a single hyphen (see slug). The
+// tool fails (exit 1) on either direction of the join breaking:
+//
+//   - an ORPHAN SCENARIO: a scenario no test claims. The spec made a promise
+//     no test is holding.
+//   - a DANGLING LINK: a test claims a scenario that does not exist in the
+//     spec. The test is guarding a sentence that was rewritten or removed,
+//     which is how a test goes silent the moment the spec it protects moves.
+//
+// This is the spine of the docs<->spec<->test loop: the scenario is the join
+// key, and CI refuses to let either side drift. Run it from the repo root:
+//
+//	spectrace -specs ../openspec/specs -tests .
+//
+// (or see the Makefile/CI invocation). It is read-only; it changes nothing.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// triple identifies one scenario in the spec tree.
+type triple struct {
+	Capability  string
+	Requirement string
+	Scenario    string
+	Slug        string
+	SpecPath    string
+	SpecLine    int
+}
+
+// link is one `// spec:` annotation found in a test file. FilePath and
+// FileLine locate the annotation.
+type link struct {
+	Capability string
+	Slug       string
+	FilePath   string
+	FileLine   int
+}
+
+// malformed is a `// spec:` annotation whose key is not a complete
+// <capability>/<slug> token, e.g. `demo/alpha_old`. It is reported and fails
+// the run, never truncated to a valid-looking prefix.
+type malformed struct {
+	FilePath string
+	FileLine int
+	Raw      string
+}
+
+var (
+	requirementRe = regexp.MustCompile(`^### Requirement:\s*(.+?)\s*$`)
+	scenarioRe    = regexp.MustCompile(`^#### Scenario:\s*(.+?)\s*$`)
+	// annotationRe finds a spec annotation at the start of a Go line comment
+	// and captures its whole first token; keyRe then requires that the token
+	// is exactly <capability>/<slug>.
+	annotationRe = regexp.MustCompile(`^//\s*spec:\s*(\S*)`)
+	keyRe        = regexp.MustCompile(`^([a-z0-9-]+)/([a-z0-9-]+)$`)
+)
+
+// slug canonicalizes a scenario title into its join-key form.
+func slug(title string) string {
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range strings.ToLower(title) {
+		alnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if alnum {
+			b.WriteRune(r)
+			lastHyphen = false
+			continue
+		}
+		if !lastHyphen {
+			b.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	return s
+}
+
+// parseSpec walks one spec.md and yields its scenario triples.
+func parseSpec(path string) ([]triple, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	capability := filepath.Base(filepath.Dir(path))
+	var out []triple
+	var req string
+	for i, line := range strings.Split(string(data), "\n") {
+		if m := requirementRe.FindStringSubmatch(line); m != nil {
+			req = m[1]
+			continue
+		}
+		if m := scenarioRe.FindStringSubmatch(line); m != nil {
+			title := m[1]
+			out = append(out, triple{
+				Capability:  capability,
+				Requirement: req,
+				Scenario:    title,
+				Slug:        slug(title),
+				SpecPath:    path,
+				SpecLine:    i + 1,
+			})
+		}
+	}
+	return out, nil
+}
+
+// collectSpecs loads every spec under the specs root.
+func collectSpecs(root string) ([]triple, error) {
+	var all []triple
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "spec.md") {
+			return nil
+		}
+		ts, err := parseSpec(path)
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		all = append(all, ts...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// collectLinks walks test files and gathers every `// spec:` annotation. It
+// parses each file and reads only real Go line comments, so spec-like text in a
+// string literal is not an annotation. An annotation whose key is not exactly
+// <capability>/<slug> is returned as malformed. A test file that does not
+// parse is an error.
+//
+// It skips the tools/ tree: the tools' own tests carry `// spec:` fixture
+// strings (and capability/slug literals) that are examples, not real coverage
+// claims, and scanning them would report dangling links that are not.
+func collectLinks(testsRoot string) ([]link, []malformed, error) {
+	var all []link
+	var bad []malformed
+	err := filepath.WalkDir(testsRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			rel, _ := filepath.Rel(testsRoot, path)
+			base := filepath.Base(path)
+			if base == "tools" && (rel == "." || rel == "tools" || strings.HasPrefix(rel, "tools"+string(filepath.Separator))) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, data, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		for _, group := range f.Comments {
+			for _, c := range group.List {
+				m := annotationRe.FindStringSubmatch(c.Text)
+				if m == nil {
+					continue
+				}
+				line := fset.Position(c.Pos()).Line
+				k := keyRe.FindStringSubmatch(m[1])
+				if k == nil {
+					bad = append(bad, malformed{FilePath: path, FileLine: line, Raw: c.Text})
+					continue
+				}
+				all = append(all, link{Capability: k[1], Slug: k[2], FilePath: path, FileLine: line})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return all, bad, nil
+}
+
+// report is the result of joining the spec scenarios against the test links.
+type report struct {
+	orphans, acknowledgedList []triple
+	dangling                  []link
+	dupSlugs, badAllow        []string
+	// staleAllow lists -allow keys whose scenario a test now claims. The
+	// exemption is no longer needed, and keeping it would let the test's later
+	// removal go unnoticed, so it fails the run until the key is deleted.
+	staleAllow []string
+}
+
+// failed reports whether the join fails the gate: any orphan, dangling link,
+// duplicate slug, bad -allow key or stale -allow key.
+func (r report) failed() bool {
+	return len(r.orphans)+len(r.dangling)+len(r.dupSlugs)+len(r.badAllow)+len(r.staleAllow) > 0
+}
+
+// evaluate joins scenarios and links under the acknowledged (-allow) set.
+func evaluate(scenarios []triple, links []link, acknowledged map[string]bool) report {
+	// Index scenarios by (capability, slug) -> scenario (detect duplicate slugs).
+	scenByKey := make(map[string]triple)
+	var dupSlugs []string
+	for _, s := range scenarios {
+		key := s.Capability + "/" + s.Slug
+		if prev, ok := scenByKey[key]; ok {
+			dupSlugs = append(dupSlugs, fmt.Sprintf("%s (line %d) collides with %s (line %d)",
+				s.Scenario, s.SpecLine, prev.Scenario, prev.SpecLine))
+			continue
+		}
+		scenByKey[key] = s
+	}
+	covered := make(map[string]bool) // scenario key -> covered
+
+	var dangling []link
+	for _, l := range links {
+		key := l.Capability + "/" + l.Slug
+		if _, ok := scenByKey[key]; !ok {
+			dangling = append(dangling, l)
+			continue
+		}
+		covered[key] = true
+	}
+
+	var orphans, acknowledgedList []triple
+	for _, s := range scenarios {
+		if covered[s.Capability+"/"+s.Slug] {
+			continue
+		}
+		key := s.Capability + "/" + s.Slug
+		if acknowledged[key] {
+			acknowledgedList = append(acknowledgedList, s)
+			continue
+		}
+		orphans = append(orphans, s)
+	}
+
+	sort.Slice(orphans, func(i, j int) bool {
+		if orphans[i].Capability != orphans[j].Capability {
+			return orphans[i].Capability < orphans[j].Capability
+		}
+		return orphans[i].SpecLine < orphans[j].SpecLine
+	})
+	sort.Slice(dangling, func(i, j int) bool {
+		if dangling[i].FilePath != dangling[j].FilePath {
+			return dangling[i].FilePath < dangling[j].FilePath
+		}
+		return dangling[i].FileLine < dangling[j].FileLine
+	})
+
+	// An -allow key that names no scenario is a typo or a scenario that was
+	// renamed away — it would silently stop being enforced. Report it and fail
+	// so the allow-list cannot drift from the spec.
+	var badAllow []string
+	for k := range acknowledged {
+		if _, ok := scenByKey[k]; !ok {
+			badAllow = append(badAllow, k)
+		}
+	}
+	sort.Strings(badAllow)
+	var staleAllow []string
+	for k := range acknowledged {
+		if covered[k] {
+			staleAllow = append(staleAllow, k)
+		}
+	}
+	sort.Strings(staleAllow)
+	return report{orphans: orphans, acknowledgedList: acknowledgedList, dangling: dangling,
+		dupSlugs: dupSlugs, badAllow: badAllow, staleAllow: staleAllow}
+}
+
+func main() {
+	specsRoot := flag.String("specs", "../openspec/specs", "root directory of openspec specs")
+	testsRoot := flag.String("tests", ".", "root directory of Go test files")
+	quiet := flag.Bool("q", false, "print only failures and the summary")
+	allow := flag.String("allow", "", "comma-separated scenario keys (cap/slug) that are KNOWN post-landing — their spec states behavior a pending change will implement, so no test exists yet. They are reported as 'acknowledged' and do not fail the gate. This is a deliberate, visible exception: every key here is a debt that a pending change must retire. A key whose scenario a test now claims is STALE and fails the run, as does a key that names no scenario.")
+	flag.Parse()
+
+	// The acknowledged set: scenarios whose coverage is a known, named debt.
+	acknowledged := map[string]bool{}
+	if *allow != "" {
+		for _, k := range strings.Split(*allow, ",") {
+			k = strings.TrimSpace(k)
+			if k != "" {
+				acknowledged[k] = true
+			}
+		}
+	}
+
+	scenarios, err := collectSpecs(*specsRoot)
+	if err != nil {
+		fatalf("read specs: %v", err)
+	}
+	links, badLinks, err := collectLinks(*testsRoot)
+	if err != nil {
+		fatalf("read tests: %v", err)
+	}
+
+	r := evaluate(scenarios, links, acknowledged)
+	orphans, acknowledgedList, dangling := r.orphans, r.acknowledgedList, r.dangling
+	dupSlugs, badAllow, staleAllow := r.dupSlugs, r.badAllow, r.staleAllow
+
+	if !*quiet {
+		fmt.Printf("spectrace: %d scenarios across %s, %d spec links in tests under %s\n",
+			len(scenarios), *specsRoot, len(links), *testsRoot)
+	}
+
+	if len(badAllow) > 0 {
+		fmt.Fprintln(os.Stderr, "unknown -allow keys (name no scenario):")
+		for _, k := range badAllow {
+			fmt.Fprintf(os.Stderr, "  - %s\n", k)
+		}
+	}
+
+	if len(acknowledgedList) > 0 {
+		if !*quiet {
+			fmt.Printf("acknowledged post-landing scenarios (%d) — coverage is a named debt a pending change must retire:\n", len(acknowledgedList))
+			for _, s := range acknowledgedList {
+				fmt.Printf("  - %s  [%s:%d]\n", s.Capability+"/"+s.Slug, s.SpecPath, s.SpecLine)
+			}
+		}
+	}
+
+	fail := r.failed() || len(badLinks) > 0
+	if len(staleAllow) > 0 {
+		fmt.Fprintln(os.Stderr, "stale -allow keys (a test now claims the scenario; delete the exemption):")
+		for _, k := range staleAllow {
+			fmt.Fprintf(os.Stderr, "  - %s\n", k)
+		}
+	}
+	if len(dupSlugs) > 0 {
+		fmt.Fprintln(os.Stderr, "duplicate scenario slugs (ambiguous join key):")
+		for _, d := range dupSlugs {
+			fmt.Fprintln(os.Stderr, "  - "+d)
+		}
+	}
+	if len(badLinks) > 0 {
+		fmt.Fprintf(os.Stderr, "malformed annotations (%d) — a `// spec:` key that is not exactly <capability>/<slug>:\n", len(badLinks))
+		for _, b := range badLinks {
+			fmt.Fprintf(os.Stderr, "  - %s:%d  %s\n", b.FilePath, b.FileLine, b.Raw)
+		}
+	}
+	if len(dangling) > 0 {
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("dangling links (%d) — test claims a scenario not in the spec:", len(dangling)))
+		for _, l := range dangling {
+			fmt.Fprintf(os.Stderr, "  - %s:%d  ->  %s/%s\n", l.FilePath, l.FileLine, l.Capability, l.Slug)
+		}
+	}
+	if len(orphans) > 0 {
+		fmt.Fprintln(os.Stderr, fmt.Sprintf("orphan scenarios (%d) — spec scenario with no test:", len(orphans)))
+		for _, s := range orphans {
+			fmt.Fprintf(os.Stderr, "  - %s  [%s:%d]\n      requirement: %s\n",
+				s.Capability+"/"+s.Slug, s.SpecPath, s.SpecLine, s.Requirement)
+		}
+	}
+
+	if fail {
+		fmt.Fprintf(os.Stderr, "\nspectrace: FAIL — %d orphan scenario(s), %d dangling link(s), %d duplicate slug(s), %d bad allow-key(s), %d stale allow-key(s), %d malformed annotation(s)\n",
+			len(orphans), len(dangling), len(dupSlugs), len(badAllow), len(staleAllow), len(badLinks))
+		os.Exit(1)
+	}
+	fmt.Printf("spectrace: OK — %d scenarios covered, %d acknowledged post-landing, no dangling links\n",
+		len(scenarios)-len(acknowledgedList), len(acknowledgedList))
+}
+
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "spectrace: "+format+"\n", args...)
+	os.Exit(2)
+}

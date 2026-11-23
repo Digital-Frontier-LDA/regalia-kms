@@ -21,6 +21,8 @@ func readReferenceHex(t *testing.T, name string) []byte {
 	return decoded
 }
 
+// spec: cosmos-authinfo-parser/signer-public-key-is-discarded
+// spec: cosmos-authinfo-parser/recognized-fee-fields-surface-to-policy
 func TestParseSignDocAcceptsGeneratedCosmosSDKFixture(t *testing.T) {
 	raw := readReferenceHex(t, "signdoc-akashnet2-msgsend.hex")
 	got, err := ParseCosmosSignDoc(raw)
