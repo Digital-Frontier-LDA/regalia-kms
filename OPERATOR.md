@@ -87,7 +87,8 @@ Stated up front because the cost of missing them is total, not degraded:
 
 ## How the docs, spec, and tests stay honest together
 
-This repo enforces three linkages so a doc cannot silently promise what the code does not do:
+This repo provides three checks so a doc cannot silently promise what the code does not do.
+None of them runs in this repo's CI (CI runs only their own unit tests); each is run by hand:
 
 - **Spec → test.** Every OpenSpec scenario must be claimed by a test via a
   `// spec: <capability>/<scenario>` comment; [`tools/spectrace`](tools/spectrace) fails on
@@ -96,10 +97,12 @@ This repo enforces three linkages so a doc cannot silently promise what the code
   run it by hand, and do not read a green CI run as proof that every scenario has a test.
 - **Change → code.** When an OpenSpec change is archived,
   [`tools/specarchive`](tools/specarchive) verifies every file/symbol named in its Impact
-  section still exists — so a change cannot point at code that moved.
+  section still exists — so a change cannot point at code that moved. It is run by hand at
+  archive time, not in CI.
 - **Doc → proof.** [`tools/docassert`](tools/docassert) flags a doc line that asserts a
   safety guarantee ("SHALL", "is refused") with no adjacent spec/test link, so an unlinked
-  claim is visible rather than trusted.
+  claim is visible rather than trusted. **It is manual and opt-in, not a CI gate**: by default
+  it only reports, and it exits 1 on an unlinked line only when run with `-fail`.
 
 The specs live in the sibling **regalia** tracking repo under `regalia:openspec/specs/`; the
 five capabilities are `cosmos-authinfo-parser`, `cosmos-fee-policy`,
