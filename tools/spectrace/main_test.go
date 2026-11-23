@@ -97,9 +97,12 @@ func TestBeta(t *testing.T) {}
 	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	links, err := collectLinks(dir)
+	links, bad, err := collectLinks(dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(bad) != 0 {
+		t.Errorf("malformed = %#v, want none", bad)
 	}
 	var got []string
 	for _, l := range links {
@@ -126,6 +129,7 @@ x
 	}
 	// Only alpha is claimed by a test.
 	tfile := `package x
+import "testing"
 // spec: demo/alpha-is-refused
 func TestA(t *testing.T) {}
 // spec: demo/not-in-spec
@@ -134,7 +138,10 @@ func TestB(t *testing.T) {}
 	if err := os.WriteFile(filepath.Join(dir, "z_test.go"), []byte(tfile), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	links, _ := collectLinks(dir)
+	links, _, err := collectLinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	scenByKey := map[string]bool{}
 	for _, s := range specs {
@@ -161,5 +168,59 @@ func TestB(t *testing.T) {}
 	}
 	if dangling != 1 {
 		t.Errorf("dangling = %d, want 1 (not-in-spec)", dangling)
+	}
+}
+
+// Spec-like text in a string literal is not an annotation.
+func TestCollectLinksIgnoresStringLiterals(t *testing.T) {
+	dir := t.TempDir()
+	content := "package x\n\nconst fixture = \"// spec: demo/alpha-is-refused\"\n\nvar raw = `\n// spec: demo/beta-is-accepted\n`\n"
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	links, bad, err := collectLinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 0 || len(bad) != 0 {
+		t.Errorf("links = %#v, malformed = %#v; want none from string literals", links, bad)
+	}
+}
+
+// A key that is not exactly <capability>/<slug> is malformed, not truncated to a
+// valid prefix; the complete key beside it stays valid.
+func TestCollectLinksReportsMalformedKeys(t *testing.T) {
+	dir := t.TempDir()
+	content := `package x
+
+// spec: demo/alpha_old
+func TestOld(t *testing.T) {}
+
+// spec: demo/alpha
+func TestNew(t *testing.T) {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	links, bad, err := collectLinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Capability+"/"+links[0].Slug != "demo/alpha" {
+		t.Errorf("links = %#v, want exactly demo/alpha", links)
+	}
+	if len(bad) != 1 || bad[0].FileLine != 3 {
+		t.Errorf("malformed = %#v, want one at line 3 (demo/alpha_old)", bad)
+	}
+}
+
+// A test file that does not parse is an error, not a file with no annotations.
+func TestCollectLinksFailsOnUnparsableFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x_test.go"), []byte("package x\nfunc {\n// spec: demo/alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := collectLinks(dir); err == nil {
+		t.Fatal("an unparsable test file returned no error")
 	}
 }

@@ -1,38 +1,21 @@
 package policy
 
 import (
-	"errors"
-	"strings"
 	"testing"
 )
 
-// These tests send the exact bytes the parser's refusals are written for. They were
-// missing before the spectrace join key existed: the spec scenarios
-// (fee-payer-field-present, repeated-amount-entries-for-one-denomination) described
-// behavior the parser implemented, but no test exercised it, so the join key reported
-// them as orphans. Each test below closes one by driving the path with its bytes.
+// This test sends the exact bytes the parser's fee summing is written for. It was missing
+// before the spectrace join key existed: repeated-amount-entries-for-one-denomination described
+// behavior the parser implemented, but no test exercised it, so the join key reported it as an
+// orphan.
 //
-// Two siblings are NOT here: tip-field-present and unsupported-sign-mode-is-refused
-// (the direct_secp256r1 arm). Their byte-level tests fail on this tree, because the
-// parser here accepts a Fee tip (field 3) and ModeInfo arm 3. The refusals they need are
-// pending work, not in this change, so those scenarios stay unclaimed rather than
-// claimed by a failing test.
-
-// feeWith builds an AuthInfo whose Fee carries the given extra fee fields
-// (each a raw encoded field at the Fee level) in addition to a valid amount and
-// gas limit, so the SignDoc is complete except for the offending field.
-func feeWith(t *testing.T, extraFields ...[]byte) []byte {
-	t.Helper()
-	// A valid Fee: amount (Coin uatom/1000) + gas_limit (200000).
-	coin := append(encodeString(1, "uatom"), encodeString(2, "1000")...)
-	fee := append(encodeLengthDelimited(1, coin), encodeTopVarint(2, 200000)...)
-	for _, extra := range extraFields {
-		fee = append(fee, extra...)
-	}
-	modeInfo := encodeLengthDelimited(1, encodeTopVarint(1, 1))
-	signer := append(encodeLengthDelimited(2, modeInfo), encodeTopVarint(3, 7)...)
-	return append(encodeLengthDelimited(1, signer), encodeLengthDelimited(2, fee)...)
-}
+// Three siblings are NOT here: tip-field-present, unsupported-sign-mode-is-refused (the
+// direct_secp256r1 arm) and fee-payer-field-present. On this tree the parser accepts ModeInfo
+// arm 3 and a length-delimited Fee field 3 or 4 (cosmos-sdk tx.proto: Fee.payer = 3,
+// Fee.granter = 4), so a test that claimed those refusals would either fail or pass only on a
+// malformed-wire fixture. Those
+// refusals are pending work, and the scenarios stay unclaimed rather than claimed by a test
+// that does not exercise them.
 
 // signDocWithAuth builds a complete SignDoc around the given AuthInfo bytes.
 func signDocWithAuth(auth []byte) []byte {
@@ -42,22 +25,6 @@ func signDocWithAuth(auth []byte) []byte {
 	buf = append(buf, encodeString(3, "cosmoshub-4")...)
 	buf = append(buf, encodeTopVarint(4, 42)...)
 	return buf
-}
-
-// spec: cosmos-authinfo-parser/fee-payer-field-present
-func TestParseFeeRefusesFeePayerField(t *testing.T) {
-	// Fee field 4 (payer) is a varint account number.
-	payer := encodeTopVarint(4, 5)
-	_, err := ParseCosmosSignDoc(signDocWithAuth(feeWith(t, payer)))
-	if err == nil {
-		t.Fatal("expected a SignDoc carrying a Fee payer (field 4) to be refused")
-	}
-	if !errors.Is(err, ErrCosmosSignDoc) {
-		t.Fatalf("error %v does not wrap ErrCosmosSignDoc", err)
-	}
-	if !strings.Contains(err.Error(), "Fee.field 4") {
-		t.Fatalf("error %q does not name the refused fee field", err.Error())
-	}
 }
 
 // spec: cosmos-authinfo-parser/repeated-amount-entries-for-one-denomination

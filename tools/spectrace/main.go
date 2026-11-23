@@ -27,6 +27,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,18 +46,32 @@ type triple struct {
 	SpecLine    int
 }
 
-// link is one `// spec:` annotation found in a test file.
+// link is one `// spec:` annotation found in a test file. FilePath and
+// FileLine locate the annotation.
 type link struct {
 	Capability string
 	Slug       string
-	TestPath   string
-	TestLine   int
+	FilePath   string
+	FileLine   int
+}
+
+// malformed is a `// spec:` annotation whose key is not a complete
+// <capability>/<slug> token, e.g. `demo/alpha_old`. It is reported and fails
+// the run, never truncated to a valid-looking prefix.
+type malformed struct {
+	FilePath string
+	FileLine int
+	Raw      string
 }
 
 var (
 	requirementRe = regexp.MustCompile(`^### Requirement:\s*(.+?)\s*$`)
 	scenarioRe    = regexp.MustCompile(`^#### Scenario:\s*(.+?)\s*$`)
-	linkRe        = regexp.MustCompile(`//\s*spec:\s*([a-z0-9-]+)/([a-z0-9-]+)`)
+	// annotationRe finds a spec annotation at the start of a Go line comment
+	// and captures its whole first token; keyRe then requires that the token
+	// is exactly <capability>/<slug>.
+	annotationRe = regexp.MustCompile(`^//\s*spec:\s*(\S*)`)
+	keyRe        = regexp.MustCompile(`^([a-z0-9-]+)/([a-z0-9-]+)$`)
 )
 
 // slug canonicalizes a scenario title into its join-key form.
@@ -131,11 +147,17 @@ func collectSpecs(root string) ([]triple, error) {
 }
 
 // collectLinks walks test files and gathers every `// spec:` annotation. It
-// skips the tools/ tree: the tools' own tests carry `// spec:` fixture strings
-// (and capability/slug literals) that are examples, not real coverage claims,
-// and scanning them would report dangling links that are not.
-func collectLinks(testsRoot string) ([]link, error) {
+// parses each file and reads only real Go line comments, so spec-like text in a
+// string literal is not an annotation. An annotation whose key is not exactly
+// <capability>/<slug> is returned as malformed. A test file that does not
+// parse is an error.
+//
+// It skips the tools/ tree: the tools' own tests carry `// spec:` fixture
+// strings (and capability/slug literals) that are examples, not real coverage
+// claims, and scanning them would report dangling links that are not.
+func collectLinks(testsRoot string) ([]link, []malformed, error) {
 	var all []link
+	var bad []malformed
 	err := filepath.WalkDir(testsRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -155,22 +177,32 @@ func collectLinks(testsRoot string) ([]link, error) {
 		if err != nil {
 			return err
 		}
-		for i, line := range strings.Split(string(data), "\n") {
-			for _, m := range linkRe.FindAllStringSubmatch(line, -1) {
-				all = append(all, link{
-					Capability: m[1],
-					Slug:       m[2],
-					TestPath:   path,
-					TestLine:   i + 1,
-				})
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, data, parser.ParseComments|parser.SkipObjectResolution)
+		if err != nil {
+			return err
+		}
+		for _, group := range f.Comments {
+			for _, c := range group.List {
+				m := annotationRe.FindStringSubmatch(c.Text)
+				if m == nil {
+					continue
+				}
+				line := fset.Position(c.Pos()).Line
+				k := keyRe.FindStringSubmatch(m[1])
+				if k == nil {
+					bad = append(bad, malformed{FilePath: path, FileLine: line, Raw: c.Text})
+					continue
+				}
+				all = append(all, link{Capability: k[1], Slug: k[2], FilePath: path, FileLine: line})
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return all, nil
+	return all, bad, nil
 }
 
 func main() {
@@ -195,7 +227,7 @@ func main() {
 	if err != nil {
 		fatalf("read specs: %v", err)
 	}
-	links, err := collectLinks(*testsRoot)
+	links, badLinks, err := collectLinks(*testsRoot)
 	if err != nil {
 		fatalf("read tests: %v", err)
 	}
@@ -244,10 +276,10 @@ func main() {
 		return orphans[i].SpecLine < orphans[j].SpecLine
 	})
 	sort.Slice(dangling, func(i, j int) bool {
-		if dangling[i].TestPath != dangling[j].TestPath {
-			return dangling[i].TestPath < dangling[j].TestPath
+		if dangling[i].FilePath != dangling[j].FilePath {
+			return dangling[i].FilePath < dangling[j].FilePath
 		}
-		return dangling[i].TestLine < dangling[j].TestLine
+		return dangling[i].FileLine < dangling[j].FileLine
 	})
 
 	if !*quiet {
@@ -292,11 +324,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "  - "+d)
 		}
 	}
+	if len(badLinks) > 0 {
+		fail = true
+		fmt.Fprintf(os.Stderr, "malformed annotations (%d) — a `// spec:` key that is not exactly <capability>/<slug>:\n", len(badLinks))
+		for _, b := range badLinks {
+			fmt.Fprintf(os.Stderr, "  - %s:%d  %s\n", b.FilePath, b.FileLine, b.Raw)
+		}
+	}
 	if len(dangling) > 0 {
 		fail = true
 		fmt.Fprintln(os.Stderr, fmt.Sprintf("dangling links (%d) — test claims a scenario not in the spec:", len(dangling)))
 		for _, l := range dangling {
-			fmt.Fprintf(os.Stderr, "  - %s:%d  ->  %s/%s\n", l.TestPath, l.TestLine, l.Capability, l.Slug)
+			fmt.Fprintf(os.Stderr, "  - %s:%d  ->  %s/%s\n", l.FilePath, l.FileLine, l.Capability, l.Slug)
 		}
 	}
 	if len(orphans) > 0 {
@@ -309,8 +348,8 @@ func main() {
 	}
 
 	if fail {
-		fmt.Fprintf(os.Stderr, "\nspectrace: FAIL — %d orphan scenario(s), %d dangling link(s), %d duplicate slug(s), %d bad allow-key(s)\n",
-			len(orphans), len(dangling), len(dupSlugs), len(badAllow))
+		fmt.Fprintf(os.Stderr, "\nspectrace: FAIL — %d orphan scenario(s), %d dangling link(s), %d duplicate slug(s), %d bad allow-key(s), %d malformed annotation(s)\n",
+			len(orphans), len(dangling), len(dupSlugs), len(badAllow), len(badLinks))
 		os.Exit(1)
 	}
 	fmt.Printf("spectrace: OK — %d scenarios covered, %d acknowledged post-landing, no dangling links\n",

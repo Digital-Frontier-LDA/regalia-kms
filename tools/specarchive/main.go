@@ -27,6 +27,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -146,21 +149,7 @@ func main() {
 		"ceremony": *ceremony,
 	}
 
-	failed := 0
-	err := filepath.WalkDir(*changes, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Name() != "proposal.md" {
-			return nil
-		}
-		changeDir := filepath.Dir(path)
-		name := filepath.Base(changeDir)
-		if name == "archive" {
-			return nil
-		}
-		if n := checkChange(changeDir, name, roots); n > 0 {
-			failed += n
-		}
-		return nil
-	})
+	failed, err := scanChanges(*changes, roots)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "specarchive: walk: %v\n", err)
 		os.Exit(2)
@@ -172,18 +161,48 @@ func main() {
 	fmt.Println("specarchive: OK — all named targets present")
 }
 
+// scanChanges checks every pending change under changesDir and returns the
+// total number of missing targets. It skips the archive/ subtree (archived
+// changes are history, not pending work). Any walk error, including a
+// changesDir that does not exist, and any unreadable proposal is returned as an
+// error: the check fails rather than reports "all present" for what it never read.
+func scanChanges(changesDir string, roots map[string]string) (int, error) {
+	failed := 0
+	err := filepath.WalkDir(changesDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "archive" && path != changesDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != "proposal.md" {
+			return nil
+		}
+		changeDir := filepath.Dir(path)
+		n, err := checkChange(changeDir, filepath.Base(changeDir), roots)
+		if err != nil {
+			return err
+		}
+		failed += n
+		return nil
+	})
+	return failed, err
+}
+
 // checkChange verifies one change's targets; it returns the number of
-// missing targets (0 = all present).
-func checkChange(changeDir, name string, roots map[string]string) int {
+// missing targets (0 = all present), or an error if the proposal cannot be read.
+func checkChange(changeDir, name string, roots map[string]string) (int, error) {
 	proposal := filepath.Join(changeDir, "proposal.md")
 	targets, err := extractTargets(proposal, changeDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "specarchive: %s: %v\n", proposal, err)
-		return 0
+		return 0, fmt.Errorf("%s: %w", proposal, err)
 	}
 	if len(targets) == 0 {
 		fmt.Printf("%s: no concrete code targets in Impact (nothing to verify)\n", name)
-		return 0
+		return 0, nil
 	}
 	var missing []string
 	for _, t := range targets {
@@ -198,10 +217,10 @@ func checkChange(changeDir, name string, roots map[string]string) int {
 		for _, m := range missing {
 			fmt.Printf("    - %s\n", m)
 		}
-		return len(missing)
+		return len(missing), nil
 	}
 	fmt.Printf("%s: OK — %d target(s) present\n", name, len(targets))
-	return 0
+	return 0, nil
 }
 
 func verify(t target, roots map[string]string) (bool, string) {
@@ -231,20 +250,36 @@ func verify(t target, roots map[string]string) (bool, string) {
 	}
 }
 
-// symbolDeclared reports whether name appears as a declared top-level
-// identifier (func/type/const/var) in src. A loose but effective check: it
-// matches `func name(`, `type name `, `const name `, and `var name ` at the
-// start of a (non-comment) line.
+// symbolDeclared reports whether name is declared at the top level of the Go
+// source src: a func or method, a type, or a const or var (grouped
+// declarations included). It parses the file, so a name that appears only in a
+// comment or a string does not count. Source that does not parse declares
+// nothing.
 func symbolDeclared(src, name string) bool {
-	prefixes := []string{"func " + name + "(", "func " + name + " ", "type " + name + " ", "type " + name + "struct", "const " + name + " ", "const " + name + "=", "var " + name + " ", "var " + name + "="}
-	for _, line := range strings.Split(src, "\n") {
-		trimmed := strings.TrimLeft(line, " \t")
-		if strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-		for _, p := range prefixes {
-			if strings.HasPrefix(line, p) || strings.HasPrefix(trimmed, p) {
+	f, err := parser.ParseFile(token.NewFileSet(), "", src, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	for _, decl := range f.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Name.Name == name {
 				return true
+			}
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if s.Name.Name == name {
+						return true
+					}
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						if n.Name == name {
+							return true
+						}
+					}
+				}
 			}
 		}
 	}

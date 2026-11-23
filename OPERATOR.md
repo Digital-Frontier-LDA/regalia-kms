@@ -74,8 +74,11 @@ Stated up front because the cost of missing them is total, not degraded:
    about to cause the worst failure class. [`FENCING.md`](FENCING.md).
 2. **A journal that opens against a mark nobody read.** The policy-state and audit journals
    are hash-chained with high-water sidecars; a truncated or rewritten journal is refused at
-   open, and an unreadable mark must not resolve to "position 0." Restoring a backup that is
-   too old is the real threat the high-water mark catches. [`POLICY.md`](POLICY.md) and the
+   open, and an unreadable mark must not resolve to "position 0." The high-water mark catches a
+   journal truncated behind its own mark. It does not catch a journal restored together with its
+   sidecar from the same older backup: both positions then agree, local verification accepts the
+   pair, and replay is possible. Never restore the pair from a backup without an independent
+   record of the last position. [`POLICY.md`](POLICY.md) and the
    policy-state-journal spec in the tracking repo (`regalia:openspec/specs/policy-state-journal/spec.md`).
 3. **Acting on a check's strong reading.** A green `-check-config` did not touch the token; a
    present metric is the last measurement, not now. The operator runbook names each limit.
@@ -87,9 +90,10 @@ Stated up front because the cost of missing them is total, not degraded:
 This repo enforces three linkages so a doc cannot silently promise what the code does not do:
 
 - **Spec → test.** Every OpenSpec scenario must be claimed by a test via a
-  `// spec: <capability>/<scenario>` comment; [`tools/spectrace`](tools/spectrace) fails CI
-  on an orphan scenario (a promise no test holds) or a dangling link (a test guarding a
-  sentence that was removed).
+  `// spec: <capability>/<scenario>` comment; [`tools/spectrace`](tools/spectrace) fails on
+  an orphan scenario (a promise no test holds) or a dangling link (a test guarding a sentence
+  that was removed). **It is not yet enforced in CI**, and scenarios without a test exist today:
+  run it by hand, and do not read a green CI run as proof that every scenario has a test.
 - **Change → code.** When an OpenSpec change is archived,
   [`tools/specarchive`](tools/specarchive) verifies every file/symbol named in its Impact
   section still exists — so a change cannot point at code that moved.
@@ -103,7 +107,8 @@ five capabilities are `cosmos-authinfo-parser`, `cosmos-fee-policy`,
 
 ## Status
 
-**Pre-production / pre-1.0.** The software and its test suite are complete; production
-hardware qualification (Nitrokey HSM 2) is open. Use it for development, testing, and
+**Pre-production / pre-1.0.** Neither the software nor its test suite is complete: some spec
+scenarios have no test yet (run `tools/spectrace` to list them), and production hardware
+qualification (Nitrokey HSM 2) is open. Use it for development, testing, and
 staging; do not protect production keys with it yet. See the
-[README status note](README.md#status-pre-production--pre-10).
+[README status note](README.md) at the top of the README.

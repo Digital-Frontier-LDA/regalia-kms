@@ -52,10 +52,13 @@ type flagged struct {
 	Text string
 }
 
-func scanDoc(path string) []flagged {
+// scanDoc returns the unlinked guarantee lines in one document. A document it
+// cannot read is an error, never an empty (clean) result: an unread file must
+// not pass -fail.
+func scanDoc(path string) ([]flagged, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	lines := strings.Split(string(data), "\n")
 	// Group into paragraphs (blank-line separated) so a link on any line of a
@@ -93,7 +96,7 @@ func scanDoc(path string) []flagged {
 		}
 		return res[i].Line < res[j].Line
 	})
-	return res
+	return res, nil
 }
 
 func main() {
@@ -103,20 +106,7 @@ func main() {
 	only := flag.String("only", "", "only scan docs whose path contains this substring")
 	flag.Parse()
 
-	var all []flagged
-	err := filepath.WalkDir(*docs, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".md") {
-			return nil
-		}
-		if *only != "" && !strings.Contains(path, *only) {
-			return nil
-		}
-		all = append(all, scanDoc(path)...)
-		return nil
-	})
+	all, err := scanTree(*docs, *only)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "docassert: walk: %v\n", err)
 		os.Exit(2)
@@ -133,6 +123,36 @@ func main() {
 	if *fail && len(all) > 0 {
 		os.Exit(1)
 	}
+}
+
+// scanTree scans every markdown document under root (only those whose path
+// contains only, when set). Any walk or read error, including a root that does
+// not exist, is returned: the scan fails rather than reports nothing found.
+func scanTree(root, only string) ([]flagged, error) {
+	var all []flagged
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			// Includes a -docs root that does not exist: report it rather
+			// than print a clean scan of nothing.
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		if only != "" && !strings.Contains(path, only) {
+			return nil
+		}
+		found, err := scanDoc(path)
+		if err != nil {
+			return err
+		}
+		all = append(all, found...)
+		return nil
+	})
+	return all, err
 }
 
 func truncate(s string, n int) string {

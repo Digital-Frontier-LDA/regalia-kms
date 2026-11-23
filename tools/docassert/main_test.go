@@ -34,7 +34,7 @@ func TestLinkReMatches(t *testing.T) {
 	pos := []string{
 		"see openspec/specs/policy-state-journal/spec.md",
 		"see openspec/changes/sequence-recovery-runbook/",
-		"the test TestForceAdvanceAdvancesToLastPlusOne covers this",
+		"the test TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad covers this",
 		"// spec: policy-state-journal/force-advance",
 		"verified by tools/spectrace",
 	}
@@ -65,17 +65,48 @@ The KMS SHALL verify every signature before reporting success.
 This operation is refused at the parser boundary; see
 openspec/specs/cosmos-authinfo-parser/spec.md for the requirement.
 
-The reservation MUST NOT be released; TestForceAdvance covers the retention.
+The fee cap MUST have a transfer cap; TestACosmosPolicyWithAFeeOnlyDenominationIsRefusedAtLoad covers it.
 `
 	p := filepath.Join(dir, "doc.md")
 	if err := os.WriteFile(p, []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := scanDoc(p)
+	got, err := scanDoc(p)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 {
 		t.Fatalf("got %d flagged lines, want 1: %#v", len(got), got)
 	}
 	if got[0].Line != 3 {
 		t.Errorf("flagged line = %d, want 3 (the unlinked SHALL)", got[0].Line)
+	}
+}
+
+// An unreadable or missing document is an error, never a clean result.
+func TestScanDocReportsAnUnreadableDocument(t *testing.T) {
+	got, err := scanDoc(filepath.Join(t.TempDir(), "missing.md"))
+	if err == nil {
+		t.Fatalf("scanDoc on a missing file returned no error (findings %#v): an unread doc would pass -fail", got)
+	}
+}
+
+// A -docs root that does not exist fails the scan; it is not a clean scan of nothing.
+func TestScanTreeReportsAMissingRoot(t *testing.T) {
+	got, err := scanTree(filepath.Join(t.TempDir(), "no-such-dir"), "")
+	if err == nil {
+		t.Fatalf("scanTree on a missing root returned no error (findings %#v)", got)
+	}
+}
+
+// The control: an existing root with one clean document scans without error.
+func TestScanTreeAcceptsAnExistingRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("# A\n\nplain text\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := scanTree(dir, "")
+	if err != nil || len(got) != 0 {
+		t.Fatalf("scanTree(clean dir) = %#v, %v; want no findings and no error", got, err)
 	}
 }

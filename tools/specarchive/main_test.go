@@ -119,3 +119,68 @@ func TestVerifyFileAndSymbol(t *testing.T) {
 		t.Error("missing symbol should not verify")
 	}
 }
+
+// A name in a block comment is not a declaration; a name in a grouped const is.
+func TestSymbolDeclaredParsesDeclarations(t *testing.T) {
+	src := "package p\n\n/*\nfunc gone() {}\n*/\n\nconst (\n\tgroupedA = 1\n\tgroupedB = 2\n)\n\nvar s = \"func alsoGone() {}\"\n"
+	if symbolDeclared(src, "gone") {
+		t.Error("a func inside a block comment must not count as declared")
+	}
+	if symbolDeclared(src, "alsoGone") {
+		t.Error("a func inside a string must not count as declared")
+	}
+	if !symbolDeclared(src, "groupedB") {
+		t.Error("a name in a grouped const must count as declared")
+	}
+}
+
+func writeChange(t *testing.T, dir, impact string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "proposal.md"), []byte("# P\n\n## Impact\n\n"+impact+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A -changes root that does not exist fails; it is not "all named targets present".
+func TestScanChangesReportsAMissingRoot(t *testing.T) {
+	if _, err := scanChanges(filepath.Join(t.TempDir(), "no-such-dir"), map[string]string{}); err == nil {
+		t.Fatal("scanChanges on a missing root returned no error")
+	}
+}
+
+// A proposal.md that cannot be read fails the check rather than counting as clean.
+func TestScanChangesReportsAnUnreadableProposal(t *testing.T) {
+	changes := t.TempDir()
+	dir := filepath.Join(changes, "broken")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A dangling symlink: unreadable for any user, root included.
+	if err := os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, "proposal.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scanChanges(changes, map[string]string{"regalia": changes}); err == nil {
+		t.Fatal("an unreadable proposal.md returned no error")
+	}
+}
+
+// archive/ is pruned: an archived change naming a removed target does not fail
+// the pending set, while the same target in a pending change does.
+func TestScanChangesSkipsTheArchive(t *testing.T) {
+	changes := t.TempDir()
+	roots := map[string]string{"regalia": changes, "kms": changes}
+	writeChange(t, filepath.Join(changes, "archive", "old-change"), "- `kms/removed-long-ago.md`")
+	n, err := scanChanges(changes, roots)
+	if err != nil || n != 0 {
+		t.Fatalf("archived change was checked: missing=%d err=%v", n, err)
+	}
+	// Control: the same target in a pending change is reported missing.
+	writeChange(t, filepath.Join(changes, "pending-change"), "- `kms/removed-long-ago.md`")
+	n, err = scanChanges(changes, roots)
+	if err != nil || n != 1 {
+		t.Fatalf("pending change: missing=%d err=%v, want 1 missing", n, err)
+	}
+}
