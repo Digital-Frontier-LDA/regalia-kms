@@ -322,6 +322,14 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
 		}
 		policyRequest.Cosmos = parsed
+		// A SIGNATURE ONLY COUNTS IF IT CAN BE CHECKED AGAINST A KEY THE TOKEN DOES NOT CHOOSE
+		// (regalia-kms-35b AC4): the SignDoc's own signer key, or the binding's pin. With neither,
+		// refuse here -- before policy reserves a sequence and before the token is called -- rather
+		// than sign and then have nothing to check the answer against. See cosmosSignerBound.
+		if !cosmosSignerBound(route.Algorithm, route.Binding.PublicKeySHA256, parsed.SignerPublicKey) {
+			coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-signer-key-unbound", started, false, policyRequest.VerifiedApprovers)
+			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+		}
 	}
 	decision := coordinator.policy.Evaluate(ctx, policyRequest)
 	if !decision.Allowed {
@@ -372,12 +380,13 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		}
 		// A COSMOS SIGNATURE IS VERIFIED BEFORE IT COUNTS (regalia-kms-35b): see verifyCosmosSignature.
 		// The key is read inside the same run, from the same route, so it is the key of the binding
-		// that just signed.
+		// that just signed; it must match the pin and the SignDoc's signer key wherever they exist.
+		// A failed read is the token's outage, returned as such (retryable), not a bad signature.
 		publicKey, _, keyErr := coordinator.hardware.Execute(operationCtx, route, "public-key", "", "", nil, nil)
 		if keyErr != nil {
 			return keyErr
 		}
-		return verifyCosmosSignature(route.Algorithm, route.Binding.PublicKeySHA256, publicKey, data, output)
+		return verifyCosmosSignature(route.Algorithm, route.Binding.PublicKeySHA256, publicKey, policyRequest.Cosmos.SignerPublicKey, data, output)
 	})
 	if err != nil {
 		zero(output)
@@ -478,7 +487,7 @@ func (coordinator *Coordinator) recordOrCount(ctx context.Context, request api.R
 // that was lost. Errors returned after the event became durable are excluded -- see audit.Durable.
 //
 // LABELLED BY OUTCOME, and the cardinality is bounded by construction rather than by hope: every
-// value is a compile-time literal. Eight are fixed strings at the call sites, four come from the
+// value is a compile-time literal. Nine are fixed strings at the call sites, four come from the
 // routing branch, and the policy reasons are `policy-<Code>:<Rule>` where Code is one of five
 // constants and Rule one of twelve, all of them literals in internal/policy. None derives from
 // request data, configuration, or anything a caller controls -- which is the property that makes an

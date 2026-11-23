@@ -30,6 +30,7 @@ type cosmosCard struct {
 	reported *secp256k1.PrivateKey
 	corrupt  bool
 	highS    bool
+	keyErr   error
 	signed   [][]byte
 	calls    []string
 }
@@ -43,6 +44,9 @@ func newCosmosCard(t *testing.T) *cosmosCard {
 func (card *cosmosCard) Execute(_ context.Context, _ registry.Route, operation, _, _ string, data, _ []byte) ([]byte, string, error) {
 	card.calls = append(card.calls, operation)
 	if operation == "public-key" {
+		if card.keyErr != nil {
+			return nil, "", card.keyErr
+		}
 		return secp256k1SPKI(card.reported.PubKey()), "application/pkix", nil
 	}
 	card.signed = append(card.signed, append([]byte(nil), data...))
@@ -259,11 +263,6 @@ func TestCosmosSignatureFromWrongKeyIsNotSuccess(t *testing.T) {
 		"public key is not the pinned key": func(card *cosmosCard) string {
 			return spkiPin(secp256k1SPKI(other.PubKey()))
 		},
-		// A binding with no key pin (DevAut-only) still has its signature checked.
-		"signed by another key, no pin": func(card *cosmosCard) string {
-			card.reported = other
-			return ""
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			card := newCosmosCard(t)
@@ -288,8 +287,13 @@ func TestCosmosCorruptedSignatureIsNotSuccess(t *testing.T) {
 
 func assertUnverified(t *testing.T, card *cosmosCard, pin string) {
 	t.Helper()
+	assertUnverifiedDoc(t, card, pin, cosmosFixture(t))
+}
+
+func assertUnverifiedDoc(t *testing.T, card *cosmosCard, pin string, signDoc []byte) {
+	t.Helper()
 	coordinator, recorder := allowingCoordinator(t, cosmosRoute(pin), card)
-	result, err := coordinator.Execute(context.Background(), cosmosRequest(cosmosFixture(t)))
+	result, err := coordinator.Execute(context.Background(), cosmosRequest(signDoc))
 	if err == nil || len(result.Data) != 0 {
 		t.Fatalf("DEFECT: a signature that does not verify under the registered key was returned as success (%d bytes, err=%v, audit %v)", len(result.Data), err, outcomes(recorder))
 	}
@@ -304,17 +308,24 @@ func assertUnverified(t *testing.T, card *cosmosCard, pin string) {
 }
 
 // TestCosmosVerificationRefusesAKeyTypeItCannotCheck: a Cosmos route on an algorithm the daemon
-// has no verifier for fails closed rather than being reported as checked.
+// has no verifier for fails closed rather than being reported as checked: it is refused before the
+// token is called, even pinned, and the verifier itself refuses it too.
 func TestCosmosVerificationRefusesAKeyTypeItCannotCheck(t *testing.T) {
 	card := newCosmosCard(t)
-	route := cosmosRoute("")
+	route := cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey())))
 	route.Algorithm = "ed25519"
 	coordinator, recorder := allowingCoordinator(t, route, card)
 	if result, err := coordinator.Execute(context.Background(), cosmosRequest(cosmosFixture(t))); err == nil || len(result.Data) != 0 {
 		t.Fatalf("an unverifiable key type was reported as success: %v", err)
 	}
-	if got := outcomes(recorder); len(got) != 2 || got[1] != "signature-unverified" {
-		t.Fatalf("audit outcomes = %v", got)
+	if got := outcomes(recorder); len(got) != 1 || got[0] != "cosmos-signer-key-unbound" || len(card.calls) != 0 {
+		t.Fatalf("audit outcomes = %v, token calls %v: want cosmos-signer-key-unbound before any token call", got, card.calls)
+	}
+	registered := secp256k1SPKI(card.signer.PubKey())
+	for _, algorithm := range []string{"ed25519", "p384", "rsa2048", ""} {
+		if err := verifyCosmosSignature(algorithm, spkiPin(registered), registered, nil, make([]byte, 32), make([]byte, 64)); err == nil {
+			t.Fatalf("verifyCosmosSignature(%q) reported an unverifiable key type as verified", algorithm)
+		}
 	}
 }
 
@@ -366,28 +377,8 @@ func TestAReorderedSignDocIsRefusedBeforeTheToken(t *testing.T) {
 	if len(reordered) != len(signDoc) {
 		t.Fatal("the reordered document is not a permutation of the fixture")
 	}
-	message, fee := transaction.Messages[0], transaction.Fee[0]
-	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	state := &recordingReservations{}
-	engine, err := policy.New([]policy.Policy{{
-		ID: "wallet", ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
-		Operation: "sign", Algorithm: "secp256k1", ContentTypes: []string{cosmosContentType},
-		MaxPayloadBytes: 10000, MaxFuture: time.Minute, Cosmos: &policy.CosmosPolicy{
-			ChainIDs: []string{transaction.ChainID}, AccountNumbers: []uint64{transaction.AccountNumber},
-			MessageTypes: []string{message.Type}, Sources: []string{message.Source}, Destinations: []string{message.Destination},
-			MaxGasLimit: transaction.GasLimit, MaxFee: map[string]uint64{fee.Denom: fee.Amount},
-			MaxPerTransaction: map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount},
-			MaxPerDay:         map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount}},
-	}}, state, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
 	card := newCosmosCard(t)
-	recorder := &fakeAudit{}
-	coordinator, err := New(fakeAuthorizer{allowed: true}, &fakeRouter{route: cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey())))}, engine, recorder, directRunner{}, card, "sha256:policy", nil, func() time.Time { return now })
-	if err != nil {
-		t.Fatal(err)
-	}
+	coordinator, state, recorder, now := realEngineCoordinator(t, transaction, cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey()))), card)
 	request := cosmosRequest(reordered)
 	request.Context.ExpiresAt = now.Add(30 * time.Second)
 	_, err = coordinator.Execute(context.Background(), request)
@@ -407,4 +398,32 @@ func TestAReorderedSignDocIsRefusedBeforeTheToken(t *testing.T) {
 	if _, err := coordinator.Execute(context.Background(), request); err != nil || len(state.reserved) != 1 {
 		t.Fatalf("the canonical SignDoc was not signed (err=%v, reservations %d): the refusal above proves nothing", err, len(state.reserved))
 	}
+}
+
+// realEngineCoordinator is a coordinator over the real policy engine, with a policy that admits
+// exactly the given transaction and a state that records every reservation.
+func realEngineCoordinator(t *testing.T, transaction *policy.CosmosTransaction, route registry.Route, card *cosmosCard) (*Coordinator, *recordingReservations, *fakeAudit, time.Time) {
+	t.Helper()
+	message, fee := transaction.Messages[0], transaction.Fee[0]
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	state := &recordingReservations{}
+	engine, err := policy.New([]policy.Policy{{
+		ID: "wallet", ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
+		Operation: "sign", Algorithm: "secp256k1", ContentTypes: []string{cosmosContentType},
+		MaxPayloadBytes: 10000, MaxFuture: time.Minute, Cosmos: &policy.CosmosPolicy{
+			ChainIDs: []string{transaction.ChainID}, AccountNumbers: []uint64{transaction.AccountNumber},
+			MessageTypes: []string{message.Type}, Sources: []string{message.Source}, Destinations: []string{message.Destination},
+			MaxGasLimit: transaction.GasLimit, MaxFee: map[string]uint64{fee.Denom: fee.Amount},
+			MaxPerTransaction: map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount},
+			MaxPerDay:         map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount}},
+	}}, state, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := &fakeAudit{}
+	coordinator, err := New(fakeAuthorizer{allowed: true}, &fakeRouter{route: route}, engine, recorder, directRunner{}, card, "sha256:policy", nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator, state, recorder, now
 }

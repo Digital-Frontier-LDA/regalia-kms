@@ -55,12 +55,34 @@ signer. This is intentional: a policy cannot constrain a message it cannot inspe
 ## Signature verification before success
 
 Before a Cosmos signature is returned, the daemon reads the object's public key from the token
-(`public-key`) and verifies the signature against SHA-256 of the canonical SignDoc. When the binding
-pins `public_key_sha256`, the key read must hash to the pin. The signature must be raw `r||s`, and for
-secp256k1 its `s` must be low, as the Cosmos SDK requires; `p256` and `p384` are verified too, and
-any other algorithm fails closed. A signature that does not verify is never success: the caller gets a
-non-retryable `INTERNAL` error with no signature, and the audit trail records
-`signature-unverified`. It is a token or daemon defect for an operator to look at, not an outage.
+(`public-key`) and verifies the signature against SHA-256 of the canonical SignDoc. The token's own
+report of its key is never enough on its own, because a token that signs with the wrong key reports
+that wrong key. The key must also be bound to something the token does not choose:
+
+- when the binding pins `public_key_sha256`, the key read must hash to the pin;
+- when the SignDoc's single `SignerInfo` carries `public_key` (the key the chain verifies with),
+  the key read must be the same point. The SignDoc's key is compressed SEC1 and the token's an
+  uncompressed SPKI, so the two are compared as points, not bytes. Its type must be the one for the
+  object's curve: `/cosmos.crypto.secp256k1.PubKey` for `secp256k1`,
+  `/cosmos.crypto.secp256r1.PubKey` for `p256`.
+
+A binding with neither cannot sign. A DevAut-only binding (no `public_key_sha256`) signing a SignDoc
+that leaves `public_key` out, or that carries a key of another type or one that is not a point, is
+refused with `INVALID_ARGUMENT` and audited `cosmos-signer-key-unbound`, before policy reserves
+anything and before the token is called. The Cosmos SDK lets a signer omit `public_key` once its key
+is on chain, so an unpinned binding refuses those transactions. The remedy is to pin the binding's
+`public_key_sha256` at commissioning (a pinned binding signs with or without the SignDoc's key), or
+to have the caller always include the signer's public key.
+
+The signature must be raw `r||s` with `r` and `s` in `[1, N-1]`, never reduced modulo `N`, and
+`s` low (at most `N/2`) on both curves, as the Cosmos SDK's secp256k1 and secp256r1 keys require.
+The Nitrokey backend normalises secp256k1 signatures to low S; it does not normalise `p256`, so a
+`p256` Cosmos object whose token returns the high-S twin gets `signature-unverified` for it. `p384`
+has no Cosmos key type, and it and any other algorithm are refused before the token is called. A
+signature that does not verify is never success: the caller gets a non-retryable `INTERNAL` error
+with no signature, and the audit trail records `signature-unverified`. It is a token or daemon defect
+for an operator to look at, not an outage. A token that signs but then cannot answer `public-key` is
+an outage: `backend-failed`, retryable, as any other backend error.
 
 Policy's reservation for that request stands, as it does for an indeterminate hardware result: its
 nonce and the account sequence it carried are spent, while the chain never saw a valid transaction

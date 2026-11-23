@@ -109,6 +109,7 @@ func bridgeCoordinator(t *testing.T) (*Coordinator, *fakePolicy, *fakeRouter) {
 		Allowed: true, Code: policy.CodeAllowed, PolicyID: "cosmos-hot-wallet", Rule: "allow",
 	}}
 	hardware := &fakeHardware{output: []byte("signature"), signer: testSigner(t)}
+	router.route = pinnedTo(router.route, hardware.signer)
 	coordinator, coordErr := New(
 		fakeAuthorizer{allowed: true}, router, semantic,
 		&fakeAudit{}, directRunner{}, hardware,
@@ -356,6 +357,7 @@ func TestCoordinatorApprovalsCannotBeSatisfiedByClientClaims(t *testing.T) {
 		Environment: "production", Algorithm: "secp256k1", PolicyID: "cosmos-hot-wallet",
 		Binding: registry.Binding{DeviceID: "hsm-1"},
 	}}
+	router.route = pinnedTo(router.route, testSigner(t))
 	hardware := &fakeHardware{output: []byte("must-not-escape")}
 	coordinator, coordErr := New(
 		fakeAuthorizer{allowed: true}, router, engine,

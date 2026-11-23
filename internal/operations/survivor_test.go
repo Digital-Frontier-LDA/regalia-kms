@@ -102,6 +102,7 @@ func TestALoneSurvivorSignsNoSequenceBearingRequest(t *testing.T) {
 			router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
 				Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}}}
 			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte(tokenSays), signer: testSigner(t)}
+			router.route = pinnedTo(router.route, hardware.signer)
 			// as the daemon builds it (cmd/regalia-kms main.go): the admission runner and RequireAdmission on one gate
 			coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder,
 				admission.NewRunner(gate, directRunner{}), hardware, "sha256:policy", nil, func() time.Time { return now })

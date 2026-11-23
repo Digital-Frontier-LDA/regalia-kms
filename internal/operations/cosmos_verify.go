@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math/big"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
@@ -35,6 +36,112 @@ type spki struct {
 	PublicKey asn1.BitString
 }
 
+// cosmosKeyTypeURL is the SignerInfo.public_key type a chain verifies a signature of this
+// algorithm with. Only these two curves have a Cosmos key type: a p384 (or any other) object has
+// no key a chain could verify it under, so it is not a Cosmos signer here.
+var cosmosKeyTypeURL = map[string]string{
+	"secp256k1": "/cosmos.crypto.secp256k1.PubKey",
+	"p256":      "/cosmos.crypto.secp256r1.PubKey",
+}
+
+// cosmosKey is a public key on one of the two Cosmos curves, held as a point so two encodings of
+// the same key (the SignDoc's compressed SEC1, the token's uncompressed SPKI) compare equal.
+type cosmosKey struct {
+	k1   *secp256k1.PublicKey
+	nist *ecdsa.PublicKey
+}
+
+func (key cosmosKey) equal(other cosmosKey) bool {
+	if key.k1 != nil && other.k1 != nil {
+		return key.k1.IsEqual(other.k1)
+	}
+	if key.nist != nil && other.nist != nil {
+		return key.nist.Equal(other.nist)
+	}
+	return false
+}
+
+// signerKeyPoint parses the SignDoc's own signer key for algorithm: its type must be the one a
+// chain verifies that algorithm with, and its bytes a point on the curve, in either SEC1 form.
+func signerKeyPoint(algorithm string, key *policy.CosmosPublicKey) (cosmosKey, bool) {
+	if key == nil || cosmosKeyTypeURL[algorithm] == "" || key.TypeURL != cosmosKeyTypeURL[algorithm] {
+		return cosmosKey{}, false
+	}
+	switch algorithm {
+	case "secp256k1":
+		parsed, err := secp256k1.ParsePubKey(key.Key)
+		if err != nil {
+			return cosmosKey{}, false
+		}
+		return cosmosKey{k1: parsed}, true
+	case "p256":
+		curve := elliptic.P256()
+		var x, y *big.Int
+		switch len(key.Key) {
+		case 33:
+			x, y = elliptic.UnmarshalCompressed(curve, key.Key)
+		case 65:
+			x, y = elliptic.Unmarshal(curve, key.Key) //nolint:staticcheck // a point parse, no ECDH
+		}
+		if x == nil {
+			return cosmosKey{}, false
+		}
+		return cosmosKey{nist: &ecdsa.PublicKey{Curve: curve, X: x, Y: y}}, true
+	}
+	return cosmosKey{}, false
+}
+
+// tokenKeyPoint parses the token's "public-key" answer, an SPKI, as a key on algorithm's curve.
+func tokenKeyPoint(algorithm string, publicKey []byte) (cosmosKey, bool) {
+	switch algorithm {
+	case "secp256k1":
+		// crypto/x509 does not know this curve, so the SPKI is read here: id-ecPublicKey with the
+		// secp256k1 OID as its parameter, and nothing after it.
+		var info spki
+		rest, err := asn1.Unmarshal(publicKey, &info)
+		if err != nil || len(rest) != 0 || !info.Algorithm.Algorithm.Equal(oidPublicKeyECDSA) || info.PublicKey.BitLength%8 != 0 {
+			return cosmosKey{}, false
+		}
+		var curve asn1.ObjectIdentifier
+		if rest, err := asn1.Unmarshal(info.Algorithm.Parameters.FullBytes, &curve); err != nil || len(rest) != 0 || !curve.Equal(oidCurveSecp256k1) {
+			return cosmosKey{}, false
+		}
+		parsed, err := secp256k1.ParsePubKey(info.PublicKey.Bytes)
+		if err != nil {
+			return cosmosKey{}, false
+		}
+		return cosmosKey{k1: parsed}, true
+	case "p256":
+		parsed, err := x509.ParsePKIXPublicKey(publicKey)
+		if err != nil {
+			return cosmosKey{}, false
+		}
+		key, ok := parsed.(*ecdsa.PublicKey)
+		if !ok || key.Curve != elliptic.P256() {
+			return cosmosKey{}, false
+		}
+		return cosmosKey{nist: key}, true
+	}
+	return cosmosKey{}, false
+}
+
+// cosmosSignerBound says, BEFORE anything is signed or reserved, whether a signature for this
+// SignDoc could be checked against a key the token does not choose (regalia-kms-35b AC4): the
+// SignDoc's own signer key, which must be a key of this route's curve, or else the binding's
+// public_key_sha256 pin. A binding with neither (DevAut-only, signing a SignDoc that leaves
+// public_key out) is refused: the only key left is the one the token reports about itself, and a
+// token that signs with the wrong key reports that key too.
+func cosmosSignerBound(algorithm, pin string, signerKey *policy.CosmosPublicKey) bool {
+	if cosmosKeyTypeURL[algorithm] == "" {
+		return false
+	}
+	if signerKey != nil {
+		_, ok := signerKeyPoint(algorithm, signerKey)
+		return ok
+	}
+	return pin != ""
+}
+
 // verifyCosmosSignature checks a Cosmos signature before the daemon reports it as success
 // (regalia-kms-35b).
 //
@@ -43,55 +150,55 @@ type spki struct {
 // the account a sequence number. Before this check the daemon had no way to notice. The token's
 // answer is checked here, in the daemon, before it counts.
 //
-// The key is the token's public key for the object ("public-key", application/pkix). When the
-// binding pins one (public_key_sha256), that SPKI must hash to the pin, compared in constant time,
-// so a token that signs with one key and reports another is caught. A binding pinned by DevAut
-// alone has no key pin, and the provider has already proved the device's identity before
-// answering.
+// WHICH KEY. tokenKey is the token's own answer to "public-key" (application/pkix). It is never
+// trusted on its own word, because a token that signs with the wrong key reports that wrong key:
+//   - when the binding pins a key (public_key_sha256), tokenKey must hash to the pin, compared in
+//     constant time;
+//   - when the SignDoc carries the signer's key (SignerInfo.public_key, the key the chain verifies
+//     with), tokenKey must be the same POINT -- the SignDoc's key is compressed SEC1 and the
+//     token's an uncompressed SPKI, so bytes are not compared;
+//   - with neither, nothing independent says which key is right, and the answer is unverified
+//     (the coordinator refuses that case before signing; this is the second lock).
+//
+// The signature is then verified under that key.
 //
 // THE SIGNATURE IS THE API'S CONTRACT FORM: raw r||s at the width of the curve order (see the
-// yubikey sign_contract.go and nitrokey lows.go). For secp256k1 s must also be low (s <= N/2), the
-// only form the Cosmos SDK accepts, so a high-S signature is not verified, the same way a chain
-// would treat it. Any other algorithm on the Cosmos content type is refused: a key type this
-// function cannot check cannot be reported as checked.
-func verifyCosmosSignature(algorithm, pin string, publicKey, digest, signature []byte) error {
+// yubikey sign_contract.go and nitrokey lows.go). r and s must be in [1, N-1], never reduced modulo
+// N, and s must be low (s <= N/2) on both curves: the Cosmos SDK's secp256k1 and secp256r1 keys
+// accept only that form, so a high-S signature is not verified, the same way a chain would treat
+// it. Any other algorithm on the Cosmos content type is refused: a key type this function cannot
+// check cannot be reported as checked.
+func verifyCosmosSignature(algorithm, pin string, tokenKey []byte, signerKey *policy.CosmosPublicKey, digest, signature []byte) error {
+	if pin == "" && signerKey == nil {
+		return errCosmosSignatureUnverified
+	}
 	if pin != "" {
-		sum := sha256.Sum256(publicKey)
+		sum := sha256.Sum256(tokenKey)
 		if subtle.ConstantTimeCompare([]byte("sha256:"+hex.EncodeToString(sum[:])), []byte(pin)) != 1 {
 			return errCosmosSignatureUnverified
 		}
 	}
-	switch algorithm {
-	case "secp256k1":
-		if verifySecp256k1(publicKey, digest, signature) {
-			return nil
+	key, ok := tokenKeyPoint(algorithm, tokenKey)
+	if !ok {
+		return errCosmosSignatureUnverified
+	}
+	if signerKey != nil {
+		signer, ok := signerKeyPoint(algorithm, signerKey)
+		if !ok || !signer.equal(key) {
+			return errCosmosSignatureUnverified
 		}
-	case "p256":
-		if verifyNISTCurve(elliptic.P256(), publicKey, digest, signature) {
-			return nil
-		}
-	case "p384":
-		if verifyNISTCurve(elliptic.P384(), publicKey, digest, signature) {
-			return nil
-		}
+	}
+	switch {
+	case key.k1 != nil && verifySecp256k1(key.k1, digest, signature):
+		return nil
+	case key.nist != nil && verifyNISTLowS(key.nist, digest, signature):
+		return nil
 	}
 	return errCosmosSignatureUnverified
 }
 
-func verifySecp256k1(publicKey, digest, signature []byte) bool {
-	// crypto/x509 does not know this curve, so the SPKI is read here: id-ecPublicKey with the
-	// secp256k1 OID as its parameter, and nothing after it.
-	var info spki
-	rest, err := asn1.Unmarshal(publicKey, &info)
-	if err != nil || len(rest) != 0 || !info.Algorithm.Algorithm.Equal(oidPublicKeyECDSA) || info.PublicKey.BitLength%8 != 0 {
-		return false
-	}
-	var curve asn1.ObjectIdentifier
-	if rest, err := asn1.Unmarshal(info.Algorithm.Parameters.FullBytes, &curve); err != nil || len(rest) != 0 || !curve.Equal(oidCurveSecp256k1) {
-		return false
-	}
-	key, err := secp256k1.ParsePubKey(info.PublicKey.Bytes)
-	if err != nil || len(signature) != 64 {
+func verifySecp256k1(key *secp256k1.PublicKey, digest, signature []byte) bool {
+	if len(signature) != 64 {
 		return false
 	}
 	var r, s secp256k1.ModNScalar
@@ -103,16 +210,17 @@ func verifySecp256k1(publicKey, digest, signature []byte) bool {
 	return secp256k1ecdsa.NewSignature(&r, &s).Verify(digest, key)
 }
 
-func verifyNISTCurve(curve elliptic.Curve, publicKey, digest, signature []byte) bool {
-	parsed, err := x509.ParsePKIXPublicKey(publicKey)
-	if err != nil {
-		return false
-	}
-	key, ok := parsed.(*ecdsa.PublicKey)
-	width := (curve.Params().BitSize + 7) / 8
-	if !ok || key.Curve != curve || len(signature) != 2*width {
+// verifyNISTLowS is crypto/ecdsa.Verify plus the low-S rule the Cosmos SDK's secp256r1 key applies
+// (its VerifySignature refuses an s above N/2); ecdsa.Verify alone accepts both twins.
+func verifyNISTLowS(key *ecdsa.PublicKey, digest, signature []byte) bool {
+	order := key.Curve.Params().N
+	width := (key.Curve.Params().BitSize + 7) / 8
+	if len(signature) != 2*width {
 		return false
 	}
 	r, s := new(big.Int).SetBytes(signature[:width]), new(big.Int).SetBytes(signature[width:])
+	if s.Cmp(new(big.Int).Rsh(order, 1)) > 0 {
+		return false
+	}
 	return ecdsa.Verify(key, digest, r, s)
 }

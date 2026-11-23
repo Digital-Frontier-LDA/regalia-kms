@@ -103,6 +103,15 @@ type fakeHardware struct {
 	signer *secp256k1.PrivateKey
 }
 
+// pinnedTo binds route to signer's key by public_key_sha256, as a commissioned binding is: a Cosmos
+// signature is only checked against a key the token does not choose -- the pin, or the SignDoc's
+// signer key -- and an unpinned route signing a SignDoc with no signer key is refused before the
+// token (regalia-kms-35b).
+func pinnedTo(route registry.Route, signer *secp256k1.PrivateKey) registry.Route {
+	route.Binding.PublicKeySHA256 = spkiPin(secp256k1SPKI(signer.PubKey()))
+	return route
+}
+
 func (value *fakeHardware) Execute(_ context.Context, _ registry.Route, operation string, _ string, contentType string, data, _ []byte) ([]byte, string, error) {
 	if value.signer != nil && operation == "public-key" {
 		return secp256k1SPKI(value.signer.PubKey()), "application/pkix", nil
@@ -400,6 +409,7 @@ func TestACosmosDenialIsAuditedUnderTheDimensionThatRefusedIt(t *testing.T) {
 			}
 			router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production", Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}}}
 			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("signature"), signer: testSigner(t)}
+			router.route = pinnedTo(router.route, hardware.signer)
 			coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder, directRunner{}, hardware, "sha256:policy", nil, func() time.Time { return now })
 			if err != nil {
 				t.Fatal(err)
