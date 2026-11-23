@@ -4,16 +4,19 @@ The v4 three-node control stays in test_baremetal_enrol. Cards and the signed im
 fixtures; challenge/activation, proposal validation, policy writes and the TPM anchor are real.
 """
 import base64
+import contextlib
 import copy
 import io
 import json
 import os
 import re
 import subprocess
+import time
+import types
 import unittest
 from unittest.mock import patch
 
-from deploy.baremetal import bootnet, enrol, manifest, measurements, membership, node, ownerauth, signkey
+from deploy.baremetal import beat, bootnet, enrol, heartbeat, manifest, measurements, membership, node, ownerauth, signkey
 from tests import test_baremetal_enrol as existing
 from tests import test_baremetal_membership as tm
 from tests import test_baremetal_node as nt
@@ -48,6 +51,17 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
     def test_mutant_second_enrolment_after_single_node_genesis_is_refused(self):
         self.ceremony("second-enrolment")
 
+    def test_replacement_after_the_owners_revocation_commits_and_signs_its_first_heartbeat(self):
+        """regalia-kms-dx7.19: the owner revokes the only node, the root enrols this TPM in its place, commit starts the
+        heartbeat counter at 0 with no peer heartbeat, and the node's own first heartbeat is taken."""
+        self.replacement()
+
+    def test_mutant_replacement_typed_for_another_node_is_refused_before_any_write(self):
+        self.replacement("another-id")
+
+    def test_mutant_later_single_node_enrolment_without_a_heartbeat_is_refused_before_any_write(self):
+        self.replacement("gap")
+
     def nv_indices(self):
         result = subprocess.run(["tpm2_getcap", "handles-nv-index"], check=True, capture_output=True, text=True)
         return {int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]+", result.stdout)}
@@ -68,7 +82,9 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                         inventory[path] = ("file", os.stat(path).st_mode, f.read())
         return inventory
 
-    def ceremony(self, mutant=None):
+    def prepare(self, topology="single-node"):
+        """This TPM initialised as node a, its owner authorization set, the signed image booted, and the root's genesis
+        proposal for it made from its real bundle, challenge and activation. Returns what the steps after it use."""
         from e2e.lib import signed_boot as sb
 
         os.makedirs(self.d + "/keys")
@@ -123,7 +139,7 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
             return path
 
         candidate_path = self.d + "/genesis.json"
-        args = ["propose", "--genesis", "--topology", "multi-node" if mutant == "wrong-topology" else "single-node",
+        args = ["propose", "--genesis", "--topology", topology,
                 "--root-key", root, "--measurements", write("measurements", document),
                 "--card-record", write("cards", cards), "--state-dir", fixtures.state(cards),
                 "--offline-keys-record", write("offline-keys", fixtures.generation_record()),
@@ -135,6 +151,38 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.object(manifest.keyfd, "tty_line", answers), patch("sys.stdout", stdout), patch("sys.stderr", stderr):
             status = manifest.main(args)
+        given = ownerauth.read_value(io.BytesIO((value + "\n").encode())), record
+        return types.SimpleNamespace(status=status, stdout=stdout, stderr=stderr, answers=answers, candidate_path=candidate_path,
+                                     entry=entry, document=document, root=root, given=given, public=public, pem=pem,
+                                     signature_path=signature_path)
+
+    def site(self):
+        """The single-node site (the owner the boot mesh's only peer), the node.json example, and its /etc directory."""
+        site = copy.deepcopy(nt.SITE)
+        site["boot_mesh"].update(peers=[], owner={"underlay": "203.0.113.50", "address": "10.89.0.9"})
+        site["service_mesh"] = None
+        etc = self.d + "/etc-regalia/"
+        os.makedirs(etc)
+        example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
+                   "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
+                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission",
+                   "run_dir": self.d + "/run", "admission_log_dir": self.d + "/log-admission", "wg_service_key": self.wg,
+                   "measurements": etc + "measurements.json", "pcrs": [7, 11],
+                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
+        return site, etc, example
+
+    @contextlib.contextmanager
+    def installed(self, etc, public, signature_path):
+        """commit's configuration paths under this test's directory, and the running image's PCR key and signature."""
+        with patch.object(enrol, "CONFIG_DIR", etc), patch.object(enrol, "NODE_JSON", etc + "node.json"), \
+                patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
+                patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), patch.object(signkey, "PCR_SIGNATURE_PATHS", (signature_path,)):
+            yield
+
+    def ceremony(self, mutant=None):
+        p = self.prepare("multi-node" if mutant == "wrong-topology" else "single-node")
+        status, stdout, stderr, answers, candidate_path = p.status, p.stdout, p.stderr, p.answers, p.candidate_path
+        entry, document, root, given, pem = p.entry, p.document, p.root, p.given, p.pem
         if mutant == "wrong-topology":
             self.assertEqual(status, 2, stderr.getvalue())
             self.assertIn("--topology multi-node is a 3-node genesis: 1 --node given", stderr.getvalue())
@@ -151,27 +199,14 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
         self.assertEqual(man["topology"], {"profile": "single-node", "nodes": 1,
                                          "single_node_limits_sha256": manifest.SINGLE_NODE_LIMITS_SHA256})
         envelope = tm.sign(man, tm.ROOT)
-        site = copy.deepcopy(nt.SITE)
-        site["boot_mesh"].update(peers=[], owner={"underlay": "203.0.113.50", "address": "10.89.0.9"})
-        site["service_mesh"] = None
-        etc = self.d + "/etc-regalia/"
-        os.makedirs(etc)
-        example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
-                   "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
-                   "nv_signing": "0x0150001c", "state_dir": self.d + "/state", "admission_dir": self.d + "/admission",
-                   "run_dir": self.d + "/run", "admission_log_dir": self.d + "/log-admission", "wg_service_key": self.wg,
-                   "measurements": etc + "measurements.json", "pcrs": [7, 11],
-                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60, "beat_interval_s": 900}
+        site, etc, example = self.site()
         handed = []
 
         def in_process(config, chain, owner_auth=None):
             handed.append(owner_auth)
             return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
 
-        given = ownerauth.read_value(io.BytesIO((value + "\n").encode())), record
-        with patch.object(enrol, "CONFIG_DIR", etc), patch.object(enrol, "NODE_JSON", etc + "node.json"), \
-                patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
-                patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), patch.object(signkey, "PCR_SIGNATURE_PATHS", (signature_path,)):
+        with self.installed(etc, p.public, p.signature_path):
             def commit(chain=envelope, authorization=given):
                 return enrol.commit(self.dir, chain, root, enrol.fingerprint(root), document, site, example,
                                     as_sync=in_process, out=io.StringIO(), bootstrap=True, ownerauth_given=authorization,
@@ -245,9 +280,85 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                 chain = [envelope, tm.sign(second, tm.ROOT)]
                 self.assertEqual(membership.accept_chain(None, chain, root), second, "the chain itself is valid")
                 before = enrol.Journal(self.dir, "a").doc
-                with self.assertRaisesRegex(enrol.Refused, "a single-node manifest enrols its node only at epoch 1 for now, not epoch 2"):
+                with self.assertRaisesRegex(enrol.Refused, "a single-node manifest enrols its node at epoch 1, or as the replacement that "
+                                            "follows the owner's revocation of its only node, not at epoch 2"):
                     commit(chain)
                 self.assertEqual(enrol.Journal(self.dir, "a").doc, before)
                 self.assertEqual(here.store().load(), man)
                 self.assertEqual(here.anchor().record(), (1, digest))
                 self.assertEqual(handed, [None])
+
+    def replacement(self, mutant=None):
+        """Epoch 1: b alone (a fixture: not this TPM). Epoch 2, the owner's quorum: b REVOKED_STOLEN. Epoch 3, root-signed:
+        this TPM's node a, from its real bundle and activation (the genesis proposal's entry), b kept as its tombstone.
+        "gap": a root-signed epoch between the revocation and the enrolment; "another-id": --replace names another node."""
+        from tests import test_baremetal_membership_v4 as v4
+        from tests import test_baremetal_membership_v5 as v5
+        p = self.prepare()
+        self.assertEqual(p.status, 0, p.stderr.getvalue())
+        with open(p.candidate_path) as f:
+            man = json.load(f)
+        first = dict(copy.deepcopy(man), nodes=[v5.one("b", i=1)], **v5.alone("b"))
+        stolen = dict(copy.deepcopy(first), epoch=2, prev_digest=membership.digest(first), issued_at="2026-10-05T12:00:00Z",
+                      nodes=[v5.one("b", "REVOKED_STOLEN", i=1)])
+        chain = [tm.sign(first, tm.ROOT), v4.quorum(stolen, v5.O1)]          # the owner's card alone revokes it
+        previous = stolen
+        if mutant == "gap":
+            previous = dict(copy.deepcopy(stolen), epoch=3, prev_digest=membership.digest(stolen), issued_at="2026-10-06T12:00:00Z")
+            chain.append(tm.sign(previous, tm.ROOT))
+        third = dict(copy.deepcopy(man), epoch=previous["epoch"] + 1, prev_digest=membership.digest(previous),
+                     issued_at="2026-10-07T12:00:00Z", nodes=[copy.deepcopy(stolen["nodes"][0])] + man["nodes"])
+        chain.append(tm.sign(third, tm.ROOT))
+        self.assertEqual(membership.accept_chain(None, chain, p.root), third, "the chain itself is valid")
+        site, etc, example = self.site()
+        handed, out = [], io.StringIO()
+
+        def in_process(config, chain, owner_auth=None):
+            handed.append(owner_auth)
+            return enrol.anchor_and_store(config, chain, owner_auth=owner_auth)
+
+        def commit(replace):
+            return enrol.commit(self.dir, chain, p.root, enrol.fingerprint(p.root), p.document, site, example, as_sync=in_process,
+                                out=out, replace=replace, ownerauth_given=p.given, probe=lambda config: ([], ["no other node exists"]))
+
+        with self.installed(etc, p.public, p.signature_path):
+            if mutant:
+                self.assertEqual(self.nv_indices(), set(), "the fixture starts with no NV indices")
+                config_roots = (etc, self.d + "/etc-chrony", example["state_dir"])
+                before_config, before_journal = self.config_inventory(*config_roots), enrol.Journal(self.dir, "a").doc
+                replace, reason = (("z", "does not replace z \\(it replaces b after its revocation\\): not the replacement typed")
+                                   if mutant == "another-id" else
+                                   (None, "a single-node manifest enrols its node at epoch 1, or as the replacement that follows "
+                                    "the owner's revocation of its only node, not at epoch 4"))
+                with self.assertRaisesRegex(enrol.Refused, reason):
+                    commit(replace)
+                self.assertEqual(self.nv_indices(), set(), "no NV index is defined before the refusal")
+                self.assertEqual(self.config_inventory(*config_roots), before_config, "nothing is installed before the refusal")
+                self.assertEqual(enrol.Journal(self.dir, "a").doc, before_journal)
+                self.assertEqual(handed, [])
+                return
+            self.assertEqual(commit("b"), (3, membership.digest(third)))
+            self.assertEqual(handed, [None], "the policy-writing sync step receives no owner authorization")
+            here = node.Node(node.load(etc + "node.json"))
+            self.assertEqual(here.store().load(), third)
+            self.assertEqual(here.anchor().record(), (3, membership.digest(third)))
+            first_counter = enrol.Journal(self.dir, "a").get("heartbeat_first")
+            self.assertEqual((first_counter["sequence"], first_counter["bootstrap"], first_counter["replacement"]), (0, False, True))
+            self.assertIn("FIRST HEARTBEAT: sole-node replacement: the counter starts at 0; the node signs heartbeat 1 itself",
+                          out.getvalue())
+            self.assertEqual(node.heartbeat_counter(here.cfg, here.run).value(), 0)
+
+            # the node's first heartbeat, signed by itself alone: its TPM signing key, its signing counter, its own freshness
+            self.assertEqual(beat.cosigners_needed(third), 0)
+            now = int(time.time())
+            freshness = heartbeat.Freshness(node.heartbeat_counter(here.cfg, here.run), lambda: (now, True), here.tpm_clock(),
+                                            here.path("freshness.json"))
+            signer, trail = node.node_beat_signer(here, pem_path=p.public), []
+            proposer = beat.Proposer("a", lambda: third, freshness, lambda: (now, True), signer,
+                                     lambda *asked: self.fail("no other node is asked to co-sign"), trail.append)
+            envelope = proposer.propose(third, now)
+            self.assertEqual((envelope["heartbeat"]["epoch"], envelope["heartbeat"]["sequence"]), (3, 1))
+            self.assertEqual([s["party"] for s in envelope["signatures"]], ["a"])
+            self.assertEqual(heartbeat.verify(envelope, third)["sequence"], 1)
+            self.assertEqual((beat.held_sequence(freshness, third), freshness.counter.value(), signer.signed()), (1, 1, 1))
+            self.assertEqual(trail[-1]["outcome"], "ALLOW")

@@ -819,9 +819,46 @@ def fingerprint(root_key):
     return hashlib.sha256(bytes.fromhex(root_key)).hexdigest()
 
 
-def _check_replacement_step(envelopes, root_key, node_id, replace):
-    """The step of the chain that first names `node_id`: a replacement only with `replace`, and `replace` only for one."""
+def sole_node_replacement(envelopes, root_key, node_id):
+    """regalia-kms-dx7.19: the node `node_id` replaces when the chain's LAST manifest is the first to name it and is a
+    single-node chain's replacement after the owner's revocation (replacement.check_sole_node_replacement): the
+    manifest before it revoked the only live node of the one before that as REVOKED_STOLEN, and this one, root-signed,
+    enrols `node_id` in its place. None for any other chain: a gap epoch between, or a later tip, which may already
+    carry heartbeats, stays on the usual rules. A chain that looks like one and breaks the rules is refused."""
     from deploy.baremetal import replacement
+    manifests, current = [], None
+    for envelope in envelopes:
+        current = membership.accept(current, envelope, root_key)
+        manifests.append(current)
+        if node_id in membership.validate(current):
+            break
+    if len(manifests) != len(envelopes) or len(manifests) < 3 or node_id not in membership.validate(manifests[-1]):
+        return None
+    before, revoked, candidate = manifests[-3:]
+    if any(m.get("topology", {}).get("profile") != membership.SINGLE_NODE for m in (before, revoked, candidate)):
+        return None
+    live = [n for n, entry in membership.validate(before).items() if entry["state"] not in replacement.TERMINAL]
+    if len(live) != 1 or membership.validate(revoked).get(live[0], {}).get("state") != "REVOKED_STOLEN":
+        return None
+    try:
+        replacement.check_sole_node_replacement(before, revoked, candidate, live[0], node_id)
+    except membership.Refused as refusal:
+        raise Refused("the replacement of %s by %s after the owner's revocation is refused: %s" % (live[0], node_id, refusal))
+    return live[0]
+
+
+def _check_replacement_step(envelopes, root_key, node_id, replace):
+    """The step of the chain that first names `node_id`: a replacement only with `replace`, and `replace` only for one.
+    Returns the ID of the node it replaces after the owner's revocation (sole_node_replacement), else None."""
+    from deploy.baremetal import replacement
+    sole = sole_node_replacement(envelopes, root_key, node_id)
+    if sole is not None:
+        epoch = envelopes[-1]["manifest"]["epoch"]
+        require(replace is not None, "the manifest that first names %s (epoch %d) is the replacement of %s after the owner's "
+                "revocation: enrolled only with `commit --replace %s`" % (node_id, epoch, sole, sole))
+        require(replace == sole, "the manifest that first names %s (epoch %d) does not replace %s (it replaces %s after its "
+                "revocation): not the replacement typed" % (node_id, epoch, replace, sole))
+        return sole
     previous = None
     for envelope in envelopes:
         current = membership.accept(previous, envelope, root_key)
@@ -837,7 +874,7 @@ def _check_replacement_step(envelopes, root_key, node_id, replace):
     if replace is None:
         require(not retired, "the manifest that first names %s (epoch %d) retires %s: it is a replacement, enrolled only with "
                 "`commit --replace %s`" % (node_id, current["epoch"], ", ".join(retired), retired[0] if retired else ""))
-        return
+        return None
     require(previous is not None, "%s is named from epoch 1: it replaces nobody" % node_id)
     require(replace in retired, "the manifest that first names %s (epoch %d) does not replace %s%s: not the replacement typed"
             % (node_id, current["epoch"], replace, " (it retires %s)" % ", ".join(retired) if retired else ""))
@@ -847,6 +884,7 @@ def _check_replacement_step(envelopes, root_key, node_id, replace):
         replacement._check_replacement(previous, current, replace, node_id, policy_version_may_change=True)
     except membership.Refused as refusal:
         raise Refused("the replacement of %s by %s is refused: %s" % (replace, node_id, refusal))
+    return None
 
 
 def check_manifest(directory, chain, root_key, typed, document, replace=None):
@@ -864,7 +902,8 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     identity of any node ever listed reused, nothing else changed). A replacement is never enrolled by accident as
     a plain addition, nor an addition as a replacement of a node the operator did not name. The measurement
     document of that step is the root's ceremony to compare (measurements.check_replacement); enrolment asserts the
-    identities."""
+    identities. Under the single-node profile the owner revokes the only node and the root's NEXT manifest enrols its
+    replacement (regalia-kms-dx7.19, sole_node_replacement): that too only with `replace` = the revoked node's ID."""
     require(isinstance(root_key, str) and re.fullmatch(r"[0-9a-f]{64}", root_key), "the root key is 64 lower-case hex")
     typed = re.sub(r"[\s:]", "", (typed or "").lower())
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
@@ -879,17 +918,19 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
         raise Refused("the manifest chain is refused: %s" % refusal)
     nodes = membership.validate(manifest)
     node_id = bundle["node_id"]
-    _check_replacement_step(envelopes, root_key, node_id, replace)
+    sole = _check_replacement_step(envelopes, root_key, node_id, replace)
     require(node_id in nodes, "the manifest does not name this host (%s)" % node_id)
     node = nodes[node_id]
     require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
             "the manifest names %s %s: a node in that state is not enrolled" % (node_id, node["state"]))
-    # a single-node node enrols only at its genesis for now: a later one (the replacement after the owner's
-    # revocation) would be the only signer of its epoch's heartbeat, so no source could start its counter, and
-    # commit would stop after installing (regalia-kms-dx7.19, CodeRabbit on #734). Refused here, before anything is written.
-    require(manifest.get("topology", {}).get("profile") != membership.SINGLE_NODE or manifest["epoch"] == 1,
-            "a single-node manifest enrols its node only at epoch 1 for now, not epoch %d: its first heartbeat would have "
-            "no source (regalia-kms-dx7.19). Nothing was written" % manifest["epoch"])
+    # a single-node node enrols at its genesis, or as the replacement the root enrols right after the owner revoked the
+    # only node (regalia-kms-dx7.19): it is then the only signer of its epoch's heartbeat, and its counter starts at 0
+    # (define_first_counter). Any other later one would have no source for its first heartbeat, and commit would stop
+    # after installing (CodeRabbit on #734): refused here, before anything is written.
+    require(manifest.get("topology", {}).get("profile") != membership.SINGLE_NODE or manifest["epoch"] == 1 or sole is not None,
+            "a single-node manifest enrols its node at epoch 1, or as the replacement that follows the owner's revocation of "
+            "its only node, not at epoch %d: its first heartbeat would have no source (regalia-kms-dx7.19). Nothing was written"
+            % manifest["epoch"])
     wg = {k: base64.b64decode(bundle[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     mine_all = [("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
                 ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])]
@@ -1262,7 +1303,8 @@ def probe_heartbeats(config_path, run=subprocess.run):
     return envelopes, failures
 
 
-def define_first_counter(config_path, manifest, probed, directory, owner_auth, bootstrap=False, run=subprocess.run, now=None):
+def define_first_counter(config_path, manifest, probed, directory, owner_auth, bootstrap=False, run=subprocess.run, now=None,
+                         sole_replacement=False):
     """#419, as ROOT, under v4: the heartbeat counter's one definition, from heartbeats the root parent VERIFIES ITSELF
     (heartbeat.verify under `manifest`, pure: no network, no owner authorization; regalia-kms-24). `probed` is what
     probe_heartbeats fetched, as regalia-sync: (envelopes, failures). Defined at max(highest verified sequence - 1, 0), so
@@ -1273,7 +1315,12 @@ def define_first_counter(config_path, manifest, probed, directory, owner_auth, b
     applies, Freshness._live). So a probe that withholds the newest and returns an older valid one can lower the start
     by at most one heartbeat lifetime, within the jump bound by construction; one that returns nothing live makes it
     refuse (regalia-kms-d9). Already defined: adopted only as defined here. Returns the value it was defined at, or None
-    when it was there already."""
+    when it was there already.
+    `sole_replacement`: the manifest is a single-node chain's replacement after the owner's revocation (check_manifest,
+    sole_node_replacement; regalia-kms-dx7.19). This node is its epoch's only heartbeat signer, so no source can hold a
+    heartbeat under it, and with nothing verified the counter starts at 0 without --bootstrap: a heartbeat binds its
+    epoch and manifest digest, nothing signed before this epoch verifies under it, and the node's own first heartbeat,
+    sequence 1, is the next one. Adoption on a resume and the half-defined refusal are as for every enrolment."""
     from deploy.baremetal import heartbeat, node as node_module
     with open(config_path, "rb") as f:
         cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
@@ -1304,6 +1351,9 @@ def define_first_counter(config_path, manifest, probed, directory, owner_auth, b
         start = max(max(verified) - 1, 0)
         counter.define_at(start)
         return start
+    if sole_replacement:
+        counter.define_at(0)
+        return 0
     require(bootstrap, "no source gave a heartbeat that verifies under epoch %d (%s): the node cannot start its heartbeat counter "
             "yet; run commit again once one answers (or, at a network's bootstrap, before any heartbeat was ever issued, "
             "with --bootstrap)" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
@@ -2210,6 +2260,9 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
+    # regalia-kms-dx7.19: a single-node replacement after the owner's revocation starts its own heartbeat counter
+    sole = replace is not None and sole_node_replacement(chain if isinstance(chain, list) else [chain], root_key,
+                                                         journal.doc["node_id"]) == replace
     owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run, directory)
     note = signing_note(directory, manifest)
     if note:
@@ -2243,14 +2296,18 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         journal.started("heartbeat_first")
         if production:                              # #419: fetched as regalia-sync, verified and defined here
             probed = (probe or run_probe_as_sync)(prefix + stored(NODE_JSON))
-            start = define_first_counter(prefix + stored(NODE_JSON), manifest, probed, directory, owner_auth, bootstrap, run)
+            start = define_first_counter(prefix + stored(NODE_JSON), manifest, probed, directory, owner_auth, bootstrap, run,
+                                         sole_replacement=sole)
             sequence, left = start, None
             print("FIRST HEARTBEAT: %s" % ("the counter was defined already" if start is None else
+                                          "sole-node replacement: the counter starts at 0; the node signs heartbeat 1 itself"
+                                          if sole and start == 0 else
                                           "the counter defined at %d, by this process from heartbeats it verified; the node's "
                                           "sync takes the next at its first pull" % start), file=out)
         else:
             sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + stored(NODE_JSON), bootstrap=bootstrap, **owner)
-        journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
+        journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None and not sole),
+                     **({"replacement": True} if sole else {}))
         if not production:
             print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
                                           "network bootstrap: the counter starts at 0" if left is None else

@@ -133,6 +133,7 @@ The ones that decide the design:
   - It keeps one meaning: the node's own view of its manifest is fresh, which `heartbeat.authorize` and the watch read.
   - It loses its main one: bounding how long a **peer** keeps helping a revoked node. There is no peer.
   - The owner co-signed path (`owner.py beat`) is not needed and is refused under `single-node` (decision Q2).
+  - Its counter starts at enrolment: at 0 at genesis (`--bootstrap`), and at 0 for the replacement the root enrols in the epoch right after the owner's REVOKED_STOLEN of the only node (`enrol commit --replace <revoked node>`, regalia-kms-dx7.19). That node is its epoch's only signer, so no source holds a heartbeat under it; its own first one is sequence 1. Any other single-node enrolment after epoch 1 is refused before anything is written.
 - **Revocation:** the owner alone (`revocation_signers = [{1, [owner]}]`), through the existing `revoke.py export` / `import` and `deliver`.
   - Revoking or quarantining the only node is a **shutdown of the KMS**. The tool says so, and asks for a typed phrase.
   - A stolen node is defended by 4.5, not by a revocation reaching peers: there are none.

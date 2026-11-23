@@ -198,6 +198,58 @@ class Tombstones(Case):
         replacement.check_replacement(self.m1, self.accept(self.m1, self.replaced("REVOKED_STOLEN")), "a", "a2")
 
 
+class SoleNodeReplacement(unittest.TestCase):
+    """regalia-kms-dx7.19: under the single-node profile the owner revokes the only node (a, REVOKED_STOLEN), and the root's
+    next manifest enrols d in its place: check_sole_node_replacement takes check_replacement's rules across the two."""
+
+    def chain(self, revoke=None, replace=None):
+        from tests.test_baremetal_membership_v5 import one, single5
+        first = single5(1, "", [one("a")])
+        stolen = single5(2, m.digest(first), [one("a", "REVOKED_STOLEN")])
+        if revoke:
+            revoke(stolen)
+        third = single5(3, m.digest(stolen), [one("a", "REVOKED_STOLEN"), one("d", i=3)], nid="d", policy_version="p2")
+        if replace:
+            replace(third)
+        return first, stolen, third
+
+    def refused(self, reason, *chain, old_id="a", new_id="d"):
+        with self.assertRaises(m.Refused) as caught:
+            replacement.check_sole_node_replacement(*chain, old_id, new_id)
+        self.assertIn(reason, str(caught.exception))
+
+    def test_the_owners_revocation_then_the_roots_replacement(self):
+        replacement.check_sole_node_replacement(*self.chain(), "a", "d")
+
+    def test_anything_else_is_refused(self):
+        from tests.test_baremetal_membership_v5 import manifest5, one
+        from tests.test_baremetal_membership_v4 import nodes4
+
+        def node(i, **change):
+            return lambda man: man["nodes"][i].update(change)
+
+        def rules(name, value):
+            return lambda man: man.update({name: value})
+        first, stolen, third = self.chain()
+        self.refused("not the only live node of epoch 1", *self.chain(), old_id="b")
+        self.refused("is already a node: a replacement gets a new node ID", *self.chain(), new_id="a")
+        self.refused("epoch 2 does not revoke a as REVOKED_STOLEN", *self.chain(revoke=node(0, state="RETIRED")))
+        self.refused("the revocation at epoch 2 changes something other than the state of a",
+                     *self.chain(revoke=node(0, wg_boot_pub="5d" * 32)))
+        self.refused("the revocation at epoch 2 changes something other than the state of a",
+                     *self.chain(revoke=rules("policy_version", "p9")))
+        self.refused("the tombstone of a must stay as epoch 2 revoked it", *self.chain(replace=node(0, state="RETIRED")))
+        self.refused("the tombstone of a must stay as epoch 2 revoked it", *self.chain(replace=node(0, wg_boot_pub="5d" * 32)))
+        self.refused("HSM DENK0404100 is listed twice", *self.chain(replace=node(1, hsm_serials=["DENK0404100"])))     # validate's own rule
+        self.refused("a replacement does not change owner_wg_pub", *self.chain(replace=rules("owner_wg_pub", "0f" * 32)))
+        self.refused("a replacement adds d and nothing else",
+                     *self.chain(replace=lambda man: man["nodes"].append(one("c", "RETIRED", 2))))
+        self.refused("the replacement must be the next manifest: epoch 3", first, stolen, dict(third, epoch=4))
+        self.refused("the revocation must be the next manifest: epoch 2", first, dict(stolen, prev_digest="00" * 32), third)
+        multi = manifest5(1, "", nodes4())
+        self.refused("a sole node's replacement is a single-node chain's", multi, stolen, third)
+
+
 class Decisions(Case):
     """Under the replacement manifest, every decision a peer makes: the new node passes, the old hardware does not."""
 

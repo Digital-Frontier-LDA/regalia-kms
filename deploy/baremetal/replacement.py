@@ -20,6 +20,9 @@ refused by every decision the peer makes, and the new node must pass them.
   * check_replacement(current, candidate, old_id, new_id): what the root's operator asserts before
     signing, and a peer may assert after accepting: the old node is terminal, the new one shares no
     identity with any node the manifest has ever listed, and nobody else changed.
+  * check_sole_node_replacement(before, revoked, candidate, old_id, new_id): the single-node profile's
+    other path (regalia-kms-dx7.19): the owner revokes the only node, and the root's next manifest
+    enrols its replacement, under the same rules taken across the two steps.
 
 Runtime leases need nothing new: lease.issue() and lease.verify() already judge subject and issuer by
 the verifier's current manifest.
@@ -91,13 +94,50 @@ def check_replacement(current, candidate, old_id, new_id):
     _check_replacement(current, candidate, old_id, new_id, policy_version_may_change=False)
 
 
+def check_sole_node_replacement(before, revoked, candidate, old_id, new_id):
+    """A single-node chain's replacement after the owner's revocation (regalia-kms-dx7.19), which no single manifest
+    carries: `revoked` (the next manifest after `before`) moves `old_id`, the only live node of `before`, to
+    REVOKED_STOLEN and changes nothing else; `candidate` (the next after `revoked`) enrols `new_id` in its place,
+    `old_id` kept as its tombstone exactly as revoked. Taken from `before` to `candidate`, that is
+    check_replacement's rules (a new node ID, no identity of any node the chain listed reused, the signer rules
+    naming the new node in place of the old, nobody else changed); policy_version may change, as enrolment's
+    replacement check lets it. Raises Refused with the reason."""
+    require(isinstance(old_id, str) and isinstance(new_id, str), "node IDs are text")
+    first, middle, last = (membership.validate(man) for man in (before, revoked, candidate))
+    require(all(man.get("topology", {}).get("profile") == membership.SINGLE_NODE for man in (before, revoked, candidate)),
+            "a sole node's replacement is a single-node chain's")
+    _chained(before, revoked, "the revocation")
+    _chained(revoked, candidate, "the replacement")
+    live = sorted(n for n, node in first.items() if node["state"] not in TERMINAL)
+    require(live == [old_id], "%s is not the only live node of epoch %d (%s)" % (old_id, before["epoch"], ", ".join(live) or "none is"))
+    require(set(middle) == set(first) and middle[old_id]["state"] == "REVOKED_STOLEN",
+            "epoch %d does not revoke %s as REVOKED_STOLEN" % (revoked["epoch"], old_id))
+    require(dict(middle[old_id], state=None) == dict(first[old_id], state=None)
+            and all(middle[n] == node for n, node in first.items() if n != old_id)
+            and {k: v for k, v in revoked.items() if k not in ("epoch", "prev_digest", "issued_at", "nodes")}
+            == {k: v for k, v in before.items() if k not in ("epoch", "prev_digest", "issued_at", "nodes")},
+            "the revocation at epoch %d changes something other than the state of %s" % (revoked["epoch"], old_id))
+    require(new_id not in middle, "%s is already a node: a replacement gets a new node ID" % new_id)
+    require(old_id in last and last[old_id] == middle[old_id], "the tombstone of %s must stay as epoch %d revoked it" % (old_id, revoked["epoch"]))
+    _replaces(before, candidate, old_id, new_id, policy_version_may_change=True)
+
+
+def _chained(current, candidate, what):
+    require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
+            "%s must be the next manifest: epoch %d, chained to the current one" % (what, current["epoch"] + 1))
+
+
 def _check_replacement(current, candidate, old_id, new_id, policy_version_may_change):
     """check_replacement, for measurements.check_replacement only: with the flag, policy_version may
     change, and the caller answers for WHAT changed by comparing the documents. Not a public switch."""
     require(isinstance(old_id, str) and isinstance(new_id, str), "node IDs are text")
+    _chained(current, candidate, "the replacement")
+    _replaces(current, candidate, old_id, new_id, policy_version_may_change)
+
+
+def _replaces(current, candidate, old_id, new_id, policy_version_may_change):
+    """What a replacement changes from `current` to `candidate`, the epochs aside."""
     old, new = membership.validate(current), membership.validate(candidate)
-    require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
-            "the replacement must be the next manifest: epoch %d, chained to the current one" % (current["epoch"] + 1))
     require(old_id in old, "%s is not in the current manifest" % old_id)
     require(old[old_id]["state"] not in TERMINAL, "%s is already %s: it was replaced before, and a tombstone is not replaced again"
             % (old_id, old.get(old_id, {}).get("state")))
