@@ -507,10 +507,14 @@ class AttestBooted(Case):
         """regalia-kms-dx7.8 review (the MAJOR finding): reattest leaves the state lock when it returns, and the
         stamp runs under a re-taken lock. A concurrent owner unlock (initrd) that commits to the same state in
         that gap writes a record the verification did not write; stamping it "system" would make an unlock the
-        retire evidence. The stamp goes only on the record THIS verification wrote: a record under another tip
-        (a different epoch) is refused, and the state is left untouched. The interleaving is simulated by letting
-        the verification run, then having the concurrent unlock overwrite its record before the stamp re-reads --
-        exactly the gap the finding names."""
+        retire evidence. The stamp goes only on the record THIS verification wrote: it is bound to the boot session
+        the verification verified for, not to the manifest's epoch (every record under this tip shares the epoch,
+        so the epoch cannot tell two verifications apart). The realistic race is an unlock under the SAME tip --
+        the owner's own tool, initrd, a different boot and a different session -- whose record carries this
+        epoch and the same image label and no phase; an epoch-only binding would stamp it. A record from another
+        session (that unlock, or an earlier boot) is refused, and the state is left untouched. The interleaving is
+        simulated by letting the verification run, then having the concurrent writer overwrite the record and the
+        node's last boot before the stamp re-reads -- exactly the gap the finding names."""
         path = self.d + "/stamp.json"
         attester = self.enrolled_attester(path)
         # first, the normal path: the verification's record is stamped (the record the retire reads)
@@ -519,14 +523,22 @@ class AttestBooted(Case):
         self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
         with open(path) as f:
             self.assertEqual(json.load(f)["nodes"]["a"]["measurement"], record)
-        # the concurrent unlock's record: a different epoch, an image under another tip, no phase
-        foreign = {"label": "next", "epoch": 2, "phase": None}
+        # the concurrent unlock's record: SAME epoch, SAME image label, no phase (an unphased set records no
+        # phase) -- an epoch-only binding cannot tell it from this verification's own record. It is a different
+        # boot, so it has its own session (check_counters: a boot carries one session and one phase), and the
+        # node's last-accepted boot is that session, not this verification's.
+        unlock_session = bytes.fromhex(lt.SESSION) + b"concurrent-unlock-boot"
+        unlock_sha = hashlib.sha256(unlock_session).hexdigest()
+        foreign = {"label": "current", "epoch": 1, "phase": None}
+        foreign_boot = {"counters": [1000, 2], "session": unlock_sha, "key": hashlib.sha256(b"concurrent-unlock-key").hexdigest()}
         real_reattest = ownerunlock.lease.reattest
 
         def reattest_then_unlock(*args, **kw):
-            real_reattest(*args, **kw)                      # the verification runs and writes its record
-            with attest.locked_state(path) as (state, save):  # then the concurrent unlock overwrites it
-                state["nodes"]["a"]["measurement"] = foreign
+            real_reattest(*args, **kw)                                   # the verification runs and writes its record
+            with attest.locked_state(path) as (state, save):              # then the concurrent unlock overwrites it
+                node = state["nodes"]["a"]
+                node["measurement"] = foreign                             # its record: same epoch, same label, no phase
+                node["boot"] = foreign_boot                               # its boot: a different session
                 save()
         # a fresh nonce for the re-quoted boot
         nonce = attester.nonce("a")
@@ -535,7 +547,9 @@ class AttestBooted(Case):
                          ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION,
                          self.evidence(self.m1, lt.SESSION, attester, nonce=nonce), attester=attester)
         with open(path) as f:
-            self.assertEqual(json.load(f)["nodes"]["a"]["measurement"], foreign)  # untouched: no stamp, no save
+            state = json.load(f)
+            self.assertEqual(state["nodes"]["a"]["measurement"], foreign)   # untouched: no stamp, no save
+            self.assertEqual(state["nodes"]["a"]["boot"], foreign_boot)     # the unlock's boot, not this verification's
 
     def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
         """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted
