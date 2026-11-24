@@ -4,7 +4,7 @@ go 1.26.11
 
 require (
 	github.com/Digital-Frontier-LDA/regalia-kms/adapters/sops v0.0.0
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/go-piv/piv-go/v2 v2.6.0
 	github.com/google/go-tpm v0.9.8
 	github.com/miekg/pkcs11 v1.1.2
