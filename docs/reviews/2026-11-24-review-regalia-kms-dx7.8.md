@@ -10,7 +10,7 @@
 
 ## How this was checked
 
-- Targeted suites at head: `python3 -m unittest tests.test_baremetal_rollout tests.test_baremetal_rollout_cli
+- Targeted suites at head: `python3 -Es -m unittest tests.test_baremetal_rollout tests.test_baremetal_rollout_cli
   tests.test_baremetal_update tests.test_baremetal_owner_unlock.AttestBooted` -> Ran 129 tests, OK (skipped=1).
 - Probe tests (scratch, run against this worktree and against an export of f86b76a6), output quoted below.
 - 15 mutants on an export of HEAD (`git archive HEAD`), each applied alone, the named tests run, then reverted.
