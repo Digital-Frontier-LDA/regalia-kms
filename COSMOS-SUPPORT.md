@@ -87,8 +87,22 @@ an outage: `backend-failed`, retryable, as any other backend error.
 Policy's reservation for that request stands, as it does for an indeterminate hardware result: its
 nonce and the account sequence it carried are spent, while the chain never saw a valid transaction
 for that sequence. A request carrying the sequence the chain still expects is then refused as a
-repeat, until an operator re-initialises the expected sequence from a trusted chain observation, as
-at commissioning (below).
+repeat, and one carrying the next sequence is accepted by policy but not by the chain.
+
+There is no supported way to recover from this yet. No operation re-initialises an object's expected
+sequence once it has history: the journal accepts only the previous sequence plus one, and the
+commissioning step below sets only the first sequence. The account stays blocked at that sequence
+until a named recovery procedure lands (regalia-kms-4t4; the procedure is tracked as regalia-kms-47g).
+Until then, an operator who sees `signature-unverified` for a Cosmos object should:
+
+1. Stop submitting signing requests for that account.
+2. Keep the request id and its `signature-unverified` audit entry, and escalate them as a token or
+   daemon defect.
+3. Leave the policy journal and the active/passive signer state as they are. Editing, truncating
+   or replacing the journal is not a recovery path; the journal refuses a truncated, rewritten or
+   broken-chain file at open.
+
+Nothing else is supported.
 
 ## Sequence, fee, and gas semantics
 
