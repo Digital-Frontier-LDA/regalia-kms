@@ -485,6 +485,14 @@ class CommandLine(TheHostsTpmAndChain):
         with real_open(self.d + "/statement.json", "w") as f:
             json.dump({"statement": st, "key": pub(OWNER_KEYS[0]),
                        "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}, f)
+        # a v1-shaped recount statement (purpose recount, NO collector_epoch): the M1b input. The owner's tool
+        # never signs this under single-node (recount is v2-only, owner.py derives collector_sequence from the
+        # witness), so it is a tampered or hand-built document. recover.message's v1 branch refuses it (M1b);
+        # before the fix it passed `purpose in PURPOSES`, took the v1 branch, and raised a KeyError at
+        # PREFIX_V1["recount"], uncaught by recount.main's `except (Refused, OSError, ValueError)`.
+        v1_st = {k: v for k, v in st.items() if k not in ("collector_epoch", "collector_sequence")}
+        v1 = {"statement": v1_st, "key": pub(OWNER_KEYS[0]), "sig": "22" * 64}
+        # the sig is never verified: recover.message refuses the v1-shaped recount before the signature is checked
 
         def ask(prompt):
             return "recount 0x01500018 at %d" % max(collector_sequence, 30)
@@ -504,13 +512,13 @@ class CommandLine(TheHostsTpmAndChain):
                                            side_effect=lambda clock, tpm_clock, floor: (T0 + 300, floor))
         self.addCleanup(auth_patcher.stop)
         auth_patcher.start()
-        return run, ask
+        return run, ask, tip, v1
 
     def test_owner_statement_at_the_command(self):
         """--owner-statement is the single-node floor source at the command (docs/design/single-node.md 4.7):
         the node's own beat signing counter (nv_signing) is read for the liveness floor, the statement's
         collector_sequence raises the floor, and the new counter reads the max."""
-        run, ask = self.owner_statement_host()
+        run, ask, tip, v1 = self.owner_statement_host()
         argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
                 "--owner-statement", self.d + "/statement.json"]
         self.assertEqual(recount.main(argv, ask=ask, run=run), 0)
@@ -520,10 +528,28 @@ class CommandLine(TheHostsTpmAndChain):
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
         self.assertEqual(json.loads(open(self.d + "/recount-floor-0x01500018.json").read())["floor"], 60)
 
+    def test_a_v1_shaped_recount_statement_is_refused_not_a_traceback(self):
+        """`recount --owner-statement` given a v1-shaped recount document (purpose recount, NO collector_epoch)
+        is a REFUSED command, rc 1, nothing changed (council 2026-11-24 on PR #778, M1b): recover.message's v1
+        branch used to raise a bare KeyError at PREFIX_V1["recount"] -- recount has no v1 prefix -- outside
+        recount.main's `except (Refused, OSError, ValueError)`, so the command exited with a traceback, not a
+        recorded refusal. The owner's tool never signs this under single-node (recount is v2-only, owner.py
+        derives collector_sequence from the witness), so it is a tampered or hand-built document."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        with open(self.d + "/statement-v1.json", "w") as f:
+            json.dump(v1, f)
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement-v1.json"]
+        # rc 1 (a refusal), not 2 (an uncaught traceback); the counter is not touched, nothing is recorded
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.remains(), (None, []))          # the counter stays unusable: nothing was defined
+
     def test_owner_statement_refused_under_a_multi_node_tip(self):
         """A v2 recount statement given against a multi-node manifest is refused by the command, before
         anything is changed: the owner is not a floor source for a multi-node recount."""
-        run, ask = self.owner_statement_host()
+        run, ask, tip, v1 = self.owner_statement_host()
         argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
                 "--owner-statement", self.d + "/statement.json"]
         # swap the host's chain for the multi-node fixture's: the statement names the single-node tip, so the

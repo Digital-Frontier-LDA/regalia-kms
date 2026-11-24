@@ -93,6 +93,11 @@ def message(statement):
         keys = STATEMENT_KEYS_V2_RECOUNT if purpose == "recount" else STATEMENT_KEYS_V2
         prefix = PREFIX_V2[purpose]
     else:
+        # v1 has no collector_epoch: recount is v2-only (its collector's witnessed sequence is the point), so a
+        # recount mapping without collector_epoch is a REFUSAL, not the KeyError PREFIX_V1[purpose] would raise
+        # (council 2026-11-24 on PR #778, M1b): recount.main catches (Refused, OSError, ValueError) only, and an
+        # unrecorded traceback would look like a crash, not a refusal
+        require(purpose in PREFIX_V1, "a %s statement must be v2 (with collector_epoch)" % purpose)
         keys = STATEMENT_KEYS_V1
         prefix = PREFIX_V1[purpose]
     membership.exact(statement, keys, "the recovery statement")

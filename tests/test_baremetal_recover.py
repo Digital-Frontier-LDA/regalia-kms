@@ -90,6 +90,21 @@ class Statement(Case):
         # the outer shape is exact()'s; the inner shape is message's: a mapping without a purpose still refuses
         self.refused("the purpose is one of", recover.message, {})
 
+    def test_a_recount_statement_without_collector_epoch_is_a_refusal_not_a_traceback(self):
+        """message() of a mapping with purpose recount and NO collector_epoch is a REFUSAL (council 2026-11-24
+        on PR #778, M1b): it used to pass `purpose in PURPOSES`, take the v1 branch, and raise a bare KeyError
+        at PREFIX_V1[purpose] (recount has no v1 prefix) -- uncaught by recount.main's `except (Refused,
+        OSError, ValueError)`, so `recount --owner-statement` with a v1-shaped recount statement exited with a
+        traceback, not a recorded refusal. Now the v1 branch refuses: a recount statement is v2-only (its
+        collector's witnessed sequence is the point)."""
+        self.refused("a recount statement must be v2 (with collector_epoch)",
+                     recover.message, {"purpose": "recount", "node_id": "a", "epoch": 3})
+        # the v1 purposes still pass the v1 branch (the refusal names recount specifically, not every purpose):
+        # a recover mapping without collector_epoch goes on to exact() and is refused for its missing keys,
+        # NOT for being v1-shaped
+        self.refused("the recovery statement", recover.message,
+                     {"purpose": "recover", "node_id": "a", "epoch": 3})
+
     def test_the_chain_extends_what_the_node_last_knew_and_owner_keys_may_rotate(self):
         self.assertEqual(recover.verify_chain(self.chain, ROOT_PUB, self.m2)["epoch"], 3)
         fork2 = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED"), issued_at="2026-10-04T10:00:00Z")
@@ -672,3 +687,45 @@ class SingleNodeCommand(Recovers):
         self.assertEqual(self.outcomes(), [("recover", "DENY")])
         # the denial says why, and names the owner chain, not a KeyError
         self.assertIn("owner_chain is refused", self.trail[-1]["reason"])
+
+    def test_apply_owner_chain_records_a_deny_when_the_real_owner_check_refuses(self):
+        """recover apply --owner-chain runs the REAL owner check over the chain's tip (council 2026-11-24 on
+        PR #778, B1, recover half): a statement the owner check refuses (here: a second node answering over the
+        service tunnel, the owner_check's own refusal) is a DENY the recovery records, with nothing changed.
+        Every other SingleNodeCommand test stands recover.owner_check in (always-pass), so this is the only one
+        that reaches the owner_check call at the --owner-chain path (recover.apply) -- deleting that call fails
+        nothing in this file. Red->green: delete the owner_check call -> the refusal is not raised, the
+        recovery proceeds, and a recovery the owner check refused is recorded ALLOW -> red."""
+        fresh = self.store("a2")
+        fresh._judge_by = lambda manifests: None
+        fresh.commit(self.single_tip())
+        os.unlink(fresh.path)                                     # the disk: gone (the crash window)
+        self.assertTrue(fresh.pinned())
+        tip = self.single_tip()
+        v2 = self.single_v2(tip)
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
+            return asked[-1]
+        node = self.node(fresh)
+        # the REAL owner check: a second node answering over the service tunnel refuses (the owner_check's own
+        # path, the one its own OwnerCheck tests exercise)
+        def real_check(n, s, p, peer, now=None, boot_id=None):
+            def on(tip_m, single_node=None):
+                raise m.Refused("a answers over the service tunnel: %s from two nodes, not with the owner" % p)
+            return on
+        with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                unittest.mock.patch("deploy.baremetal.node.publish"), \
+                unittest.mock.patch.object(recover, "owner_check", side_effect=real_check):
+            try:
+                self.refused("a answers over the service tunnel", recover.apply,
+                             "/etc/regalia/node.json", {}, v2, typed=typed, run=self.single_runner(fresh),
+                             owner_chain=[tip])
+            finally:
+                self.asked = asked
+        # a DENY, recorded, with the reason, and nothing was restored: the (gone) disk is still gone
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        self.assertIn("a answers over the service tunnel", self.trail[-1]["reason"])
+        self.assertFalse(os.path.exists(fresh.path))              # the recovery never ran: the disk was not restored
