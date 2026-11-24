@@ -511,9 +511,9 @@ class OwnerChain(unittest.TestCase):
         b = case.stores["b"]
         convergence.catch_up(b, [e2])
         # the reserved key is refused as not a node ID, before it can count toward the minimum
-        self.refused("it is not a node ID", convergence.agreed, ROOT, {"__owner__": b.envelopes()}, 1, 1)
+        self.refused("is not a node ID", convergence.agreed, ROOT, {"__owner__": b.envelopes()}, 1, 1)
         # and it gains nothing beside a real node: the pair is still refused
-        self.refused("it is not a node ID", convergence.agreed, ROOT,
+        self.refused("is not a node ID", convergence.agreed, ROOT,
                      {"__owner__": b.envelopes(), "b": b.envelopes()}, 2, 1)
 
     # ---- recover(): the owner chain as the sole source ----
