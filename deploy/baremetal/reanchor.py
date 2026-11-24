@@ -521,6 +521,9 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
             # (with collector_epoch) and second_node_answers is not consulted (there are no other nodes).
             # A bad or expired statement is a refusal the re-anchor records, not an anchor reset.
             owner_chain_check = owner_check(args.node_config, args.node_id, args.owner_statement, "owner-chain")
+        if args.one_source:
+            require(args.owner_statement and args.node_config, "--one-source needs --owner-statement and --node-config")
+            owner = owner_check(args.node_config, args.node_id, args.owner_statement, sorted(sources)[0] if sources else "")
         # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
         # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
         policies = NodePolicies(args.node_config, args.node_id)
