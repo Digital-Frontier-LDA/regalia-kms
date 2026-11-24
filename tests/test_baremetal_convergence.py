@@ -502,6 +502,20 @@ class OwnerChain(unittest.TestCase):
         self.refused("'owner' is not a source this chain trusts", convergence.agreed, ROOT, {"owner": b.envelopes()}, 1, 1)
         self.refused("'z' is not a source this chain trusts", convergence.agreed, ROOT, {"z": b.envelopes()}, 1, 1)
 
+    def test_a_caller_supplied_owner_key_skips_nothing_under_multi_node(self):
+        """The owner's "may authorize" exemption is by IDENTITY (the owner_chain argument), not by name:
+        a caller-supplied "__owner__" key in the sources dict must not skip the node check under any tip.
+        Review defcc750, finding 1: before the fix it was exempt (ACCEPTED as a source under multi-node)."""
+        case = self.multi_case()
+        e2 = case.revoke(case.m1, "QUARANTINED")
+        b = case.stores["b"]
+        convergence.catch_up(b, [e2])
+        # the reserved key is refused as not a node ID, before it can count toward the minimum
+        self.refused("it is not a node ID", convergence.agreed, ROOT, {"__owner__": b.envelopes()}, 1, 1)
+        # and it gains nothing beside a real node: the pair is still refused
+        self.refused("it is not a node ID", convergence.agreed, ROOT,
+                     {"__owner__": b.envelopes(), "b": b.envelopes()}, 2, 1)
+
     # ---- recover(): the owner chain as the sole source ----
 
     def _single_store(self, chain, upto):

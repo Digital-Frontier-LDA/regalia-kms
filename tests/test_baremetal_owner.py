@@ -3,12 +3,16 @@ signed by the node as regalia-sync, shown and confirmed before the owner's key s
 Freshness under the owner's one-hour cap. Each node is beat's test node (a fake TPM and a software signing key); the
 owner's key is a software Ed25519 key standing in for the YubiKey (Pkcs11Signer's Ed25519 path is tested against
 SoftHSM in test_baremetal_p11sign)."""
+import contextlib
+import hashlib
+import json
 import unittest
 import unittest.mock
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deploy.baremetal import heartbeat as hb
 from deploy.baremetal import membership as m
-from deploy.baremetal import owner
+from deploy.baremetal import owner, recover, trails
 from tests.test_baremetal_beat import Case
 from tests.test_baremetal_membership_v4 import OWNER_KEYS, STRANGER, manifest4, nodes4, pub
 from tests.test_baremetal_membership_v5 import MULTI, manifest5, single5
@@ -176,9 +180,21 @@ class SingleNodeRecovery(unittest.TestCase):
         # under single-node, the "no collector" suffix is absent
         self.typed = want
         if witnesses:
-            mock_ctx = unittest.mock.patch("deploy.baremetal.recover.witness_epoch", return_value=1)
+            mock_ctx = contextlib.ExitStack()
+            mock_ctx.enter_context(
+                unittest.mock.patch("deploy.baremetal.recover.witness_epoch", return_value=1))
+            # witness_sequence is called for recount; for recover/reanchor it is not, so patch it
+            # to a no-op that returns 0 so the test can pass an explicit collector_sequence
+            mock_ctx.enter_context(
+                unittest.mock.patch("deploy.baremetal.recover.witness_sequence", return_value=0))
         else:
-            mock_ctx = unittest.mock.patch("deploy.baremetal.recover.witness_epoch", side_effect=AssertionError("should not be called"))
+            mock_ctx = contextlib.ExitStack()
+            mock_ctx.enter_context(
+                unittest.mock.patch("deploy.baremetal.recover.witness_epoch",
+                                    side_effect=AssertionError("should not be called")))
+            mock_ctx.enter_context(
+                unittest.mock.patch("deploy.baremetal.recover.witness_sequence",
+                                    side_effect=AssertionError("should not be called")))
         with mock_ctx:
             return owner.sign_recovery(self.chain, self.ROOT_PUB, self.record, purpose, "a", "s-1",
                                        lambda: self.key, self.confirm, self.now,
@@ -205,11 +221,15 @@ class SingleNodeRecovery(unittest.TestCase):
         self.assertIn(b"v2", msg)
 
     def test_single_node_recount_requires_collector_sequence(self):
-        """A recount statement under single-node needs collector_sequence."""
-        from deploy.baremetal import membership as mm
-        self.assertRaisesRegex(mm.Refused, "collector_sequence",
-                               self.do_sign, "recount", witnesses=[(None, None, None, None, None)], collector_sequence=None)
-        self.assertEqual(self.key.signed, [])
+        """A recount statement under single-node derives collector_sequence from the witness
+        (the do_sign helper mocks witness_sequence to return 0, so the statement carries 0)."""
+        from deploy.baremetal import recover
+        signed = self.do_sign("recount", witnesses=[(None, None, None, None, None)], collector_sequence=None)
+        st = signed["statement"]
+        self.assertIn("collector_sequence", st)
+        self.assertEqual(st["collector_sequence"], 0)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
 
     def test_single_node_recount_with_collector_sequence(self):
         """A recount statement under single-node with a witness and collector_sequence is v2 with both fields."""
@@ -220,6 +240,46 @@ class SingleNodeRecovery(unittest.TestCase):
         self.assertEqual(st["collector_sequence"], 42)
         msg = recover.message(st)
         self.assertIn(b"v2", msg)
+
+    def test_single_node_recount_derives_collector_sequence_from_the_witness(self):
+        """A recount under single-node with no collector_sequence given derives it from the witness itself
+        (recover.witness_sequence over the same exports the epoch came from), never from the operator
+        (review defcc750, finding 2). A real collector receipt is verified, so the derivation is witnessed.
+
+        The epoch is also derived from the same witness: witness_epoch returns the highest epoch ALLOW in
+        the export. The export has epoch=3 for every beat-propose event, so witness_epoch returns 3.
+        The statement must carry collector_epoch=3 and collector_sequence=7 (the highest sequence)."""
+        from deploy.baremetal import recover
+        T0 = 1790000000
+        collector = Ed25519PrivateKey.generate()
+        keys = [pub(collector)]
+        out, chain = [], trails.LINE_CHAIN_START
+        for i, sequence in enumerate((3, 1, 7)):
+            line = json.dumps({"event": "beat-propose", "outcome": "ALLOW", "sequence": sequence,
+                               "epoch": 3, "at": T0 + i}, sort_keys=True)
+            raw = line.encode() + b"\n"
+            out.append({"sequence": i + 1, "detail": {"line": line, "line_sha256": hashlib.sha256(raw).hexdigest()}})
+            chain = trails.line_chain(chain, raw)
+        preimage = ("%s\n%s\n%s\n%d\n%s\n%s\n%s" % (trails.RECEIPT_DOMAIN, "id" * 32, "site-a.sync", len(out),
+                                                   "e" * 64, hashlib.sha256(raw).hexdigest(), chain)).encode()
+        receipt = {"sequence": len(out), "event_hash": "e" * 64,
+                   "line_sha256": hashlib.sha256(raw).hexdigest(), "line_chain": chain,
+                   "signature": collector.sign(preimage).hex()}
+        witness = (out, receipt, keys, "id" * 32, "site-a.sync")
+        # witness_epoch and witness_sequence both run against the real receipt; no mocks
+        from deploy.baremetal import recover
+        tip = recover.verify_chain(self.chain, self.ROOT_PUB)
+        self.typed = "recount a 3 %s" % m.digest(tip)[:8]
+        signed = owner.sign_recovery(self.chain, self.ROOT_PUB, self.record, "recount", "a", "s-1",
+                                     lambda: self.key, self.confirm, self.now,
+                                     witnesses=[witness], counter_epoch=None,
+                                     say=self.said.append, issued=self.issued,
+                                     collector_sequence=None)
+        st = signed["statement"]
+        self.assertEqual(st["collector_epoch"], 3)
+        self.assertEqual(st["collector_sequence"], 7)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
 
     def test_multi_node_keeps_v1_and_no_collector_escape(self):
         """Under a multi-node tip, v1 statements are accepted and the 'no collector' escape works."""

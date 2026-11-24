@@ -163,6 +163,25 @@ class SingleNodeRecount(Case):
         self.refused("refused under a multi-node manifest", recount.plan, self.counter, self.m1, [],
                      owner_statement=st, signer=lambda: 0)
 
+    def test_a_collector_sequence_outside_the_counter_range_is_refused(self):
+        """The floor is carried and the counter DELETED after the plan: a collector_sequence the counter cannot
+        define (>= 2^63, the range heartbeat.Counter._define_at enforces) must be refused HERE, or every retry
+        would retain a floor the TPM cannot define (review PR #778 thread PRRT_kwDOUcLtQM67UKHy)."""
+        self.break_counter()
+        man = self.single_manifest()
+        st = self.v2_recount_statement(collector_sequence=2 ** 63)
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=st, signer=lambda: 0)
+        # the bound itself is refused too (the range is 0 <= sequence < 2^63)
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=self.v2_recount_statement(collector_sequence=2 ** 63 - 1 + 1), signer=lambda: 0)
+        # and a negative one
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=self.v2_recount_statement(collector_sequence=-1), signer=lambda: 0)
+        # the top of the range is fine: it is carried, nothing is defined
+        self.assertEqual(recount.plan(self.counter, man, [], owner_statement=self.v2_recount_statement(collector_sequence=2 ** 63 - 1),
+                                      signer=lambda: 0)["floor"], 2 ** 63 - 1)
+
     def test_liveness_floor_must_not_go_below_signing_counter(self):
         """The floor is the max of everything named above AND the signing counter's current value: a floor
         below what the node has already signed would make the next heartbeat a replay. No margin."""

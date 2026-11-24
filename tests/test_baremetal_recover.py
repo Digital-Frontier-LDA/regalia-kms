@@ -118,6 +118,57 @@ class Witness(Case):
         self.refused("does not verify under the pinned", recover.witness_epoch, export, self.receipt(export, chain, last, Ed25519PrivateKey.generate()),
                      keys, "id" * 32, "site-b.sync")
 
+    def beat_export(self, sequences, epochs=None):
+        """The collector's export of the node's beat-propose events (beat.py:225 writes the sequence to the trail
+        line), with the same line/receipt mechanics as `export`."""
+        out, chain = [], trails.LINE_CHAIN_START
+        for i, sequence in enumerate(sequences):
+            line = json.dumps({"event": "beat-propose", "outcome": "ALLOW", "sequence": sequence,
+                               "epoch": (epochs[i] if epochs else sequence), "at": T0 + i}, sort_keys=True)
+            raw = line.encode() + b"\n"
+            out.append({"sequence": i + 1, "detail": {"line": line, "line_sha256": hashlib.sha256(raw).hexdigest()}})
+            chain = trails.line_chain(chain, raw)
+        return out, chain, hashlib.sha256(raw).hexdigest()
+
+    def test_witness_sequence_is_the_highest_beat_propose_allow(self):
+        """witness_sequence: the highest beat-propose ALLOW sequence in the witnessed stream; a stream with no
+        beat-propose ALLOW returns 0 (review defcc750, finding 2: it had no test)."""
+        collector = Ed25519PrivateKey.generate()
+        keys = [pub(collector)]
+        export, chain, last = self.beat_export([3, 1, 7])
+        self.assertEqual(recover.witness_sequence(export, self.receipt(export, chain, last, collector), keys, "id" * 32, "site-b.sync"), 7)
+        # no beat-propose ALLOW event at all (the sync-apply export): 0
+        sync_export, sync_chain, sync_last = self.export([1, 2])
+        self.assertEqual(recover.witness_sequence(sync_export, self.receipt(sync_export, sync_chain, sync_last, collector), keys, "id" * 32, "site-b.sync"), 0)
+        # a DENIED beat-propose does not count: rebuild the export with the tampered line and its correct receipt
+        denied_line = json.dumps({"event": "beat-propose", "outcome": "DENY", "sequence": 9,
+                                  "epoch": 9, "at": T0}, sort_keys=True)
+        denied_raw = denied_line.encode() + b"\n"
+        denied_export = [{"sequence": 1, "detail": {"line": denied_line,
+                                                    "line_sha256": hashlib.sha256(denied_raw).hexdigest()}}]
+        denied_chain = trails.line_chain(trails.LINE_CHAIN_START, denied_raw)
+        denied_last = hashlib.sha256(denied_raw).hexdigest()
+        self.assertEqual(recover.witness_sequence(denied_export, self.receipt(denied_export, denied_chain, denied_last, collector), keys, "id" * 32, "site-b.sync"), 0)
+
+    def test_witness_sequence_refuses_an_export_its_receipt_does_not_hold_for(self):
+        """A receipt that does not hold for the export (a different last line, a wrong key) is refused: the
+        sequence is witnessed, never free."""
+        collector = Ed25519PrivateKey.generate()
+        keys = [pub(collector)]
+        export, chain, last = self.beat_export([3, 5])
+        # the receipt signs a different export (its last line is not the export's)
+        other, _, other_last = self.beat_export([9])
+        self.refused("not for this export", recover.witness_sequence, export,
+                     self.receipt(other, other, other_last, collector), keys, "id" * 32, "site-b.sync")
+        # the receipt does not verify under the pinned keys
+        self.refused("does not verify under the pinned", recover.witness_sequence, export,
+                     self.receipt(export, chain, last, Ed25519PrivateKey.generate()), keys, "id" * 32, "site-b.sync")
+        # a tampered line breaks the named hash
+        tampered = [dict(e) for e in export]
+        tampered[1] = dict(tampered[1], detail=dict(tampered[1]["detail"], line=tampered[1]["detail"]["line"].replace('"sequence": 5', '"sequence": 99')))
+        self.refused("does not hold the line it names", recover.witness_sequence, tampered,
+                     self.receipt(export, chain, last, collector), keys, "id" * 32, "site-b.sync")
+
 
 class OwnerSide(Witness):
     def record(self, epoch, manifest):
@@ -595,3 +646,19 @@ class SingleNodeCommand(Recovers):
         self.refused("owner_chain is refused under a multi-node tip", self.single_apply, c,
                      owner_chain=self.stores["b"].envelopes(), one_source=self.single_v2(tip, node="c"))
         self.assertEqual(self.outcomes(), [("recover", "DENY")])
+
+    def test_apply_owner_chain_refused_under_multi_node_tip_with_a_v1_statement(self):
+        """Under a multi-node tip the owner chain is refused BEFORE the statement is read: with a v1 statement
+        (no collector_epoch) the old code read one_source['statement']['collector_epoch'] for the phrase and
+        raised a KeyError outside the Refused handler, so the refusal was never recorded (review defcc750,
+        finding 3; the review's PROBE3 showed the KeyError and an empty trail). Now it is a Refused, in the trail."""
+        c = self.crash_window()
+        # a v1 statement (no collector_epoch), as the owner's tool signs it under a multi-node tip
+        st = recover.statement("recover", "c", self.e3["manifest"], "bb" * 8 + ":boot-x", T0 + 300)
+        v1 = {"statement": st, "key": "11" * 32, "sig": "22" * 64}
+        # the refusal is a Refused: apply() raises it and the runner records it
+        self.refused("owner_chain is refused under a multi-node tip", self.single_apply, c,
+                     owner_chain=self.stores["b"].envelopes(), one_source=v1)
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        # the denial says why, and names the owner chain, not a KeyError
+        self.assertIn("owner_chain is refused", self.trail[-1]["reason"])

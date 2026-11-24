@@ -405,11 +405,12 @@ def main(argv=None):
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         k.add_argument(flag, **kw)                  # the same token options as `beat`
-    v = sub.add_parser("sign-recovery", help="(off the nodes) the owner as the second source of a one-peer recovery or re-anchor (#387)")
-    v.add_argument("--chain", required=True, help="the ONE peer's signed chain, as the node exported it")
+    v = sub.add_parser("sign-recovery", help="(off the nodes) the owner as the second source of a one-peer recovery, re-anchor, "
+                                             "or the single-node recount floor (docs/design/single-node.md 4.7; #387)")
+    v.add_argument("--chain", required=True, help="the ONE peer's signed chain, as the node exported it (for recount: this node's own chain)")
     v.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     v.add_argument("--record", required=True, help="this machine's manifest signing record (manifest.py's signing-record.jsonl)")
-    v.add_argument("--purpose", required=True, choices=("recover", "reanchor"))
+    v.add_argument("--purpose", required=True, choices=("recover", "reanchor", "recount"))
     v.add_argument("--node-id", required=True, help="the node being recovered")
     v.add_argument("--session", required=True, help="the session the node printed (`recover session`)")
     v.add_argument("--session-issued", type=int, required=True, help="the ISSUED time `recover session` printed (the node's authenticated time)")
@@ -606,8 +607,15 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             with os.fdopen(fd, "w") as f:
                 json.dump(signed, f, sort_keys=True)
-            print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
-                  % (args.out, signed["statement"]["expires"]))
+            if args.purpose == "recount":
+                print("WRITTEN: %s, valid until %d; give it to the node (recount --owner-statement, single-node: "
+                      "docs/design/single-node.md 4.7)" % (args.out, signed["statement"]["expires"]))
+            elif signed["statement"].get("collector_epoch") is not None:
+                print("WRITTEN: %s, valid until %d; give it to the node (recover apply --owner-chain --owner-statement, "
+                      "single-node: docs/design/single-node.md 4.7)" % (args.out, signed["statement"]["expires"]))
+            else:
+                print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
+                      % (args.out, signed["statement"]["expires"]))
             return 0
         if args.op in ("sign-survivor", "sign-directive"):
             off_the_nodes()

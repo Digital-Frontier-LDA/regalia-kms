@@ -39,6 +39,8 @@ TPM anchor) and every heartbeat through Freshness.accept (signer, manifest, time
 audited(sink, ...) runs one decision and emits one event for it, allowed or denied, naming the epoch: the
 record #69 asks for. A reason is cut to printable ASCII; none of the decisions puts a secret in one.
 """
+import re
+
 from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
@@ -139,6 +141,9 @@ def agreed(root_key, sources, minimum, anchored, owner_chain=None):
     "may authorize" check, since the owner is not a node of any chain (docs/design/single-node.md 4.7)."""
     require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
             "sources must map each source (a node ID) to the non-empty chain it gave")
+    # every sources key must look like a node ID: this keeps the caller's keys out of the name space of the
+    # owner chain, which the "may authorize" loop exempts by key (a caller-supplied "__owner__" key must not
+    # be able to opt out of the node check -- review defcc750, finding 1)
     # the owner chain, if given: it goes through the same checks but is not a node, so the "may authorize"
     # check is skipped for it; it is refused under a multi-node tip
     if owner_chain is not None:

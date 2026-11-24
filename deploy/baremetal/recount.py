@@ -143,6 +143,9 @@ def plan(counter, manifest, documents, prior=0, owner_statement=None, signer=Non
                 "source for a multi-node recount (the heartbeats are)" % membership.profile(manifest))
         st = owner_statement["statement"] if isinstance(owner_statement, dict) and "statement" in owner_statement else owner_statement
         require(st.get("purpose") == "recount", "the owner statement is for %r, not recount" % st.get("purpose"))
+        # the counter's own range (heartbeat.Counter._define_at: 0 <= sequence < 2^63): a statement outside it
+        # is refused HERE, before the floor is carried and the counter deleted, or every retry would retain a
+        # floor the TPM cannot define (review PR #778 thread PRRT_kwDOUcLtQM67UKHy)
         require(isinstance(st.get("collector_sequence"), int) and not isinstance(st["collector_sequence"], bool),
                 "the recount statement must name collector_sequence (an integer)")
     else:

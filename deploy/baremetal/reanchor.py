@@ -490,6 +490,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
         for item in args.peer:
             node_id, sep, path = item.partition("=")
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
+            require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None,
+                    "--peer names %r: it is not a node ID" % node_id)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
         owner = None

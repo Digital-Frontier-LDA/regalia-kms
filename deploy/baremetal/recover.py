@@ -358,8 +358,13 @@ def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, n
         if owner_chain is not None:
             require(not peers, "--owner-chain does not take --peer: give the owner's chain alone (single-node, docs/design/single-node.md 4.7)")
             tip = verify_chain(owner_chain, root_key, known)
-            # under single-node, the owner's statement must be v2 (with collector_epoch)
+            # under single-node, the owner's statement must be v2 (with collector_epoch); under a multi-node
+            # tip the owner chain is refused here, before the statement is read (a v1 statement has no
+            # collector_epoch: reading it would be an unrecorded KeyError, not a Refused -- review defcc750)
             is_single = membership.profile(tip) == membership.SINGLE_NODE
+            require(is_single,
+                    "owner_chain is refused under a %s tip: only a single-node manifest accepts it as the sole source"
+                    % membership.profile(tip))
             owner_check(node, one_source, "recover", "owner-chain", now, boot_id=boot_id)(tip, single_node=is_single)
         if one_source is not None and owner_chain is None:
             require(len(peers) == 1, "--one-source takes exactly one --peer: with two, recover from both")

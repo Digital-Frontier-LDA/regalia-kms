@@ -1056,6 +1056,37 @@ class OwnerChainReanchor(Case):
         # anchored at epoch 3, chain ends at 2
         self.refused("a fetched chain ends at epoch 2, below the TPM high-water 3", reanchor.plan, store, {}, "a", owner_chain=short)
 
+    def test_main_refuses_a_peer_named_the_owner(self):
+        """At the command, --peer takes a node ID only: the reserved name "__owner__" is refused before anything
+        is read (review defcc750, finding 1: it used to reach plan() and skip the 'may authorize' check)."""
+        import io as io_mod
+        import json as json_mod
+        chain = self.multi_chain(3)
+        peer_path = self.d + "/owner-chain.json"
+        with open(peer_path, "wb") as f:
+            f.write(json_mod.dumps(chain).encode())
+        real_open = open
+        opened = []
+
+        def refusing_open(path, *args, **kwargs):
+            opened.append(path)
+            if path == peer_path:
+                raise OSError("not opened: the name was refused")
+            return real_open(path, *args, **kwargs)
+
+        err = io_mod.StringIO()
+        with unittest.mock.patch("deploy.baremetal.reanchor.check_esp"), \
+                unittest.mock.patch("deploy.baremetal.reanchor.active_units", return_value=[]), \
+                unittest.mock.patch("builtins.open", side_effect=refusing_open), \
+                unittest.mock.patch("sys.stderr", err):
+            rc = reanchor.main(["--membership", self.path, "--root-key", ROOT_PUB,
+                                "--tpm-index", "0x1500100", "--node-id", "a",
+                                "--peer", "__owner__=" + peer_path],
+                               ask=lambda phrase: None)
+        self.assertEqual(rc, 1, err.getvalue())
+        self.assertIn("not a node ID", err.getvalue())
+        self.assertNotIn(peer_path, opened)
+
 
 class OnlyAnOperator(unittest.TestCase):
     """Re-anchoring resets rollback protection. Nothing a service runs, and nothing that handles what a peer
