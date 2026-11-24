@@ -82,7 +82,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, etcdconf, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch,
+from deploy.baremetal import (admission, hostpaths, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch,
                               lease, measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -544,8 +544,11 @@ def restore_pending_metrics(publish=None):
     1 while the marker exists: etcd and the daemon hold SKIPPED and the node serves nothing,
     silently (skipped, not failed). Never raises: a metric does not change the run's outcome."""
     publish = publish or (lambda samples: metrics.publish("restore", samples))
+    # The marker's /var name: computed here from hostpaths (a host module), not imported from
+    # etcdconf ([not-on-host]: it renders the etcd configuration, a host tool). etcdconf.STORED_RESTORE_PENDING
+    # is the same value; the test that checks the path holds them together.
     try:
-        pending = os.path.lexists(etcdconf.STORED_RESTORE_PENDING)
+        pending = os.path.lexists(hostpaths.persistent("/etc/regalia/restore-pending"))
         publish([("regalia_restore_pending", {}, 1 if pending else 0)])
     except Exception:                                   # noqa: BLE001 - see above
         pass
