@@ -373,7 +373,7 @@ func TestCosmosSignDocSignerKeyMustBeCompressed(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		coordinator, state, recorder, now := realEngineCoordinator(t, transaction, cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey()))), card)
+		coordinator, state, _, now := realEngineCoordinator(t, transaction, cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey()))), card)
 		request := cosmosRequest(withSignerKey(t, cosmosFixture(t), secp256k1KeyType, card.signer.PubKey().SerializeUncompressed()))
 		request.Context.ExpiresAt = now.Add(30 * time.Second)
 		if result, err := coordinator.Execute(context.Background(), request); err == nil || len(result.Data) != 0 {
