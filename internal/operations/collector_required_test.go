@@ -282,23 +282,23 @@ func TestASingleNodeWithNoCollectorServesAPlainSign(t *testing.T) {
 }
 
 // THE REQUIREMENT FOLLOWS THE POLICY'S OWN ANSWER, NOT A STATIC LIST: a policy that names no
-// Cosmos section reserves no sequence, so its sign serves even under the refusal — and the same
-// sign under a Cosmos policy is refused. The shape is judged per request, by the engine.
+// Cosmos section reserves no sequence, so a sign under it is not refused by the requirement — the
+// plain sign serves (the fixture's route signs a digest); a sign that carries a Cosmos transaction
+// under a policy that names a Cosmos section IS refused, before the reservation. The judgment is
+// the engine's own (ReservesCosmosSequence), not a list of operation names.
 func TestTheCosmosRefusalFollowsThePolicyAnswer(t *testing.T) {
-	_, _, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
-	_ = hardware
-	// A non-Cosmos policy's sign: served.
+	// A policy that names no Cosmos section: its plain sign is not refused and serves.
 	coordinator, semantic, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
 	semantic.cosmos = false
-	if result, err := coordinator.Execute(context.Background(), cosmosSignRequest()); err != nil {
-		t.Fatalf("a sign whose policy names no Cosmos section is refused: %v", err)
+	if result, err := coordinator.Execute(context.Background(), statelessNamedRequest("sign")); err != nil {
+		t.Fatalf("a sign whose policy names no Cosmos section is refused by the requirement: %v", err)
 	} else if string(result.Data) != "data-key" {
 		t.Fatalf("the served sign returned %q", result.Data)
 	}
 	if hardware.calls != 1 {
 		t.Fatalf("the token was used %d times, want 1", hardware.calls)
 	}
-	// The SAME request under a Cosmos policy: refused.
+	// A sign that carries a Cosmos transaction, under a policy that names a Cosmos section: refused.
 	coordinator, semantic, recorder, hardware, router := collectorFixture(t, admission.ModeSingle, false)
 	semantic.cosmos = true
 	result, err := coordinator.Execute(context.Background(), cosmosSignRequest())
