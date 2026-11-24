@@ -3,6 +3,8 @@ package admission
 import (
 	"context"
 	"testing"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/cmd/regalia-unlock/membership"
 )
 
 // The gate's answer carries the MODE it was made under (regalia-kms-dx7.9): the coordinator

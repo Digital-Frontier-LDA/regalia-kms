@@ -20,13 +20,16 @@ import (
 // is the only history; without the off-host copy the spend could be replayed after a disk loss,
 // and no alert could ever say so. A configured collector that is UNREACHABLE does not refuse:
 // the trail ships later and RegaliaAuditTrailBehind alerts. A STATELESS operation (sign,
-// decrypt, ...) keeps serving: it reserves nothing.
+// unwrap, certificate-sign — the set api.StatelessOperations names) keeps serving: it reserves
+// nothing. The fixture mirrors the daemon's wiring (cmd/regalia-kms/main.go): the requirement is
+// on by the mode, not the profile, and the stateless set is the daemon's own.
 //
 // The gate the coordinator is handed reports the mode through the admission package's own
 // Status, so the refusal lives in the real shape of the answer.
 
 // modeGate is an Admission that also reports the mode its answer was made under
-// (admission.Status.Mode), the way the production gate will.
+// (ModeAdmission: admission.Status.Mode), the way the production gate does. SetSingleNodeAdmission
+// accepts only a gate that reports its mode, so the fixture is the interface, not a superset of it.
 type modeGate struct {
 	ready bool
 	mode  string
@@ -34,6 +37,8 @@ type modeGate struct {
 
 func (gate *modeGate) Ready(context.Context) bool { return gate.ready }
 func (gate *modeGate) Mode() string               { return gate.mode }
+
+var _ ModeAdmission = (*modeGate)(nil)
 
 // collectorFixture builds the coordinator the way the daemon does (New, admission runner over the
 // executor on the same gate, RequireAdmission) and, when the mode is single, names the single-node
@@ -75,18 +80,23 @@ func wantServed(t *testing.T, hardware *fakeHardware, recorder *fakeAudit, resul
 	if err != nil || hardware.calls != 1 || string(result.Data) != "data-key" {
 		t.Fatalf("Execute = %#v, %v; token used %d times: the operation should have served", result, err, hardware.calls)
 	}
+	if recorder == nil {
+		return
+	}
 	last := recorder.drafts[len(recorder.drafts)-1]
 	if last.Decision != "allow" || last.Outcome != "success" {
 		t.Fatalf("audit events = %#v: a served operation is recorded as such", recorder.drafts)
 	}
 }
 
-// THE REFUSAL: a single admission, no collector configured, a stateful operation. It is refused
-// before policy is evaluated, so nothing is reserved: the spend-once nonce, the quota, the
-// sequence — none is spent on work the node will not be able to prove it did.
+// THE REFUSAL: a single admission, no collector configured, a stateful operation — a wrap, the
+// operation that reserves the spend-once nonce and quota the trail would record as spent. It is
+// refused before policy is evaluated, so nothing is reserved: the nonce, the quota, the sequence —
+// none is spent on work the node will not be able to prove it did. (The fixture's default request
+// is an unwrap: the open of a spend already made at seal time, stateless by D2.)
 func TestASingleNodeWithNoCollectorRefusesAStatefulOperationBeforePolicy(t *testing.T) {
 	coordinator, semantic, recorder, hardware, router := collectorFixture(t, admission.ModeSingle, false)
-	result, err := coordinator.Execute(context.Background(), operationRequest())
+	result, err := coordinator.Execute(context.Background(), statefulRequest())
 	wantCollectorNotConfigured(t, result, err)
 	if semantic.calls != 0 {
 		t.Fatalf("policy was evaluated %d times: the refusal must come before any policy state is reserved", semantic.calls)
@@ -104,7 +114,7 @@ func TestASingleNodeWithNoCollectorRefusesAStatefulOperationBeforePolicy(t *test
 // collector right now is the shipper's problem — it ships later, and the backlog alerts.
 func TestASingleNodeWithACollectorServesAStatefulOperation(t *testing.T) {
 	coordinator, semantic, recorder, hardware, _ := collectorFixture(t, admission.ModeSingle, true)
-	result, err := coordinator.Execute(context.Background(), operationRequest())
+	result, err := coordinator.Execute(context.Background(), statefulRequest())
 	if err != nil {
 		t.Fatalf("a configured-but-silent collector refuses the operation: %v (an outage alerts, it does not refuse)", err)
 	}
@@ -114,20 +124,39 @@ func TestASingleNodeWithACollectorServesAStatefulOperation(t *testing.T) {
 	}
 }
 
-// STATELESS STAYS SERVED: the same configuration refuses the stateful half, and a sign — which
-// reserves no policy or opstate state — still does its work.
-func TestASingleNodeWithNoCollectorStillServesStateless(t *testing.T) {
-	coordinator, _, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
-	coordinator.SetStatelessOperations([]string{"sign"})
-	result, err := coordinator.Execute(context.Background(), signRequest())
-	wantServed(t, hardware, nil, result, err)
+// THE SET IS THE DAEMON'S OWN, AND ITS COMPLEMENT CROSSES NO LINE: every operation the daemon
+// names stateless (sign, unwrap, certificate-sign) is served under the refusal, and every
+// operation it does not name is refused. One list, two sides, no drift: a name added to
+// api.StatelessOperations that should stay refused (or removed that should be served) fails here,
+// not in production.
+func TestEveryOperationTheDaemonNamesStatelessIsServedUnderTheRefusal(t *testing.T) {
+	for _, name := range api.StatelessOperations() {
+		t.Run(name, func(t *testing.T) {
+			coordinator, _, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
+			result, err := coordinator.Execute(context.Background(), statelessNamedRequest(name))
+			wantServed(t, hardware, nil, result, err)
+		})
+	}
+	for _, name := range []string{"wrap", "key-agreement", "release-secret", "seal-envelope"} {
+		t.Run(name, func(t *testing.T) {
+			coordinator, semantic, recorder, hardware, router := collectorFixture(t, admission.ModeSingle, false)
+			result, err := coordinator.Execute(context.Background(), statelessNamedRequest(name))
+			wantCollectorNotConfigured(t, result, err)
+			if semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {
+				t.Fatalf("a refused %s did work: policy %d, token %d, routing %d", name, semantic.calls, hardware.calls, router.calls)
+			}
+			if len(recorder.drafts) != 1 || recorder.drafts[0].Decision != "deny" || recorder.drafts[0].Outcome != "collector-not-configured" {
+				t.Fatalf("audit events = %#v: the refusal is recorded and named", recorder.drafts)
+			}
+		})
+	}
 }
 
 // MULTI-NODE IS UNCHANGED: no collector configured, a stateful operation serves, as it always
 // has (the fleet's reconciliation and backlog alerts are its controls).
 func TestAMultiNodeNodeWithoutACollectorIsUnchanged(t *testing.T) {
 	coordinator, semantic, recorder, hardware, _ := collectorFixture(t, admission.ModeLease, false)
-	result, err := coordinator.Execute(context.Background(), operationRequest())
+	result, err := coordinator.Execute(context.Background(), statefulRequest())
 	wantServed(t, hardware, recorder, result, err)
 	if semantic.calls != 1 {
 		t.Fatalf("policy evaluated %d times, want 1", semantic.calls)
@@ -149,11 +178,29 @@ func TestNoAdmissionAtAllIsUnchanged(t *testing.T) {
 	wantServed(t, hardware, recorder, result, err)
 }
 
-func signRequest() api.Request {
+// statefulRequest is a wrap: the operation that reserves the spend-once nonce and quota (the
+// data key the trail would record as spent). operationRequest is its complement, the unwrap of an
+// already-spent seal.
+func statefulRequest() api.Request {
 	request := operationRequest()
-	request.Operation = "sign"
+	request.Operation = "wrap"
 	request.Format = ""
-	request.Data = []byte("the digest")
+	request.Data = []byte("the key to spend")
+	request.Context.Purpose = "sops-data-key"
+	return request
+}
+
+// statelessNamedRequest is the daemon's own stateless set, one request at a time: sign opens
+// nothing, unwrap opens a spend already made at seal time, certificate-sign issues a certificate.
+func statelessNamedRequest(name string) api.Request {
+	request := operationRequest()
+	request.Operation = name
+	request.Format = ""
+	if name == "sign" {
+		request.Data = []byte("the digest")
+	} else if name == "certificate-sign" {
+		request.Data = []byte("the certificate request")
+	}
 	request.Context.Purpose = "sops-data-key"
 	return request
 }

@@ -47,6 +47,11 @@ the target's live samples are unavailable.
 `metrics_path: /v1/metrics` for the daemon. Use `scheme: https` and the respective TLS configuration on
 each job. Use these exact names and keep one cluster per rule evaluation environment. Fleet comparisons
 group on `job`, so combining multiple clusters under the name would skew those comparisons.
+**The collector scrape job is `regalia-collector`.** Configure `job_name: regalia-collector` with
+`metrics_path: /metrics` for the audit collector's own witness (regalia-kms-dx7.9, D1=A): the off-host
+reference the single-node behind rules compare a node against. It is scraped on the owner's monitoring
+service (not the node), and relabels the series' `site` to `instance` so the reference carries the node's
+instance under the collector's job (section 4.1).
 
 As a commissioning prerequisite, register **both** endpoints for every node in persistent external scrape
 inventory. Set the target label `topology_profile` to the fixed value `single-node` or `multi-node` on both jobs.

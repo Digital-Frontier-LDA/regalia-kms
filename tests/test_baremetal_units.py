@@ -458,6 +458,9 @@ class NodeMetricsDirectories(unittest.TestCase):
               "admission": ("regalia-admission.service", "regalia-admission"),
               "esp-advance": ("regalia-esp-advance.service", "root"),
               "site-check": ("regalia-site-check.service", "root"),
+              # the restore-pending boot guard's (regalia-kms-dx7.9): written at boot by the node
+              # (regalia-sync) and at mark/clear by restore.py (root, in its own mode)
+              "restore": ("regalia-sync.service", "regalia-sync"),
               "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
 
     def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):
