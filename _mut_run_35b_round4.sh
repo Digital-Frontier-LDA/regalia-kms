@@ -11,8 +11,8 @@ echo "== HEAD $HEAD_NOW"
 echo "== baseline"; base=$(go test -count=1 $PKG 2>&1); echo "$base" | tail -3
 echo "$base" | grep -q '^ok' || { echo "BASELINE NOT GREEN: stop"; exit 2; }
 m(){ name=$1 file=$2 from=$3 to=$4
-  if ! python3 -c "import sys;p,a,b=sys.argv[1:];t=open(p).read();sys.exit(0 if t.count(a)==1 else 1)" "$file" "$from" "$to"; then echo "$name: NOT APPLIED (pattern not exactly once)"; return; fi
-  python3 -c "import sys;p,a,b=sys.argv[1:];t=open(p).read();open(p,'w').write(t.replace(a,b))" "$file" "$from" "$to"
+  if ! python3 -I -c "import sys;p,a,b=sys.argv[1:];t=open(p).read();sys.exit(0 if t.count(a)==1 else 1)" "$file" "$from" "$to"; then echo "$name: NOT APPLIED (pattern not exactly once)"; return; fi
+  python3 -I -c "import sys;p,a,b=sys.argv[1:];t=open(p).read();open(p,'w').write(t.replace(a,b))" "$file" "$from" "$to"
   out=$(go test -count=1 $PKG 2>&1); git checkout -q -- "$file"
   git diff --quiet || { echo "TREE NOT RESTORED after $name"; exit 3; }
   fails=$(printf '%s\n' "$out" | grep -E '^\s*--- FAIL: ' | sed -E 's/^\s*--- FAIL: ([^ ]+).*/\1/' | sort -u | paste -sd' ' -)
