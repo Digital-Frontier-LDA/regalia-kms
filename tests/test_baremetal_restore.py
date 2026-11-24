@@ -90,10 +90,17 @@ class FakeHost:
         return self.files[path]
 
     def write(self, path, text, owner=None, mode=0o644):
+        if path == rs.STORED_PENDING:
+            self.calls.append(["write", path])
         self.files[path], self.owners[path] = text, (owner, mode)
 
     def remove(self, path):
+        if path == rs.STORED_PENDING:
+            self.calls.append(["remove", path])
         self.files.pop(path, None)
+
+    def sync_dir(self, path):
+        self.calls.append(["fsync", path])
 
     def exists(self, path):
         if path == rs.STAGING:
@@ -229,6 +236,7 @@ class Restore(unittest.TestCase):
             ctl + ["get", opstate.STATE_EPOCH_KEY, "-w", "json"], ctl + ["txn", "-w", "json"], ctl + ["get", opstate.STATE_EPOCH_KEY, "-w", "json"],
             ["systemctl", "stop", rs.UNIT], ["systemctl", "is-active", rs.UNIT],
             ["exchange", rs.STAGING + "/member", rs.MEMBER],
+            ["remove", rs.STORED_PENDING], ["fsync", os.path.dirname(rs.STORED_PENDING)],          # the marker, only once exchanged
             ["systemctl", "daemon-reload"], ["systemctl", "restart", rs.UNIT],
             ["systemctl", "show", "--property=DropInPaths", "--value", rs.UNIT], ["systemctl", "show", "--property=DropInPaths", "--value", rs.UNIT],
             ctl + ["endpoint", "status", "-w", "json"], ctl + ["member", "list", "-w", "json"], ctl + ["get", opstate.STATE_EPOCH_KEY, "-w", "json"],
@@ -248,7 +256,9 @@ class Restore(unittest.TestCase):
         staged = json.loads(rs.staged_config(self.host.files[etcdconf.CONFIG_PATH]))
         normal = json.loads(self.host.files[etcdconf.CONFIG_PATH])
         self.assertEqual(staged, dict(normal, **{"data-dir": rs.STAGING}))
-        self.assertEqual(rs.dropin(), "[Service]\nExecStart=\nExecStart=/usr/bin/etcd --config-file /run/regalia-etcd/restore.conf.yml\n")
+        self.assertEqual(rs.dropin(), "[Unit]\nConditionPathExists=\nConditionPathExists=/etc/regalia/etcd.conf.yml\n"
+                                      "ConditionPathExists=/etc/regalia/node.json\n"
+                                      "[Service]\nExecStart=\nExecStart=/usr/bin/etcd --config-file /run/regalia-etcd/restore.conf.yml\n")
 
     def test_a_restore_over_a_snapshot_that_holds_an_older_epoch(self):
         self.host = FakeHost(self.chain, snapshot_kv=held(self.chain, 2))
@@ -509,6 +519,98 @@ class Restore(unittest.TestCase):
         self.refused("etcdutl snapshot restore failed (1): snapshot file has wrong CRC")
         self.assertTrue(self.host.daemon and self.host.etcd)
         self.assertNotIn(rs.DROPIN, self.host.files)
+
+
+class RestorePending(unittest.TestCase):
+    """regalia-kms-dx7.26: with no live store (the lost disk), the restore writes /etc/regalia/restore-pending (by its /var
+    name, its directory fsynced) before it stops anything, keeps it on every refusal, and removes it only once the
+    restored store holding R is exchanged into place: a reboot meanwhile starts neither etcd (a new, empty cluster) nor the
+    daemon. units/*/10-restore-pending.conf skip both while it is there; the restore's /run drop-in lifts it for etcd."""
+
+    def setUp(self):
+        self.chain = chain()
+        self.host = FakeHost(self.chain)
+        self.host.live, self.host.etcd, self.host.serving = None, False, None          # the lost disk
+        self.signed = statement(self.chain)
+
+    def run_it(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+
+    def refused(self, reason):
+        with self.assertRaises(m.Refused) as caught:
+            self.run_it()
+        self.assertIn(reason, str(caught.exception))
+        return str(caught.exception)
+
+    def kept(self):
+        self.assertIn(rs.STORED_PENDING, self.host.files)
+        doc = json.loads(self.host.files[rs.STORED_PENDING])
+        self.assertEqual((doc["schema"], doc["written_at"]), (rs.PENDING_SCHEMA, "2026-10-06T12:00:00Z"))
+        self.assertNotIn(["remove", rs.STORED_PENDING], self.host.calls)
+        self.assertNotIn(["systemctl", "start", rs.DAEMON], self.host.calls)
+        self.assertFalse(self.host.daemon)
+
+    def test_the_marker_is_durable_before_anything_stops_and_removed_only_once_exchanged(self):
+        self.assertEqual(self.run_it(), 3)
+        calls = self.host.calls
+        for step in (["write", rs.STORED_PENDING], ["remove", rs.STORED_PENDING]):
+            self.assertIn(step, calls)
+        write, synced = calls.index(["write", rs.STORED_PENDING]), calls.index(["fsync", os.path.dirname(rs.STORED_PENDING)])
+        self.assertLess(write, synced)
+        self.assertLess(synced, calls.index(["systemctl", "stop", rs.DAEMON]))
+        exchange, removed = calls.index(["exchange", rs.STAGING + "/member", rs.MEMBER]), calls.index(["remove", rs.STORED_PENDING])
+        self.assertLess(exchange, removed)
+        self.assertEqual(calls[removed + 1], ["fsync", os.path.dirname(rs.STORED_PENDING)])
+        self.assertLess(removed, calls.index(["systemctl", "restart", rs.UNIT]))
+        self.assertNotIn(rs.STORED_PENDING, self.host.files)
+        self.assertTrue(self.host.daemon)
+
+    def test_with_a_live_store_no_marker_is_written(self):
+        self.host = FakeHost(self.chain)
+        with contextlib.redirect_stdout(io.StringIO()):
+            rs.run(self.host, self.signed, self.chain, "a", SNAPSHOT, NOW, sign)
+        self.assertNotIn(["write", rs.STORED_PENDING], self.host.calls)
+
+    def test_a_refusal_before_staging_keeps_it_and_starts_nothing(self):
+        self.host.restore_fails = True
+        said = self.refused("etcdutl snapshot restore failed (1)")
+        self.kept()
+        self.assertFalse(self.host.etcd)
+        self.assertIn(rs.PENDING, said)
+
+    def test_a_refusal_on_staging_keeps_it(self):
+        self.host = FakeHost(self.chain, snapshot_kv=held(self.chain, 3))
+        self.host.live, self.host.etcd, self.host.serving = None, False, None
+        said = self.refused("the restored store holds state epoch 3")
+        self.kept()
+        self.assertIn(rs.PENDING, said)
+
+    def test_a_failed_exchange_keeps_it(self):
+        self.host.exchange_fails = True
+        self.refused("the exchange of %s/member and %s failed" % (rs.STAGING, rs.MEMBER))
+        self.kept()
+
+    def test_an_exchange_not_known_durable_keeps_it_and_says_when_to_remove_it(self):
+        self.host.not_durable = True
+        said = self.refused("the fsync of its directory failed")
+        self.kept()
+        self.assertIn("remove %s by hand only once the live etcd reads state epoch 3" % rs.PENDING, said)
+
+    def test_mark_pending_writes_it_at_the_console(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(rs.main(["mark-pending"], host=self.host, now=NOW), 0)
+        self.assertEqual(self.host.calls, [["write", rs.STORED_PENDING], ["fsync", os.path.dirname(rs.STORED_PENDING)]])
+        self.assertEqual(json.loads(self.host.files[rs.STORED_PENDING])["reason"], "restore mark-pending, at the console")
+        self.assertIn(rs.PENDING, out.getvalue())
+
+    def test_the_marker_is_the_units_and_written_by_its_var_name(self):
+        self.assertEqual(rs.PENDING, "/etc/regalia/restore-pending")
+        self.assertEqual(rs.STORED_PENDING, "/var/lib/regalia-etc/regalia/restore-pending")
+        here = os.path.dirname(os.path.abspath(__file__))
+        for unit in ("regalia-etcd.service.d", "regalia-kms.service.d"):
+            with open(os.path.join(here, "..", "deploy", "baremetal", "units", unit, "10-restore-pending.conf")) as f:
+                self.assertIn("\nConditionPathExists=!%s\n" % rs.PENDING, f.read())
 
 
 class Main(unittest.TestCase):

@@ -175,6 +175,7 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
     def installed(self, etc, public, signature_path):
         """commit's configuration paths under this test's directory, and the running image's PCR key and signature."""
         with patch.object(enrol, "CONFIG_DIR", etc), patch.object(enrol, "NODE_JSON", etc + "node.json"), \
+                patch.object(enrol, "RESTORE_PENDING", etc + "restore-pending"), \
                 patch.object(enrol, "CHRONY_CONF", self.d + "/etc-chrony/regalia.conf"), \
                 patch.object(signkey, "PCR_PUBLIC_KEY_PATH", public), patch.object(signkey, "PCR_SIGNATURE_PATHS", (signature_path,)):
             yield
@@ -270,6 +271,8 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
             area = subprocess.run(["tpm2_nvreadpublic", example["nv_epoch"]], check=True, capture_output=True, text=True).stdout
             self.assertIn("authorization policy: " + signkey.policy(pem).hex().upper(), area)
             self.assertTrue(enrol.Journal(self.dir, "a").get("heartbeat_first")["bootstrap"])
+            # regalia-kms-dx7.26: genesis (--bootstrap) holds nothing back: etcd and the daemon start at the first boot
+            self.assertFalse(os.path.lexists(etc + "restore-pending"))
             self.assertEqual(bootnet.unlock_endpoints(site, man), {"owner": "10.89.0.9:7443"})
             wg = bootnet.boot_wg_conf(site, man)
             self.assertEqual(wg.count("[Peer]"), 1)
@@ -337,7 +340,19 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
                 self.assertEqual(enrol.Journal(self.dir, "a").doc, before_journal)
                 self.assertEqual(handed, [])
                 return
-            self.assertEqual(commit("b"), (3, membership.digest(third)))
+            installing = enrol.install_config
+
+            def install_config(*args, **kw):
+                # regalia-kms-dx7.26: the marker is the commit's first persistent write, before node.json exists
+                self.assertTrue(os.path.isfile(etc + "restore-pending"), "node.json is installed before the restore-pending marker")
+                self.assertFalse(os.path.lexists(etc + "node.json"))
+                return installing(*args, **kw)
+
+            with patch.object(enrol, "install_config", install_config):
+                self.assertEqual(commit("b"), (3, membership.digest(third)))
+            with open(etc + "restore-pending") as f:
+                self.assertEqual(json.load(f)["schema"], "regalia.restore-pending/v1")
+            self.assertIn("RESTORE-PENDING:", out.getvalue())
             self.assertEqual(handed, [None], "the policy-writing sync step receives no owner authorization")
             here = node.Node(node.load(etc + "node.json"))
             self.assertEqual(here.store().load(), third)
@@ -362,3 +377,218 @@ class SingleNodeGenesisOnSwtpm(unittest.TestCase):
             self.assertEqual(heartbeat.verify(envelope, third)["sequence"], 1)
             self.assertEqual((beat.held_sequence(freshness, third), freshness.counter.value(), signer.signed()), (1, 1, 1))
             self.assertEqual(trail[-1]["outcome"], "ALLOW")
+
+
+class RestorePendingAtEnrolment(unittest.TestCase):
+    """regalia-kms-dx7.26: a single-node commit without --bootstrap (a replacement disk: no live etcd history on it) writes
+    /etc/regalia/restore-pending before node.json, so neither etcd nor the daemon starts at any boot until a restore has
+    exchanged a store holding a raised state epoch. Genesis (--bootstrap), a resumed commit and multi-node write nothing."""
+
+    def setUp(self):
+        import tempfile
+        self.d = os.path.realpath(tempfile.mkdtemp())        # enrolment follows no link on the way down (macOS: /var)
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+        self.marker, self.node_json = self.d + "/restore-pending", self.d + "/node.json"
+        self.single = {"schema": membership.SCHEMA_V5, "epoch": 3, "topology": {"profile": membership.SINGLE_NODE}}
+
+    def hold(self, manifest_=None, bootstrap=False):
+        out = io.StringIO()
+        held = enrol.hold_restore_pending(manifest_ or self.single, self.marker, self.node_json, bootstrap, out)
+        return held, out.getvalue()
+
+    def test_a_replacement_writes_it_whole(self):
+        held, said = self.hold()
+        self.assertTrue(held)
+        with open(self.marker) as f:
+            doc = json.load(f)
+        self.assertEqual((doc["schema"], sorted(doc)), ("regalia.restore-pending/v1", ["reason", "schema", "written_at"]))
+        self.assertIn("RESTORE-PENDING: %s written" % self.marker, said)
+        self.assertEqual(sorted(os.listdir(self.d)), ["restore-pending"])          # no temporary file left
+
+    def test_genesis_writes_nothing(self):
+        self.assertEqual(self.hold(dict(self.single, epoch=1), bootstrap=True), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_multi_node_writes_nothing(self):
+        self.assertEqual(self.hold(dict(self.single, topology={"profile": membership.MULTI_NODE})), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_a_resumed_commit_writes_nothing(self):
+        """node.json is there: an earlier run of this commit decided, before it installed node.json. A genesis resumed
+        without --bootstrap is not held back."""
+        with open(self.node_json, "w") as f:
+            f.write("{}")
+        self.assertEqual(self.hold(dict(self.single, epoch=1)), (False, ""))
+        self.assertFalse(os.path.lexists(self.marker))
+
+    def test_bootstrap_keeps_a_marker_already_there_and_says_so(self):
+        with open(self.marker, "w") as f:
+            f.write("{}")
+        held, said = self.hold(dict(self.single, epoch=1), bootstrap=True)
+        self.assertFalse(held)
+        self.assertTrue(os.path.isfile(self.marker))
+        self.assertIn("NOTE: %s is kept" % self.marker, said)
+
+    def test_the_path_is_the_units_and_the_restore_s(self):
+        from deploy.baremetal import restore
+        self.assertEqual(enrol.RESTORE_PENDING, restore.PENDING)
+        self.assertEqual(enrol.stored(enrol.RESTORE_PENDING), restore.STORED_PENDING)
+
+
+class BootstrapRefusal(unittest.TestCase):
+    """COUNCIL on #775: --bootstrap is the network's genesis (epoch 1, no replacement) and is refused, writing nothing,
+    when the VERIFIED chain already proves otherwise: a later epoch (heartbeats were issued), a replacement (--replace or
+    the sole node's revocation), or this TPM's own recorded prior heartbeat counter. Each arm refuses BEFORE any write."""
+
+    def setUp(self):
+        import tempfile
+        self.d = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.d)
+        with open(self.d + "/journal.json", "w") as f:
+            f.write('{"schema": "regalia.enrol-journal/v1", "node_id": "a", "steps": {"identity": {"state": "done"}}}\n')
+        with open(self.d + "/bundle.json", "w") as f:
+            f.write("{}")
+
+    def run_commit(self, chain, bootstrap=True, sole=None, replace=None, counter=None):
+        out = io.StringIO()
+        manifest = chain
+        with patch.object(enrol, "_bundle", lambda directory: {"node_id": "a"}), \
+                patch.object(enrol, "identity", lambda journal, directory, run: None), \
+                patch.object(enrol, "recheck_signing_key", lambda journal, directory, run: None), \
+                patch.object(enrol, "check_manifest", lambda directory, chain_, root_key, typed, document, replace_=None: manifest), \
+                patch.object(enrol, "sole_node_replacement", lambda envelopes, root_key, node_id: sole), \
+                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: counter), \
+                patch.object(enrol, "commit_owner_auth", lambda *a, **k: None), \
+                patch.object(enrol, "signing_note", lambda directory, manifest_: None), \
+                patch.object(enrol, "hold_restore_pending", lambda *a, **k: False), \
+                patch.object(enrol, "install_config", lambda *a, **k: self.fail("install_config wrote before the refusal")):
+            result = {"error": None, "writes": None}
+            try:
+                enrol.commit(self.d, [object()], "root_key", "typed", None, None, None,
+                             bootstrap=bootstrap, replace=replace, out=out,
+                             as_sync=lambda config, chain_, owner_auth=None: self.fail("the sync step wrote before the refusal"))
+            except (enrol.Refused, membership.Refused) as error:
+                result["error"] = str(error)
+            result["writes"] = sorted(n for n in os.listdir(self.d) if n not in ("bundle.json", "journal.json"))
+            return result
+
+    def test_a_later_epoch_refuses_before_any_write(self):
+        """The verified chain's epoch is above 1: heartbeats were issued, so this is not a first bring-up. The node is a
+        genesis member (first named at epoch 1, counter=1) so only the epoch arm can refuse -- that is the one under
+        test; the is_genesis_member arm stays off."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 2,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=1)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_replacement_refuses_before_any_write(self):
+        """The manifest is a replacement (--replace typed): its old node held the history, so it is not a first bring-up.
+        Epoch 1 and a genesis member (counter=1) so the replacement arm is the one under test, isolated from the epoch
+        and is_genesis_member arms."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b", counter=1)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_the_owners_revoked_sole_node_refuses_before_any_write(self):
+        """The chain revoked the sole node and names this one in its place (the dx7.19 case): the history was the lost
+        disk's. The sole case always carries --replace (sole_node_replacement requires it), so the replacement arm is
+        what refuses; epoch 1 and a genesis member (counter=1) isolate it."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b", sole="b", counter=1)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_node_first_named_above_epoch_1_refuses_before_any_write(self):
+        """The node first named above epoch 1 is not a genesis member (heartbeats ran before it joined): the chain is
+        still at epoch 1, so only the is_genesis_member arm can refuse -- that is the one under test."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=2)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_node_no_manifest_names_refuses_before_any_write(self):
+        """No manifest in the verified chain names this node (first_epoch is None). check_manifest refuses that earlier
+        (enrol.py:922); the guard's None arm is defence in depth and fails closed, because a signing KMS never treats
+        "unknown" as genesis."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=None)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_the_genesis_lets_the_commit_proceed(self):
+        """The owner's genesis step is unchanged: the verified chain is at epoch 1, no replacement, and this node is a
+        genesis member (first named at epoch 1, the real chain shape) -- the refusal is the first thing commit does,
+        finds the node is a genesis member, and lets every step run; the marker stays off (--bootstrap: no etcd history
+        existed)."""
+        manifest = {"schema": membership.SCHEMA_V5, "epoch": 1, "topology": {"profile": membership.SINGLE_NODE}}
+        writes = []
+
+        def identity(journal, directory, run):
+            writes.append("identity")
+
+        def recheck_signing_key(journal, directory, run):
+            writes.append("signing_key")
+
+        def check_manifest(directory, chain, root_key, typed, document, replace=None):
+            writes.append("check_manifest")
+            return manifest
+
+        def install_config(journal, node_id, root_key, example, site, prefix=""):
+            writes.append("install_config")
+            return {"state_dir": self.d + "/state"}
+
+        def _hand_over(state_dir, sync):
+            writes.append("hand_over")
+
+        def store_documents(state_dir, document, sync):
+            writes.append("store_documents")
+
+        def define_anchors(node_json, chain, directory, owner_auth, run):
+            writes.append("define_anchors")
+            return []
+
+        class Doc:
+            doc = {"node_id": "a"}
+
+            @staticmethod
+            def state(step):
+                return "done"
+
+            started = staticmethod(lambda step: None)
+            done = staticmethod(lambda step, **kw: None)
+
+        def anchor(config, chain, owner_auth=None):
+            writes.append("anchor")
+            return 1, membership.digest(manifest)
+
+        result = {"epoch": None, "error": None}
+        with patch.object(enrol, "identity", identity), \
+                patch.object(enrol, "recheck_signing_key", recheck_signing_key), \
+                patch.object(enrol, "check_manifest", check_manifest), \
+                patch.object(enrol, "commit_owner_auth", lambda *a, **k: None), \
+                patch.object(enrol, "sole_node_replacement", lambda envelopes, root_key, node_id: None), \
+                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: 1), \
+                patch.object(enrol, "signing_note", lambda directory, manifest: None), \
+                patch.object(enrol, "install_config", install_config), \
+                patch.object(enrol, "hold_restore_pending", lambda manifest, marker, node_json, bootstrap, out: False), \
+                patch.object(enrol, "_hand_over", _hand_over), \
+                patch.object(enrol, "store_documents", store_documents), \
+                patch.object(enrol, "define_anchors", define_anchors), \
+                patch.object(enrol, "run_probe_as_sync", lambda config: ([], ["no other node exists"])), \
+                patch.object(enrol, "define_first_counter",
+                             lambda config, manifest, probed, directory, owner_auth, bootstrap, run, sole_replacement: 0), \
+                patch.object(enrol, "Journal", lambda directory, node_id: Doc()), \
+                patch.object(enrol, "_bundle", lambda directory: {"node_id": "a"}), \
+                patch.object(enrol, "_no_sync_process", lambda run: None):
+            try:
+                result["epoch"] = enrol.commit(self.d, [object()], "root_key", "typed", None, None, None,
+                                               bootstrap=True, out=io.StringIO(), as_sync=anchor)
+            except (enrol.Refused, membership.Refused) as error:
+                result["error"] = str(error)
+        self.assertIsNone(result["error"], result["error"])
+        self.assertEqual(result["epoch"], (1, membership.digest(manifest)))
+        # the guard ran (nothing written between check_manifest and install_config), and the steps did
+        self.assertListEqual(writes, ["identity", "signing_key", "check_manifest", "install_config",
+                                      "hand_over", "store_documents", "define_anchors", "anchor"])
+        self.assertFalse(os.path.lexists(self.d + "/restore-pending"))

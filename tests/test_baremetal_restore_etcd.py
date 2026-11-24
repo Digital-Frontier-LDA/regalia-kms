@@ -34,12 +34,13 @@ class RealSingle(rs.Host):
         self.data = os.path.join(root, "data")
         self.run_dir = os.path.join(root, "run")
         os.makedirs(self.run_dir)
+        os.makedirs(os.path.join(root, "etc-regalia"))        # the restore-pending marker's directory (played in memory)
         self.client = etcdconf.client_endpoint(self.run_dir)
         self.start()
 
     def path(self, p):
         for real, here in ((rs.STAGING, os.path.join(self.data, "restore")), (rs.MEMBER, os.path.join(self.data, "member")),
-                           (etcdconf.DATA_DIR, self.data)):
+                           (etcdconf.DATA_DIR, self.data), (os.path.dirname(rs.STORED_PENDING), os.path.join(self.root, "etc-regalia"))):
             if p == real or p.startswith(real + "/"):
                 return here + p[len(real):]
         return p
@@ -91,6 +92,9 @@ class RealSingle(rs.Host):
         self.files.pop(path, None)
         if path == rs.VERIFIED_SNAPSHOT and os.path.lexists(self.path(path)):
             os.unlink(self.path(path))
+
+    def sync_dir(self, path):
+        return super().sync_dir(self.path(path))
 
     def copy_verified(self, source, copy):
         return super().copy_verified(source, self.path(copy))
@@ -193,7 +197,9 @@ class RestoreRealEtcd(unittest.TestCase):
         self.assertIn("the restored store holds state epoch 3, and the statement's 3 does not raise it: the daemon is not started",
                       str(caught.exception))
         self.assertFalse(self.host.daemon)
-        # with no live store, etcd is left stopped (never a new empty cluster), the drop-in gone, staging kept
+        # with no live store, etcd is left stopped (never a new empty cluster), the drop-in gone, staging kept, and the
+        # restore-pending marker kept: a reboot starts neither etcd nor the daemon (regalia-kms-dx7.26)
+        self.assertIn(rs.STORED_PENDING, self.host.files)
         self.assertNotIn("a", self.host.procs)
         self.assertNotIn(rs.DROPIN, self.host.files)
         self.assertFalse(os.path.exists(os.path.join(self.root, "data", "member")))

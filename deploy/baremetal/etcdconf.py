@@ -50,6 +50,10 @@ MEMBER_STATES = ("ACTIVE", "MAINTENANCE", "DRAINING")
 CONFIG_PATH = "/etc/regalia/etcd.conf.yml"
 # where it is written (rejoin): its /var name, /etc/regalia being a link there on a verity-/usr host (hostpaths, #61)
 STORED_CONFIG = hostpaths.persistent(CONFIG_PATH)
+# regalia-kms-dx7.26: while it exists, neither etcd nor the daemon starts (units/*/10-restore-pending.conf). Written by its
+# /var name (hostpaths), so it outlives a reboot: a single-node host with no live etcd history, until a restore raised R
+RESTORE_PENDING = "/etc/regalia/restore-pending"
+STORED_RESTORE_PENDING = hostpaths.persistent(RESTORE_PENDING)
 CERT_DIR = "/etc/regalia/etcd"                     # public: this member's certificates and the rendered bundles
 CREDENTIALS = "/run/credentials/regalia-etcd.service"      # the keys, LoadCredentialEncrypted= (regalia-etcd.service)
 DATA_DIR = "/var/lib/regalia-etcd"

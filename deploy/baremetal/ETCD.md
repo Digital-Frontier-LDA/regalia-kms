@@ -80,6 +80,37 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
     refusal names it. One restore runs at a time, under `/run/lock/regalia-restore.lock`. Before etcd ran on staging, both units are started again
     as they were. After that, etcd is put back on its live store and the daemon is left stopped. In both cases the staging
     directory is kept for inspection, and a new run refuses until it is moved away.
+  - **The boot guard: `/etc/regalia/restore-pending`** (regalia-kms-dx7.26). Etcd's configuration says
+    `initial-cluster-state: new` under single-node, so etcd started on an empty data directory forms a new, empty
+    one-member cluster, and the daemon would serve on it at state epoch 0. While the marker exists, neither
+    `regalia-etcd.service` nor `regalia-kms.service` starts, at any boot (`10-restore-pending.conf` in each unit's
+    drop-in directory: `ConditionPathExists=!`, so the units read skipped, not failed). It persists: `/etc/regalia`
+    links to `/var`, and every writer writes its `/var` name.
+    - **Written** by `enrol commit` under single-node **without `--bootstrap`** (a replacement disk), as its first
+      persistent write, before `node.json`; by `restore.py run` when there is no live store, before it stops anything; and
+      by hand with `restore.py mark-pending` (root, at the console). `--bootstrap` is the cluster's genesis only, when no
+      etcd history ever existed. Never use it to re-enrol a lost disk: the commit is refused when the verified chain
+      proves non-genesis (see below), and no marker is written on the one residual case where it is not refused.
+    - **Lifted for etcd alone** by the restore's `/run` drop-in, whose empty `ConditionPathExists=` resets the
+      conditions before it and lists the unit's own two gates again. systemd reads drop-ins in file-name order whatever their
+      directory, so `10-restore-pending.conf` sorts before `50-restore.conf`. The order is pinned by a test.
+    - **Removed** only by `restore.py run`, once the restored store is exchanged into place and before etcd's restart.
+      The daemon then starts only on the raised epoch read back. Every refusal keeps it. When the exchange's fsync failed,
+      the refusal says when it may be removed by hand: only once the live etcd reads the raised epoch.
+    - **`--bootstrap` is refused when the verified chain proves non-genesis.** `enrol commit --bootstrap` is the
+      network's genesis: epoch 1, no replacement, and this node a **genesis member** — first named at epoch 1 of the
+      verified chain (`is_genesis_member`, enrol.py). When the chain proves otherwise — a later epoch (heartbeats were
+      issued), a replacement (`--replace`, or the sole node's revocation), or a node not first named at epoch 1 — the
+      commit is refused before anything is written. A node no manifest names is refused too (it fails closed: a signing
+      KMS never treats "unknown" as genesis), though `check_manifest` already refuses that earlier (enrol.py:922). The
+      refusal names the correct path: `enrol commit` without `--bootstrap` (which writes the marker), or `restore.py run`
+      once the restore's exchange has raised the epoch.
+    - **The same-epoch-1 residual.** A re-enrolment on the very same epoch-1 manifest that the original genesis used
+      (the owner rolled the chain back, or reused it) cannot be told apart from genesis: the epoch is 1, no
+      replacement is named, and the node is first named at epoch 1. The refusal does not fire, and
+      no marker is written. In that case the operator holds the marker by hand: `restore.py mark-pending` (root, at
+      the console) before the reboot, then `restore.py run` once the restored store is ready. This is the one case
+      where the operator must act; the docs and the `mark-pending` subcommand exist for it.
 - A take-over and a rejoin are refused under single-node (dx7.3), and a restore statement is refused under multi-node.
 
 ## The disks: an fdatasync measurement plan for the DL360s (before production)

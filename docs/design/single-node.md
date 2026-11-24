@@ -204,6 +204,10 @@ The ones that decide the design:
     - The floor is the higher of the collector's highest recorded state epoch for the cluster and the owner tool's ledger of the restore epochs it has issued. The owner signs the restore statement that names the new epoch.
     - The owner's tool issues each restore epoch once, so restoring one snapshot twice gives two different epochs. Only one of the two nodes can be the cluster's live node (4.1).
   - The collector's spend audit (`spendaudit.py`) then detects a re-spent approval. It does not prevent one.
+  - **Boot guard** (regalia-kms-dx7.26): a host with no live etcd history (a replacement disk, or a lost-disk restore under way) holds both `regalia-etcd` and `regalia-kms` skipped at every boot while `/etc/regalia/restore-pending` exists. Otherwise etcd (`initial-cluster-state: new`) would form an empty cluster and the daemon would serve it at state epoch 0.
+    - `enrol commit` writes the marker under `single-node` unless `--bootstrap` (genesis) is given. `restore.py run` writes it with no live store, and `restore.py mark-pending` writes it by hand.
+    - The restore's `/run` drop-in lifts it for etcd on staging. Only the restore's exchange removes it (`deploy/baremetal/ETCD.md`).
+    - Recovery (dx7.7) never removes it. Monitoring (dx7.9) should alert while it exists.
 
 ### 4.9 Network
 

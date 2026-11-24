@@ -1379,7 +1379,8 @@ class OnQemuVerity(OnQemu):
     NODE_UNITS = ("regalia-authtime.service", "regalia-site-check.service", "regalia-wg-apply.service", "regalia-wg-apply.path",
                   "regalia-boot-session.service", "regalia-admission.service", "regalia-sync.service", "regalia-etcd.service",
                   "regalia-esp-advance.service", "regalia-esp-advance.path")
-    KMS_DROPINS = ("/usr/lib/systemd/system/regalia-kms.service.d/apparmor.conf", "/usr/lib/systemd/system/regalia-kms.service.d/firewall.conf",
+    KMS_DROPINS = ("/usr/lib/systemd/system/regalia-kms.service.d/10-restore-pending.conf",
+                   "/usr/lib/systemd/system/regalia-kms.service.d/apparmor.conf", "/usr/lib/systemd/system/regalia-kms.service.d/firewall.conf",
                    "/usr/lib/systemd/system/regalia-kms.service.d/hardening.conf", "/usr/lib/systemd/system/regalia-kms.service.d/memlock.conf",
                    "/run/systemd/generator/regalia-kms.service.d/50-regalia-credentials.conf")
 

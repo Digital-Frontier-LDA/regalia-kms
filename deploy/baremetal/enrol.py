@@ -967,6 +967,54 @@ def signing_note(directory, manifest):
 
 
 NODE_JSON = "/etc/regalia/node.json"
+# regalia-kms-dx7.26: while it exists, neither etcd nor the daemon starts (units/*/10-restore-pending.conf); the same as
+# etcdconf.RESTORE_PENDING and restore.PENDING (held equal by a test)
+RESTORE_PENDING = "/etc/regalia/restore-pending"
+RESTORE_PENDING_SCHEMA = "regalia.restore-pending/v1"
+
+
+def hold_restore_pending(manifest, marker, node_json, bootstrap, out=sys.stdout):
+    """regalia-kms-dx7.26: under the single-node profile, a commit WITHOUT --bootstrap enrols a node whose disk holds no etcd
+    history (a replacement: its etcd would form a new, empty cluster, and the daemon serve on it at state epoch 0), so it
+    writes `marker` (its /var name), whole and its directory fsynced, BEFORE `node_json` is installed: no crash leaves
+    node.json without it. Etcd and the daemon then stay stopped at every boot until restore.py exchanges in a store holding a
+    raised state epoch, which removes it. Nothing is written at genesis (--bootstrap: no history exists to lose), under
+    multi-node, or once node.json is there (a resumed commit: its first run decided). A marker already there is never
+    removed here; under --bootstrap it is named. Returns whether it was written."""
+    if membership.profile(manifest) != membership.SINGLE_NODE:
+        return False
+    if bootstrap:
+        if os.path.lexists(marker):
+            print("NOTE: %s is kept: etcd and the daemon stay stopped at every boot while it is there. If this is the cluster's "
+                  "genesis (no etcd history ever existed), remove it by hand; if this disk replaced a lost one, keep it and "
+                  "restore etcd (restore.py run)" % marker, file=out)
+        return False
+    if os.path.lexists(node_json):
+        return False
+    directory = os.path.dirname(marker)
+    _ensure_trusted_dir(directory)
+    data = (json.dumps({"schema": RESTORE_PENDING_SCHEMA, "reason": "enrol commit: a single-node node enrolled without --bootstrap "
+                        "(a replacement disk, no etcd history); removed by restore.py once its restored store is exchanged in",
+                        "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}, sort_keys=True) + "\n").encode()
+    tmp = marker + ".enrol-new"
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+        os.fchmod(fd, 0o644)
+    finally:
+        os.close(fd)
+    os.replace(tmp, marker)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+    print("RESTORE-PENDING: %s written: etcd and the daemon stay stopped at every boot until an etcd restore (restore.py run) "
+          "raises the state epoch on this node" % marker, file=out)
+    return True
 
 
 def node_config(node_id, root_key, example, site):
@@ -1076,6 +1124,18 @@ def first_epoch(envelopes, root_key, node_id):
         if node_id in membership.validate(current):
             return current["epoch"]
     return None
+
+
+def is_genesis_member(envelopes, root_key, node_id):
+    """Whether `node_id` is exactly a GENESIS member: first named at epoch 1 of the verified chain. `--bootstrap`
+    is refused UNLESS this holds (a commit under --bootstrap whose verified chain proves otherwise is not the
+    network's first bring-up). first_epoch > 1 is a node that joined after heartbeats ran. None is a node no
+    manifest in the verified chain names, which check_manifest already refuses earlier (enrol.py:922,
+    `require(node_id in nodes, ...)`); this None arm is kept as defence in depth and fails closed, because a
+    signing KMS never treats "unknown" as genesis."""
+    epoch = first_epoch(envelopes, root_key, node_id)
+    # None (not named by any manifest) is not == 1, so the guard refuses it: fail closed
+    return epoch == 1
 
 
 def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
@@ -2263,6 +2323,21 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     # regalia-kms-dx7.19: a single-node replacement after the owner's revocation starts its own heartbeat counter
     sole = replace is not None and sole_node_replacement(chain if isinstance(chain, list) else [chain], root_key,
                                                          journal.doc["node_id"]) == replace
+    # --bootstrap is the network's GENESIS (epoch 1, no replacement): the owner's own first bring-up, where no etcd
+    # history exists to lose (regalia-kms-dx7.26). It is refused when the verified chain proves this host is not exactly
+    # a genesis member: a later epoch (heartbeats were issued), a replacement (--replace typed, or the sole node's
+    # revocation), or this node not first named at epoch 1 -- is_genesis_member is the last of these, and its None case
+    # (a node no manifest names) fails closed because a signing KMS never treats "unknown" as genesis. It is refused
+    # here, before anything is written. The refusal names the marker (restore.py mark-pending) and the re-enrolment's
+    # own path (enrol commit without --bootstrap). A re-enrolment on the SAME epoch-1 manifest cannot be told apart from
+    # genesis: the operator holds the marker by hand (ETCD.md).
+    if bootstrap and (manifest["epoch"] != 1 or replace or sole
+                      or not is_genesis_member(chain if isinstance(chain, list) else [chain], root_key,
+                                               journal.doc["node_id"])):
+        raise Refused("--bootstrap is the network's genesis (epoch 1, no replacement): the verified manifest proves this "
+                       "is not one, so it is refused before anything is written. A re-enrolment of a lost disk runs "
+                       "`enrol commit` without --bootstrap (the marker written as its first persistent write); "
+                       "`restore.py mark-pending` holds the marker while it is decided. Nothing was written")
     owner_auth = commit_owner_auth(manifest, ownerauth_given, root_key, journal.doc["node_id"], run, directory)
     note = signing_note(directory, manifest)
     if note:
@@ -2271,6 +2346,8 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
                                     boot["secure_boot_cert"], document, journal.doc["node_id"], run)
+    # regalia-kms-dx7.26: a single-node replacement's first persistent write, before node.json
+    hold_restore_pending(manifest, prefix + stored(RESTORE_PENDING), prefix + stored(NODE_JSON), bootstrap, out)
     config = install_config(journal, journal.doc["node_id"], root_key, example, site, prefix)
     _hand_over(prefix + config["state_dir"], as_sync is None)
     # the measurements document the manifest commits to, into the node's store by digest (#332), regalia-sync's,
