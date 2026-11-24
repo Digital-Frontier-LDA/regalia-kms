@@ -175,13 +175,15 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         require(False, "under single-node the audit collector is mandatory (docs/design/single-node.md 4.7, decision Q4): "
                 "give a --witness (the collector's export and receipt) for this node's sync stream")
     if is_single and purpose == "recount":
-        # for recount, the collector's sequence (the highest beat-propose ALLOW) is ALSO witnessed, over the same
-        # verified --witness exports the epoch came from -- never taken from the operator (review defcc750, finding 2).
-        # an explicit collector_sequence (its caller already derived it) must equal what the witness holds
-        witnessed = recover.witness_sequence(*witnesses[0])
+        # for recount, the collector's sequence (the highest beat-propose ALLOW) is ALSO witnessed, over ALL of
+        # the verified --witness exports the epoch came from -- never taken from the operator (review defcc750,
+        # finding 2). It is the MAX over every witness, as `seen` is: a higher sequence in a later witness
+        # must raise the floor (council 2026-11-24 on PR #778, M2). An explicit collector_sequence (its caller
+        # already derived it) must equal what the witnesses hold.
+        witnessed = max(recover.witness_sequence(*w) for w in witnesses)
         if collector_sequence is not None:
             require(collector_sequence == witnessed,
-                    "collector_sequence %d is not what the collector's witnessed export holds (%d)" % (collector_sequence, witnessed))
+                    "collector_sequence %d is not what the collector's witnessed exports hold (%d)" % (collector_sequence, witnessed))
         else:
             collector_sequence = witnessed
     lines = ["A %s of node %s%s:" % (purpose.upper(), node_id,

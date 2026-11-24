@@ -80,6 +80,16 @@ class Statement(Case):
         # either owner key of the tip will do (ADR-0002 D30)
         recover.verify_owner(self.m3, self.signed(key=OWNER_KEYS[1]), "recover", "b", self.session, T0)
 
+    def test_a_malformed_statement_is_a_refusal_not_a_traceback(self):
+        """message() on a statement that is not a mapping is a REFUSAL (council 2026-11-24 on PR #778, M1):
+        it used to raise a bare AttributeError ('str' object has no attribute 'get'), outside the Refused
+        handler, before exact() could say what is wrong."""
+        self.refused("the recovery statement is not a mapping", recover.message, "a statement, not a mapping")
+        self.refused("the recovery statement is not a mapping", recover.message, None)
+        self.refused("the recovery statement is not a mapping", recover.message, ["purpose"])
+        # the outer shape is exact()'s; the inner shape is message's: a mapping without a purpose still refuses
+        self.refused("the purpose is one of", recover.message, {})
+
     def test_the_chain_extends_what_the_node_last_knew_and_owner_keys_may_rotate(self):
         self.assertEqual(recover.verify_chain(self.chain, ROOT_PUB, self.m2)["epoch"], 3)
         fork2 = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED"), issued_at="2026-10-04T10:00:00Z")

@@ -82,6 +82,10 @@ def _statement_keys(purpose, collector_epoch=None, collector_sequence=None):
 
 def message(statement):
     """What the owner signs: the purpose's own prefix and the canonical statement."""
+    # a malformed document (not a mapping, no purpose) is a REFUSAL, never a traceback (council 2026-11-24 on
+    # PR #778, M1): the caller (verify_owner, through exact(signed, ...)) has already required the outer
+    # shape, and this is the inner shape's own check
+    require(isinstance(statement, dict), "the recovery statement is not a mapping")
     purpose = statement.get("purpose")
     require(purpose in PURPOSES, "the purpose is one of %s" % ", ".join(PURPOSES))
     # v2: has collector_epoch; v1: does not

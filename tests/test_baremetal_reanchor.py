@@ -1056,6 +1056,31 @@ class OwnerChainReanchor(Case):
         # anchored at epoch 3, chain ends at 2
         self.refused("a fetched chain ends at epoch 2, below the TPM high-water 3", reanchor.plan, store, {}, "a", owner_chain=short)
 
+    def test_owner_chain_refuses_without_a_checked_statement(self):
+        """--owner-chain takes a CHECKED owner statement: without the owner-check callable the plan is
+        refused, so the chain can never be a source before the statement is judged (council 2026-11-24 on
+        PR #778, B1: the statement check used to run once in main, plan() itself had none)."""
+        chain = self.single_chain(3)
+        store, _ = self._store_for(chain)
+        self.refused("takes a checked owner statement", reanchor.plan, store, {}, "a", owner_chain=chain)
+
+    def test_a_statement_that_refuses_is_a_recorded_deny(self):
+        """An owner-check that refuses (a bad or expired statement) is a DENY the re-anchor records, with
+        nothing changed (council 2026-11-24 on PR #778, B1: main passes this through reanchor())."""
+        chain = self.single_chain(3)
+        store, hw = self._store_for(chain)
+        events = []
+
+        def refusing_check(tip, single_node=None):
+            raise m.Refused("the statement has expired")
+        self.refused("the statement has expired", reanchor.reanchor, store, {}, "a",
+                     lambda p: reanchor.phrase("a", p), events.append,
+                     owner_chain=chain, owner_chain_check=refusing_check)
+        self.assertEqual([e.get("outcome") for e in events], ["DENY"])
+        self.assertIn("the statement has expired", str(events[0].get("reason")))
+        # nothing was changed: the anchor still reads the old epoch
+        self.assertEqual(hw.value(), 3)
+
     def test_main_refuses_a_peer_named_the_owner(self):
         """At the command, --peer takes a node ID only: the reserved name "__owner__" is refused before anything
         is read (review defcc750, finding 1: it used to reach plan() and skip the 'may authorize' check)."""

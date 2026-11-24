@@ -87,7 +87,7 @@ class Unrecorded(Exception):
         self.summary = summary
 
 
-def plan(store, sources, node_id, owner=None, owner_chain=None):
+def plan(store, sources, node_id, owner=None, owner_chain=None, owner_chain_check=None):
     """What a re-anchor would do, having verified everything that can be verified without changing anything:
     {"reason": why the anchor is unusable, "counter": the old counter's epoch or None, "records": the record
     slots that still hold a valid record, "epoch", "manifest_digest" and "manifest": the newest manifest of
@@ -96,12 +96,22 @@ def plan(store, sources, node_id, owner=None, owner_chain=None):
     `owner_chain` (the owner's whole chain, a separate argument so a node can never be named "owner") is the
     single-node re-anchor (docs/design/single-node.md 4.7): sufficient alone under a single-node tip, refused
     under a multi-node tip. `sources` must be empty when it is given (a single-node manifest has no other
-    node to give a chain). The floor, the records and the extends-disk checks are the same as from peers."""
+    node to give a chain). The floor, the records and the extends-disk checks are the same as from peers.
+
+    `owner_chain_check` (a callable given the chain's NEWEST manifest: refuses, or returns) is the checked
+    owner statement over that tip -- `recover.owner_check` from this node's node.json and the statement file
+    (main builds it), called on `newest` with `single_node` judged from the tip. The owner chain is not a
+    source until the statement is checked (council 2026-11-24 on PR #778, B1): under single-node the
+    statement must be v2 (with collector_epoch), and a bad or expired statement is a refusal, not a
+    re-anchor."""
     require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
     require(isinstance(sources, dict), "sources must map each source to the chain it gave")
     if owner_chain is not None:
         require(not sources, "--owner-chain takes the owner's chain alone, with no --peer (single-node re-anchor)")
         require(owner is None, "--owner-chain and --one-source are mutually exclusive")
+        require(owner_chain_check is not None,
+                "--owner-chain takes a checked owner statement (its owner-check, from --owner-statement and --node-config): "
+                "the chain is not a source before it is checked")
         minimum = 1
     elif owner is None:
         require(len(sources) >= 2, "re-anchoring needs whole chains from at least two other nodes (%d source given)" % len(sources))
@@ -135,6 +145,7 @@ def plan(store, sources, node_id, owner=None, owner_chain=None):
     elif owner_chain is not None:
         from deploy.baremetal import recover
         recover.verify_chain(longest, store.root_key, recover.last_known(store.path, store.root_key))     # no fork of what the disk holds
+        owner_chain_check(newest, single_node=membership.profile(newest) == membership.SINGLE_NODE)
         planned["sources"] = sorted(sources) + ["owner-chain"]
     return planned
 
@@ -151,7 +162,7 @@ def refused_before_plan(node_id, sources, refusal):
             "sources": sorted(map(str, sources)), "anchor_was": "", "outcome": "DENY", "reason": convergence._printable(refusal)}
 
 
-def reanchor(store, sources, node_id, typed, sink, owner=None, owner_chain=None, prepare=None, before_anchor=None):
+def reanchor(store, sources, node_id, typed, sink, owner=None, owner_chain=None, owner_chain_check=None, prepare=None, before_anchor=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
 
@@ -163,7 +174,10 @@ def reanchor(store, sources, node_id, typed, sink, owner=None, owner_chain=None,
     given, runs once the plan exists and before anything is recorded as requested, asked or changed (the define policy
     from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed.
     `before_anchor(planned)`, if given, runs once the phrase is confirmed and BEFORE the anchor is touched (the chain
-    written to the ESP, write_esp: #410's order, the ESP first): a failure there is a DENY with the anchor unchanged."""
+    written to the ESP, write_esp: #410's order, the ESP first): a failure there is a DENY with the anchor unchanged.
+    `owner_chain_check` (with `owner_chain`, the owner-check callable: refuses, or returns, given the
+    chain's newest manifest) is called by plan() on that tip; a refusal there is a DENY with nothing
+    changed (council 2026-11-24 on PR #778, B1)."""
     def event(kind, planned, **more):
         return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
                      "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
@@ -171,7 +185,7 @@ def reanchor(store, sources, node_id, typed, sink, owner=None, owner_chain=None,
                      "anchor_was": convergence._printable(planned.get("reason", ""))}, **more)
 
     try:
-        planned = plan(store, sources, node_id, owner, owner_chain=owner_chain)
+        planned = plan(store, sources, node_id, owner, owner_chain=owner_chain, owner_chain_check=owner_chain_check)
     except Refused as refusal:
         sink(event("reanchor", {}, outcome="DENY", reason=convergence._printable(refusal)))
         raise
@@ -496,22 +510,17 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
             sources[node_id] = _chain(path)
         owner = None
         owner_chain_doc = None
+        owner_chain_check = None
         if args.owner_chain:
             require(not args.one_source, "--owner-chain and --one-source are mutually exclusive")
             require(args.owner_statement and args.node_config, "--owner-chain needs --owner-statement and --node-config (single-node)")
             owner_chain_doc = _chain(args.owner_chain)
-        if args.one_source:
-            require(args.owner_statement and args.node_config, "--one-source needs --owner-statement and --node-config")
-            owner = owner_check(args.node_config, args.node_id, args.owner_statement, sorted(sources)[0] if sources else "")
-        if owner_chain_doc is not None:
-            # the owner's statement is checked like the owner's chain: over this tip, for this node,
-            # this boot's session, by authenticated time, with purpose reanchor; under single-node it must
-            # be v2 (with collector_epoch) and second_node_answers is not consulted (there are no other nodes)
-            from deploy.baremetal import recover
-            known = recover.last_known(args.membership, args.root_key)
-            tip = recover.verify_chain(owner_chain_doc, args.root_key, known)
-            is_single = membership.profile(tip) == membership.SINGLE_NODE
-            owner_check(args.node_config, args.node_id, args.owner_statement, "owner-chain")(tip, single_node=is_single)
+            # the owner's statement is checked over the chain's own tip, by the SAME owner-check callable
+            # plan() calls (council 2026-11-24 on PR #778, B1): this node, this boot's session, by
+            # authenticated time, with purpose reanchor; under single-node the statement must be v2
+            # (with collector_epoch) and second_node_answers is not consulted (there are no other nodes).
+            # A bad or expired statement is a refusal the re-anchor records, not an anchor reset.
+            owner_chain_check = owner_check(args.node_config, args.node_id, args.owner_statement, "owner-chain")
         # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
         # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
         policies = NodePolicies(args.node_config, args.node_id)
@@ -537,6 +546,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None, owner_check=_owner
                                                                               define_policy=policies.define,
                                                                               lock_path=anchor_lock(args.membership), **extra))
             now_at = reanchor(store, sources, args.node_id, typed, record, owner=owner, owner_chain=owner_chain_doc,
+                              owner_chain_check=owner_chain_check,
                               prepare=policies.prepare,
                               before_anchor=lambda planned: write_esp(args.esp, planned["chain"]))
     except Incomplete as failure:

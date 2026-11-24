@@ -177,6 +177,23 @@ class SingleNodeRecovery(unittest.TestCase):
             fn(*args, **kw)
         self.assertIn(reason, str(caught.exception))
 
+    def beat_witness(self, collector, sequences, stream, identity="id" * 32, T0=1790000000):
+        """A verified collector receipt over a beat-propose export (no mocks): what witness_epoch and
+        witness_sequence run against in the derivation tests."""
+        out, chain = [], trails.LINE_CHAIN_START
+        for i, sequence in enumerate(sequences):
+            line = json.dumps({"event": "beat-propose", "outcome": "ALLOW", "sequence": sequence,
+                               "epoch": sequences[-1], "at": T0 + i}, sort_keys=True)
+            raw = line.encode() + b"\n"
+            out.append({"sequence": i + 1, "detail": {"line": line, "line_sha256": hashlib.sha256(raw).hexdigest()}})
+            chain = trails.line_chain(chain, raw)
+        preimage = ("%s\n%s\n%s\n%d\n%s\n%s\n%s" % (trails.RECEIPT_DOMAIN, identity, stream, len(out),
+                                                   "e" * 64, hashlib.sha256(raw).hexdigest(), chain)).encode()
+        receipt = {"sequence": len(out), "event_hash": "e" * 64,
+                   "line_sha256": hashlib.sha256(raw).hexdigest(), "line_chain": chain,
+                   "signature": collector.sign(preimage).hex()}
+        return (out, receipt, [pub(collector)], identity, stream)
+
     def do_sign(self, purpose="recover", witnesses=None, collector_sequence=None, counter_epoch=None):
         self.typed = None
         self.said = []
@@ -285,6 +302,33 @@ class SingleNodeRecovery(unittest.TestCase):
         self.assertEqual(st["collector_sequence"], 7)
         raw = recover.message(st)
         self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
+
+    def test_recount_sequence_is_the_max_over_every_witness(self):
+        """Two witnesses: the collector's sequence is the MAX over ALL of them, as the epoch is (council
+        2026-11-24 on PR #778, M2). The higher sequence is in the SECOND witness, and the statement must
+        carry it -- not what the first witness alone held."""
+        collector = Ed25519PrivateKey.generate()
+        # the first witness alone holds sequence 3; the second holds 7. Both run against real receipts.
+        w1 = self.beat_witness(collector, [1, 3], "site-a.sync")
+        w2 = self.beat_witness(collector, [4, 7], "site-a.sync")
+        # what a reader of the first witness alone would see:
+        self.assertEqual(recover.witness_sequence(*w1), 3)
+        self.assertEqual(recover.witness_sequence(*w2), 7)
+        tip = recover.verify_chain(self.chain, self.ROOT_PUB)
+        self.typed = "recount a 3 %s" % m.digest(tip)[:8]
+        signed = owner.sign_recovery(self.chain, self.ROOT_PUB, self.record, "recount", "a", "s-1",
+                                     lambda: self.key, self.confirm, self.now,
+                                     witnesses=[w1, w2], counter_epoch=None,
+                                     say=self.said.append, issued=self.issued,
+                                     collector_sequence=None)
+        st = signed["statement"]
+        self.assertEqual(st["collector_epoch"], 7)
+        self.assertEqual(st["collector_sequence"], 7)
+        # a passed value is held to the same max: what only the FIRST witness holds is refused
+        self.refused("is not what the collector's witnessed exports hold",
+                     owner.sign_recovery, self.chain, self.ROOT_PUB, self.record, "recount", "a", "s-1",
+                     lambda: self.key, self.confirm, self.now, witnesses=[w1, w2], counter_epoch=None,
+                     say=lambda text: None, issued=self.issued, collector_sequence=3)
 
     def test_multi_node_keeps_v1_and_no_collector_escape(self):
         """Under a multi-node tip, v1 statements are accepted and the 'no collector' escape works."""
