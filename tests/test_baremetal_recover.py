@@ -578,10 +578,12 @@ class SingleNodeCommand(Recovers):
         man["owner_keys"] = [{"alg": "ed25519", "key": p(O[0])}]
         return rt.sign(man)
 
-    def single_v2(self, tip, node="a", collector_epoch=1, session=None):
-        st = recover.statement("recover", node, tip["manifest"], session or "aa" * 8 + ":boot-x", T0 + 300,
+    def single_v2(self, tip, node="c", collector_epoch=1, session=None, purpose="recover", key=None):
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O, pub as p
+        st = recover.statement(purpose, node, tip["manifest"], session or "aa" * 8 + ":boot-x", T0 + 300,
                                collector_epoch=collector_epoch)
-        return {"statement": st, "key": "11" * 32, "sig": "22" * 64}
+        signer = key or O[0]
+        return {"statement": st, "key": p(signer), "sig": signer.sign(recover.message(st)).hex()}
 
     def single_runner(self, store):
         def run(cmd, cwd=None, capture_output=None, text=None, input=None):
@@ -688,44 +690,100 @@ class SingleNodeCommand(Recovers):
         # the denial says why, and names the owner chain, not a KeyError
         self.assertIn("owner_chain is refused", self.trail[-1]["reason"])
 
-    def test_apply_owner_chain_records_a_deny_when_the_real_owner_check_refuses(self):
-        """recover apply --owner-chain runs the REAL owner check over the chain's tip (council 2026-11-24 on
-        PR #778, B1, recover half): a statement the owner check refuses (here: a second node answering over the
-        service tunnel, the owner_check's own refusal) is a DENY the recovery records, with nothing changed.
-        Every other SingleNodeCommand test stands recover.owner_check in (always-pass), so this is the only one
-        that reaches the owner_check call at the --owner-chain path (recover.apply) -- deleting that call fails
-        nothing in this file. Red->green: delete the owner_check call -> the refusal is not raised, the
-        recovery proceeds, and a recovery the owner check refused is recorded ALLOW -> red."""
+    def real_owner_check(self, fresh, tip, purpose="recover", node="c", session="aa" * 8 + ":boot-x",
+                         collector_epoch=1, signed_tip=None, key=None, answers=(), now=None):
+        """The REAL recover.owner_check, over an OWNER_KEYS-signed v2 statement for this tip (independent
+        non-author review of PR #778, item 1: the previous version of this test stood recover.owner_check in
+        with a stand-in that ignored its arguments, so a mutant that flipped `purpose` or `single_node` at the
+        call (recover.apply, the --owner-chain path) survived. Now the check is the module's own: it reads the
+        boot's session, checks the statement against the tip by the tip's owner keys and its purpose, and
+        second_node_answers is NOT consulted under a single-node tip -- a refusal here is a Refused the
+        recovery records. `answers` names nodes that answer over the service tunnel: under a multi-node tip
+        they would refuse (the check's own multi-node path), and with `purpose` flipped they do nothing
+        (a flipped purpose is caught by the statement's own purpose line, which comes first)."""
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O, pub as p
+        st = recover.statement(purpose, node, (signed_tip or tip)["manifest"], session, T0 + 300,
+                               collector_epoch=collector_epoch)
+        signed = {"statement": st, "key": p(key or O[0]), "sig": (key or O[0]).sign(recover.message(st)).hex()}
+        node = self.node(fresh)
+        with unittest.mock.patch.object(recover, "second_node_answers", return_value=list(answers)):
+            return recover.owner_check(node, signed, purpose, "owner-chain", now=now, boot_id="boot-x")
+
+    def test_apply_owner_chain_with_the_real_owner_check_allows_a_good_statement_and_refuses_the_rest(self):
+        """recover apply --owner-chain runs the module's OWN owner check on the chain's tip, with the arguments
+        the path gives (purpose recover, single_node judged from the tip) -- an OWNER_KEYS-signed v2 statement
+        with this boot's session (independent non-author review of PR #778, item 1, and the council's B1
+        recover half): a good statement is ALLOWed; a statement of another purpose, over another epoch, a
+        v1-shaped statement under single-node (the collector is mandatory, decision Q4), or a signature the
+        tip's owner keys do not hold is a DENY the recovery records, with nothing changed. Deleting the
+        owner_check call at the --owner-chain path (recover.apply) makes every refusal an un-checked recovery
+        recorded ALLOW -> red. A mutant that flips the call's `purpose` or `single_node` is caught by the
+        good-statement case (the check's purpose line / the single-node collector requirement) -> red."""
         fresh = self.store("a2")
         fresh._judge_by = lambda manifests: None
         fresh.commit(self.single_tip())
         os.unlink(fresh.path)                                     # the disk: gone (the crash window)
         self.assertTrue(fresh.pinned())
         tip = self.single_tip()
-        v2 = self.single_v2(tip)
         asked = []
 
         def typed(prompt):
             asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
             return asked[-1]
-        node = self.node(fresh)
-        # the REAL owner check: a second node answering over the service tunnel refuses (the owner_check's own
-        # path, the one its own OwnerCheck tests exercise)
-        def real_check(n, s, p, peer, now=None, boot_id=None):
-            def on(tip_m, single_node=None):
-                raise m.Refused("a answers over the service tunnel: %s from two nodes, not with the owner" % p)
-            return on
-        with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
-                unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
-                unittest.mock.patch("deploy.baremetal.node.publish"), \
-                unittest.mock.patch.object(recover, "owner_check", side_effect=real_check):
-            try:
-                self.refused("a answers over the service tunnel", recover.apply,
-                             "/etc/regalia/node.json", {}, v2, typed=typed, run=self.single_runner(fresh),
-                             owner_chain=[tip])
-            finally:
-                self.asked = asked
-        # a DENY, recorded, with the reason, and nothing was restored: the (gone) disk is still gone
-        self.assertEqual(self.outcomes(), [("recover", "DENY")])
-        self.assertIn("a answers over the service tunnel", self.trail[-1]["reason"])
-        self.assertFalse(os.path.exists(fresh.path))              # the recovery never ran: the disk was not restored
+
+        def apply_with(check, one_source):
+            node = self.node(fresh)
+            with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                    unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                    unittest.mock.patch("deploy.baremetal.node.publish"):
+                try:
+                    return recover.apply("/etc/regalia/node.json", {}, one_source, typed=typed,
+                                         run=self.single_runner(fresh), owner_chain=[tip],
+                                         boot_id="boot-x", now=lambda: T0)
+                finally:
+                    self.asked = asked
+        # the boot's session file, where the node's run_dir holds it
+        with open(os.path.join(self.d, recover.SESSION_FILE), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "boot-x", "issued": T0 - 60}, f)
+        # 1) the good statement: v2, purpose recover, this tip, this boot's session -- ALLOW, the disk restored
+        self.assertEqual(
+            apply_with(self.real_owner_check(fresh, tip), self.single_v2(tip, key=OWNER_KEYS[0])), 1)
+        self.assertEqual(fresh.load()["epoch"], 1)
+        self.assertEqual(self.asked[-1], "recover c to epoch 1 %s from owner-chain collector at epoch 1"
+                         % m.digest(tip["manifest"])[:8])
+        self.assertEqual(self.outcomes()[-1], ("recover", "ALLOW"))
+        self.assertEqual(self.trail[-1]["sources"], ["owner-chain"])
+        # 2) a statement of ANOTHER purpose (reanchor): the check's own purpose line refuses -- a recorded DENY
+        self.refused("the statement is for reanchor, not recover",
+                     apply_with, self.real_owner_check(fresh, tip, purpose="reanchor"),
+                     self.single_v2(tip, purpose="reanchor"))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("is for reanchor, not recover", self.trail[-1]["reason"])
+        # 3) a statement over ANOTHER epoch (a different tip, not the node's current one): recorded DENY.
+        #    Build a second tip (epoch 2) and a statement over it; the node's store is at epoch 1.
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O2, pub as p2
+        tip2_manifest = v5.single5(2, m.digest(tip["manifest"]))
+        tip2_manifest["owner_keys"] = [{"alg": "ed25519", "key": p2(O2[0])}]
+        tip2 = rt.sign(tip2_manifest)
+        self.refused("not the peer's tip",
+                     apply_with, self.real_owner_check(fresh, tip, signed_tip=tip2),
+                     self.single_v2(tip2, key=OWNER_KEYS[0]))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("not the peer's tip", self.trail[-1]["reason"])
+        # 4) a v1-shaped statement under single-node (no collector_epoch): the collector is mandatory
+        #    (decision Q4) -- the check's single-node requirement refuses: a recorded DENY
+        st = recover.statement("recover", "c", tip["manifest"], "aa" * 8 + ":boot-x", T0 + 300)
+        v1 = {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+        self.refused("under single-node the statement must be v2",
+                     apply_with, self.real_owner_check(fresh, tip), v1)
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("must be v2", self.trail[-1]["reason"])
+        # 5) a signature the tip's owner keys do not hold: recorded DENY
+        self.refused("not one of the tip manifest's owner_keys",
+                     apply_with, self.real_owner_check(fresh, tip, key=STRANGER),
+                     self.single_v2(tip, key=STRANGER))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("not one of the tip manifest's owner_keys", self.trail[-1]["reason"])
+        # nothing but case 1 was ever restored: the trail names it alone as the ALLOW
+        self.assertEqual([o for o in self.outcomes() if o == ("recover", "ALLOW")], [("recover", "ALLOW")])

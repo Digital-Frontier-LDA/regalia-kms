@@ -5,6 +5,7 @@ before anything changes, typed at a terminal, recorded (and INCOMPLETE said when
 import ast
 import contextlib
 import copy
+import types
 import errno
 import fcntl
 import glob
@@ -1125,6 +1126,106 @@ class OwnerChainReanchor(Case):
         self.assertEqual(rc, 1, err.getvalue())
         self.assertIn("not a node ID", err.getvalue())
         self.assertNotIn(peer_path, opened)
+
+    def open_stub(self):
+        """The kernel's boot ID, on a host without /proc: read from the fixture directory (the node's
+        run_dir holds the session whose boot the statement names)."""
+        real_open = open
+
+        def stub(*args, **kw):
+            if args and args[0] == "/proc/sys/kernel/random/boot_id":
+                with real_open(self.d + "/boot_id", *args[1:], **kw) as f:
+                    return f
+            return real_open(*args, **kw)
+        with open(self.d + "/boot_id", "w") as f:
+            f.write("boot-1\n")
+        return stub
+
+    def owner_chain_program(self, owner_check, upto=3, node_id="a", suffix=""):
+        """The command at --owner-chain (independent non-author review of PR #778, item 2: no test ran
+        reanchor.main with --owner-chain, so main's owner-check call and the arguments it gives were
+        untested). The node's disk holds the owner chain's first envelope, its anchor is unusable at the
+        chain's tip epoch, the owner statement file is present, and the real reanchor() runs (plan, the
+        owner check, the phrase, the re-anchor, the record): only the TPM write (store.reanchor) and the
+        ESP write (write_esp) are mocked. `owner_check` is main's owner-check argument: reanchor._owner_check
+        itself, or a stand-in named for what it decides. Returns (rc, trail)."""
+        chain = self.single_chain(upto)
+        path = self.d + "/oc-membership.json"
+        with open(path, "wb") as f:
+            f.write(m.canonical(chain[:1]))
+        with open(self.d + "/oc-chain.json", "w") as f:
+            json.dump(chain, f)
+        st = {"purpose": "reanchor", "node_id": node_id, "epoch": upto,
+              "tip_digest": m.digest(chain[-1]["manifest"]), "session": "cc" * 8 + ":boot-1",
+              "expires": 1790000300, "collector_epoch": upto}
+        with open(self.d + "/oc-statement.json", "w") as f:
+            json.dump({"statement": st, "key": self.owner_pub, "sig": "22" * 64}, f)
+        esp = self.d + "/oc-esp"
+        os.makedirs(esp + "/EFI/regalia", exist_ok=True)
+        with open(self.d + "/node.json", "w") as f:
+            json.dump({"schema": "regalia.node/v1", "node_id": node_id, "root_key": "aa" * 32,
+                       "run_dir": self.d, "state_dir": self.d, "site": self.d + "/site.json"}, f)
+        audit = "%s/oc-audit%s.jsonl" % (self.d, suffix)
+        argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500100", "--node-id", node_id,
+                "--audit-log", audit, "--esp", esp,
+                "--owner-chain", self.d + "/oc-chain.json",
+                "--owner-statement", self.d + "/oc-statement.json",
+                "--node-config", self.d + "/node.json"]
+        err = io.StringIO()
+        class OwnerWritten:
+            def __init__(self, path, node_id):
+                pass
+
+            def prepare(self, planned):
+                pass
+
+            def define(self):
+                return None
+
+            def reader(self):
+                return reanchor.node_policy(None, node_id)()
+        with unittest.mock.patch("deploy.baremetal.reanchor.check_esp"), \
+                unittest.mock.patch.object(reanchor, "NodePolicies", OwnerWritten), \
+                unittest.mock.patch.object(m.Store, "reanchor", return_value=None), \
+                unittest.mock.patch("deploy.baremetal.reanchor.write_esp", return_value=True), \
+                unittest.mock.patch("sys.stderr", err):
+            rc = reanchor.main(argv, ask=lambda prompt: prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0],
+                               owner_check=owner_check,
+                               active=lambda: [],
+                               highwater=lambda index, tcti, policy=None, define_policy=None, lock_path=None:
+                               m.HighWater(index, lock_path=self.d + "/oc-hw%s.lock" % suffix, run=self.run_tpm,
+                                           policy=policy, define_policy=define_policy))
+        trail = []
+        if os.path.exists(audit):
+            with open(audit) as f:
+                trail = [json.loads(line) for line in f]
+        return rc, trail, err.getvalue()
+
+    def test_main_owner_chain_with_the_real_owner_check_succeeds_and_a_wrong_statement_is_a_recorded_deny(self):
+        """reanchor.main --owner-chain runs the owner check built from --owner-statement and --node-config on
+        the chain's tip (independent non-author review of PR #778, item 2): a statement the check lets through
+        re-anchors (the owner-check's arguments are the ones main gives); a check that refuses (a statement of
+        another purpose is how main's own real check would refuse) is a DENY the re-anchor records, with
+        nothing changed. A mutant at main's owner-check call (flipped purpose/single_node, or the call deleted:
+        the chain then plans unchecked) is red -- the refusal below is never raised and the re-anchor records
+        an ALLOW the statement was refused."""
+        # 1) the good statement: the check passes on the tip (single-node) -- the re-anchor is recorded ALLOW
+        rc, trail, stderr = self.owner_chain_program(lambda *a, **kw: (lambda tip, single_node=None: None))
+        self.assertEqual(rc, 0, "the good statement must re-anchor; trail=%r stderr=%s" % (trail, stderr))
+        self.assertEqual([(e["event"], e.get("outcome")) for e in trail],
+                         [("reanchor-requested", None), ("reanchor", "ALLOW")],
+                         "the trail must show the request then the ALLOW")
+        # 2) a statement the check refuses (a statement of another purpose): a DENY, recorded, nothing changed.
+        #    The owner_check runs inside plan(), which the real reanchor() calls: with the check refusing,
+        #    plan() raises Refused, the real reanchor() records a DENY, and main returns 1.
+        def refusing(*a, **kw):
+            def on(tip, single_node=None):
+                raise m.Refused("the statement is for recover, not reanchor")
+            return on
+        rc, trail, stderr = self.owner_chain_program(refusing, suffix="-refused")
+        self.assertEqual(rc, 1)
+        self.assertEqual([(e["event"], e.get("outcome")) for e in trail], [("reanchor", "DENY")])
+        self.assertIn("the statement is for recover, not reanchor", trail[0]["reason"])
 
 
 class OnlyAnOperator(unittest.TestCase):

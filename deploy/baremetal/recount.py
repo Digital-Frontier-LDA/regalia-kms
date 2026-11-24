@@ -303,9 +303,17 @@ def main(argv=None, ask=None, run=None):
                 boot_id = f.read().strip()
             seconds = heartbeat.authenticated_now(node.clock(), node.tpm_clock(), None)[0]
             session = recover.held_session(os.path.join(cfg["run_dir"], recover.SESSION_FILE), boot_id, now=lambda: seconds)
-            recover.verify_owner(manifest, owner_statement, "recount", cfg["node_id"],
-                                 recover.session_id(session), seconds,
-                                 single_node=membership.profile(manifest) == membership.SINGLE_NODE)
+            try:
+                recover.verify_owner(manifest, owner_statement, "recount", cfg["node_id"],
+                                     recover.session_id(session), seconds,
+                                     single_node=membership.profile(manifest) == membership.SINGLE_NODE)
+            except Refused as refusal:
+                # a refused owner statement is an audit event, not just a printed refusal (independent review of
+                # PR #778, 2026-11-24: it was printed but never written to the trail, though the command says
+                # every decision is a line there): record it before refusing, with nothing defined or changed
+                record({"event": "recount", "outcome": "DENY", "reason": str(refusal)[:240],
+                        "counter": index, "phase": "owner-statement"})
+                raise
         # liveness (docs/design/single-node.md 4.7): the node signs its own heartbeats on its beat signing
         # counter (nv_signing, the same TPM): the floor must not go below what it has already signed.
         signer = node_module.signing_counter(cfg, run).value if membership.profile(manifest) == membership.SINGLE_NODE else None

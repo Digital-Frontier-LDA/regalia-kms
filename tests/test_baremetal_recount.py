@@ -542,7 +542,13 @@ class CommandLine(TheHostsTpmAndChain):
                 "--owner-statement", self.d + "/statement-v1.json"]
         # rc 1 (a refusal), not 2 (an uncaught traceback); the counter is not touched, nothing is recorded
         self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
-        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
+        # the refusal is a line in the audit trail (independent non-author review of PR #778, item 3: the
+        # statement check ran in main, and its refusal was printed but NOT written, though the command
+        # says every decision is a line there): a DENY naming the refusal, nothing else
+        with open(self.d + "/audit.jsonl") as f:
+            trail = [json.loads(line) for line in f]
+        self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
+        self.assertIn("a recount statement must be v2", trail[0]["reason"])
         counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
         self.assertEqual(counter.remains(), (None, []))          # the counter stays unusable: nothing was defined
 
@@ -557,6 +563,8 @@ class CommandLine(TheHostsTpmAndChain):
         with open(self.d + "/membership.json", "wb") as f:
             f.write(m.canonical([signed(self.m1)]))
         self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        # the refusal is recorded (the CONFLICT from current() is before the owner-statement path;
+        # the owner-statement refusal itself is tested by test_a_v1_shaped_recount_statement_is_refused_not_a_traceback)
         self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
 
 
