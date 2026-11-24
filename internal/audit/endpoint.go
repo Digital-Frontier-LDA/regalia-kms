@@ -49,6 +49,10 @@ func readEndpointReceiptKeys(path string) ([]ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("receipt keys: %w", err)
 	}
+	return parseEndpointReceiptKeys(raw, path)
+}
+
+func parseEndpointReceiptKeys(raw []byte, path string) ([]ed25519.PublicKey, error) {
 	var keys []ed25519.PublicKey
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
@@ -87,20 +91,17 @@ func LoadCollectorEndpoint(options CollectorEndpointOptions, now time.Time) (Col
 	if err != nil {
 		return e, fmt.Errorf("client certificate and key: %w", err)
 	}
-	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	leaf, err := parseEndpointLeaf(certificate, now)
 	if err != nil {
-		return e, fmt.Errorf("client certificate: %w", err)
-	}
-	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return e, fmt.Errorf("client certificate: valid %s to %s, not now", leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
+		return e, err
 	}
 	pemBytes, err := os.ReadFile(caPath)
 	if err != nil {
 		return e, fmt.Errorf("collector CA: %w", err)
 	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(pemBytes) {
-		return e, fmt.Errorf("collector CA: %s holds no usable certificate", caPath)
+	roots, err := parseEndpointRoots(pemBytes, caPath)
+	if err != nil {
+		return e, err
 	}
 	receiptKeys, err := readEndpointReceiptKeys(receiptPath)
 	if err != nil {
@@ -114,6 +115,25 @@ func LoadCollectorEndpoint(options CollectorEndpointOptions, now time.Time) (Col
 		ReceiptKeys: receiptKeys}, nil
 }
 
+func parseEndpointLeaf(certificate tls.Certificate, now time.Time) (*x509.Certificate, error) {
+	leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("client certificate: %w", err)
+	}
+	if now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
+		return nil, fmt.Errorf("client certificate: valid %s to %s, not now", leaf.NotBefore.UTC().Format(time.RFC3339), leaf.NotAfter.UTC().Format(time.RFC3339))
+	}
+	return leaf, nil
+}
+
+func parseEndpointRoots(pemBytes []byte, label string) (*x509.CertPool, error) {
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("collector CA: %s holds no usable certificate", label)
+	}
+	return roots, nil
+}
+
 // CollectorCertificateIdentity hashes the DER in the first decoded PEM block,
 // which must be a CERTIFICATE. This is the existing collector/shipper identity
 // format; it neither validates the certificate nor proves collector acceptance.
@@ -122,6 +142,10 @@ func CollectorCertificateIdentity(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("client certificate: %w", err)
 	}
+	return collectorCertificateIdentity(raw)
+}
+
+func collectorCertificateIdentity(raw []byte) (string, error) {
 	block, _ := pem.Decode(raw)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return "", errors.New("client certificate: not a PEM certificate")
