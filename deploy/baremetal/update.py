@@ -193,10 +193,13 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     `may_reboot` asks for (refused without it; refused under any other profile). No body is asked, and the
     trail records the decision (planned_outage, topology) on every event of the run."""
     event = {"event": "update-apply", "node_id": host.node_id, "entry": entry,
-             "planned_outage": planned_outage, "topology": membership.profile(host.manifest())}
+             "planned_outage": planned_outage}
     try:
         require(isinstance(deadline_minutes, int) and 5 <= deadline_minutes <= 120, "the deadline is 5 to 120 minutes")
         manifest = host.manifest()
+        # the topology is read from the manifest INSIDE the try: a chain that fails to verify is a DENY on the
+        # trail (module text: every exit is on it), and it is not read twice
+        event["topology"] = membership.profile(manifest)
         # #66 B3: the reboot renders from the ESP's chain, which the ESP advance writes before it moves the anchor; an
         # anchor behind the published epoch means that run has not finished, and the peers judge the next boot by an
         # epoch this host's ESP may not hold
@@ -247,9 +250,14 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         say("%s runs %s (Boot%s). Its peers %s vouch for this boot (the shortest lease has %d s left)."
             % (node_id, running["label"], current, " and ".join(verdict["authorizers"]), verdict["seconds"]))
     say("Boot%s's image measures %s in every phase. BootNext := %s, then this host reboots." % (entry, target["label"], entry))
-    say("DEADLINE %s: if %s is not back up on %s by then (no peer has unlocked it, or it hangs), reset it through the iLO "
-        "(Power: Reset). BootNext is used once: that boot follows BootOrder, Boot%s, %s, still approved, and its peers unlock it."
-        % (_utc(deadline), node_id, target["label"], current, running["label"]))
+    if single_node:
+        say("DEADLINE %s: if %s is not back up on %s by then (the owner has not unlocked it, or it hangs), reset it through "
+            "the iLO (Power: Reset). BootNext is used once: that boot follows BootOrder, Boot%s, %s, still approved, and the "
+            "owner unlocks it." % (_utc(deadline), node_id, target["label"], current, running["label"]))
+    else:
+        say("DEADLINE %s: if %s is not back up on %s by then (no peer has unlocked it, or it hangs), reset it through the iLO "
+            "(Power: Reset). BootNext is used once: that boot follows BootOrder, Boot%s, %s, still approved, and its peers unlock it."
+            % (_utc(deadline), node_id, target["label"], current, running["label"]))
     phrase = _phrase("reboot", node_id, "into", target["label"])
     answer = typed("type %r to go on: " % phrase).strip()
     if answer != phrase:
@@ -299,9 +307,16 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
 
 def promote(host, esp, typed, record, say=print, planned_outage=False):
     event = {"event": "update-promote", "node_id": host.node_id,
-             "planned_outage": planned_outage, "topology": membership.profile(host.manifest())}
+             "planned_outage": planned_outage}
     try:
         manifest = host.manifest()
+        # the topology is read from the manifest INSIDE the try: a chain that fails to verify is a DENY on the
+        # trail (module text: every exit is on it), and it is not read twice. Under single-node the update IS a
+        # planned outage (the host came up on a planned-outage apply, and promote is the local BootOrder step
+        # that follows), so the promote's trail says so on every event too, as the runbook's row promises.
+        single_node = membership.profile(manifest) == membership.SINGLE_NODE
+        event["topology"] = membership.profile(manifest)
+        event["planned_outage"] = single_node or planned_outage
         document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
@@ -315,7 +330,6 @@ def promote(host, esp, typed, record, say=print, planned_outage=False):
         # on three nodes a peer's lease for this boot is the evidence it came up; under the single-node profile
         # (regalia-kms-dx7.8) there is no peer: the node's own self-issued lease for this boot is the record
         # that it booted, in this session, under this epoch (lease.py allows self-issued leases only there)
-        single_node = membership.profile(manifest) == membership.SINGLE_NODE
         peers = [node_id] if single_node else authorizers(manifest, node_id)
         leases, refused = fresh_leases(host, manifest, peers, host.session())
         event.update({"lease_issuers": sorted(leases), "no_lease": refused})
@@ -349,10 +363,12 @@ def quote_for_owner(host, nonce, record, say=print):
     node quotes it here, and the resulting JSON is carried back to the owner for `--evidence`. The owner is already
     at the host for every single-node reboot (design 4.12): no network endpoint, no new listener. Returns the
     evidence object (also printed as one JSON line)."""
-    event = {"event": "update-quote-for-owner", "node_id": host.node_id,
-             "topology": membership.profile(host.manifest())}
+    event = {"event": "update-quote-for-owner", "node_id": host.node_id}
     try:
         manifest = host.manifest()
+        # the topology is read from the manifest INSIDE the try: a chain that fails to verify is a DENY on the
+        # trail (module text: every exit is on it), and it is not read twice
+        event["topology"] = membership.profile(manifest)
         require(membership.profile(manifest) == membership.SINGLE_NODE,
                 "quote-for-owner is the single-node profile's: under %s a peer gives the lease and the quote, not the "
                 "node to the owner" % membership.profile(manifest))
@@ -514,7 +530,14 @@ class Host:
         session_id, public = self._session
         require(session_id == session, "the boot session changed while asking")
         holder = lease.Holder(self.node_id, session_id, self.node.clock(), self.node.tpm_clock(), state_path, run=self.run)
-        sources = self.node.sources(manifest)
+        # regalia-kms-dx7.8: under single-node the lease source is this node's OWN regalia-sync, over its local
+        # lease listener (the admission renew path, node.py, does the same) -- a single-node host has no service
+        # tunnel and no peer in sources(), so asking its own node ID would refuse. Other profiles reach their
+        # peers over the tunnel, as before.
+        if membership.profile(manifest) == membership.SINGLE_NODE:
+            sources = self.node.self_source()
+        else:
+            sources = self.node.sources(manifest)
         require(peer in sources, "%s is not a peer this node can reach" % peer)
 
         class Manifest:

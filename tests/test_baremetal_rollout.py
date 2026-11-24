@@ -972,6 +972,20 @@ class SingleNodeRetire(Case):
         self.refused("NOT YET: retiring now would lock out a (no witness has verified it under epoch 2)",
                      rollout.retire_ready, self.s2, self.SBOTH, self.states(("image-2", "system"), epoch=1))
 
+    def test_an_owner_unlock_record_on_an_unphased_set_is_not_a_boot(self):
+        """regalia-kms-dx7.8 review, finding 2 (fail-open): on a set with one value per PCR the owner's UNLOCK
+        (initrd) writes a record with no phase -- attest.py records the phase only for a set given per phase.
+        Under the single-node profile that record is the only owner record that may exist before the host has
+        come up; counting it as "up" would retire on an initrd that asked for its disk and may never have
+        come up. Only a record that names the SYSTEM phase counts, whatever the set's shape."""
+        # the record may_unlock actually writes on this unphased set: phase absent (the verifier never writes one
+        # where the set is not per phase)
+        self.refused("NOT YET: retiring now would lock out a (owner last saw it in the initrd of 'image-2', not up",
+                     rollout.retire_ready, self.s2, self.SBOTH, self.states(("image-2", None)))
+        # stranded says the same: an unlock on the kept set is not a boot
+        self.assertEqual(rollout.stranded(self.s2, self.SBOTH, self.SNEXT, self.states(("image-2", None))),
+                         {"a": "owner last saw it in the initrd of 'image-2', not up, not on image-2"})
+
     def test_the_node_s_own_state_is_not_evidence_and_no_node_state_is_given_at_all(self):
         """The node may believe itself up on the new image; that says nothing about itself, and the command takes the
         owner's state file and nothing else."""

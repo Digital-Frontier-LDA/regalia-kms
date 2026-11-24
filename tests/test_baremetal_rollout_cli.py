@@ -588,6 +588,22 @@ class SingleNode(Case):
         self.assertEqual(rc, 1)
         self.assertIn("NOT YET: this retire would lock out a (owner last saw it on 'image-1', not on image-2)", err)
 
+    def test_propose_an_approve_step_under_the_single_node_profile_needs_no_owner_state(self):
+        """regalia-kms-dx7.8 review (CodeRabbit on #779): an `approve` (CURRENT+BOTH, the new image approved)
+        takes no set away, so it reads no state. The single-node owner requirement must not refuse it: before
+        the fix, `_cmd_propose` always demanded `--state owner=FILE` (the retire's witness), and `check_lockout`
+        then refused any state it was given for an approve -- no command line worked. Now the owner state is
+        required only when the step takes a set away, and an `approve` proposes with none."""
+        old, new = self.write("sold.json", rt.SingleNodeReboot.SCUR), self.write("snew.json", self.sboth)
+        argv = ["propose", *self.on([self.s1]), "--old", old, "--new", new, "--issued-at", "2026-11-03T10:00:00Z"]
+        # no --state: the approve reads no state, and the owner's witness is not demanded of it
+        rc, result = self.as_json(*argv)
+        self.assertEqual((rc, result["transition"], result["unsigned_manifest"]["epoch"]), (0, "approve", 2))
+        # and a --state it is given is refused by check_lockout: a step that reads no state takes no state
+        rc, _, err = self.run_cli(*argv, "--state", "owner=" + self.owner_state("image-2"))
+        self.assertEqual(rc, 1)
+        self.assertIn("--state and --locked-out are read only when the new document takes a set away", err)
+
 
 if __name__ == "__main__":
     unittest.main()

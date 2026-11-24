@@ -247,6 +247,13 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
         require(phase == "system", "attest-booted takes the booted system's quote; that quote was given in the %s "
                 "(a boot that asked for its disk and never came up is not a boot; retiring on it would lock the host "
                 "into the image it never came up on)" % phase)
+    # The phase is a NODE CLAIM (stamped by the node's quote-for-owner). It selects only the early initrd refusal
+    # above; it is not part of the attestation evidence the verifier checks, so it is stripped before reattest,
+    # whose exact-keys check refuses any key it does not know. The verifier's record then names the phase itself,
+    # or the owner's tool (below) stamps "system" for an unphased set.
+    if phase is not None:
+        evidence = dict(evidence)
+        evidence.pop("phase")
     try:
         lease.reattest(attester, evidence, node_id, session_id, manifest, node, phase="system")
     except Refused as refusal:

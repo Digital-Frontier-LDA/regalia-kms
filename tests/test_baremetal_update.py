@@ -144,6 +144,18 @@ class Apply(Case):
                      % (self.host._anchored, self.host._anchored + 1), self.apply)
         self.assertEqual((self.bootnexts(), self.prompts, self.host.asked, [e["outcome"] for e in self.trail]), ([], [], [], ["DENY"]))
 
+    def test_a_manifest_that_fails_to_verify_leaves_a_deny_on_the_trail(self):
+        """regalia-kms-dx7.8 review, finding 3 (regression): the module text promises 'every exit is on the
+        update trail'. A chain that does not verify is the case an auditor most needs on the trail; reading the
+        topology for the event used to call host.manifest() before the try that records the DENY, so the
+        refusal escaped the trail. The topology is read inside the try, from the manifest already read there:
+        the DENY is back, and the chain is read once, not twice."""
+        import unittest.mock as mock
+        with mock.patch.object(type(self.host), "manifest", side_effect=m.Refused("the chain does not verify from the root key")):
+            self.refused("the chain does not verify from the root key", self.apply)
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])
+        self.assertEqual(self.trail[0]["reason"], "the chain does not verify from the root key")
+
     def test_a_next_boot_that_needs_the_recovery_key_is_refused(self):
         """regalia-kms-48: a manifest that leaves the initrd nothing to render turns a reboot into a recovery-key ceremony."""
         self.host._unrenderable = "the manifest leaves a no peer with an address"
@@ -354,6 +366,28 @@ class SingleNode(Case):
                      self.typed("make 0002 the default on a"), self.record, say=lambda line: None,
                      planned_outage=True)
 
+    def test_promote_under_the_single_node_profile_records_the_planned_outage_from_the_profile(self):
+        """regalia-kms-dx7.8 review, finding 5: the runbook's promote step names no --planned-outage (there is no
+        such flag; the operator's decision was the apply's). The promote's trail still records planned_outage
+        true, from the PROFILE: under single-node the update is a planned outage, and the trail says so on every
+        event, as the runbook's row promises. Called without the flag, as main() does, a single-node promote says
+        true; a multi-node promote (no flag) still says false."""
+        self.apply(planned_outage=True)
+        self.trail.clear()
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][-1]
+        after = update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record,
+                               say=lambda line: None)
+        self.assertEqual(after["order"][:2], ["0002", "0001"])
+        self.assertEqual(self.trail[-1]["planned_outage"], True, "single-node promote records it from the profile")
+        self.assertEqual(self.trail[-1]["topology"], "single-node")
+        # the same call under another profile (no flag, no outage) records false: the profile is what decides
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, BOTH["nodes"]["a"]["accepted"][-1]
+        self.host.firmware.order = ["0001", "0002"]
+        self.trail.clear()
+        update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record, say=lambda line: None)
+        self.assertEqual(self.trail[-1]["planned_outage"], False, "multi-node promote with no flag records false")
+        self.assertEqual(self.trail[-1]["topology"], "multi-node")
+
     def test_quote_for_owner_prints_the_system_phase_quote_over_the_owner_s_nonce(self):
         """regalia-kms-dx7.8: after the planned-outage reboot the serving path is up (a self-lease for this boot),
         and quote-for-owner prints the node's system-phase quote over the owner's nonce -- the evidence owner.py
@@ -443,6 +477,41 @@ class TheRealHost(unittest.TestCase):
             self.skipTest("run as root")
         rc = update.main(["promote", "--config", "/nonexistent/node.json"], typed=lambda prompt: "")
         self.assertEqual(rc, 1)
+
+    def test_lease_from_under_single_node_uses_the_node_s_own_sync(self):
+        """regalia-kms-dx7.8 review (CodeRabbit on #779): under the single-node profile the lease source is this
+        node's OWN regalia-sync (self_source), not sources() -- a single-node host has no service tunnel, and
+        sources() excludes the node itself, so asking its own node ID refused with 'not a peer this node can
+        reach'. The admission renew path (node.py) makes the same choice; lease_from now mirrors it. The flow is
+        stopped right after the source selection (node.quote raises a sentinel), so the test asserts which source
+        method was called and that the require passes, not the rest of the lease exchange."""
+        from tests.test_baremetal_membership_v5 import single5, manifest5, one
+        from tests.test_baremetal_membership_v4 import nodes4
+        class Sentinel(Exception):
+            pass
+        single = single5(1, "", [dict(one("a"), ek_name="00" * 32, ak_name="00" * 32)], policy_version="x")
+        multi = manifest5(1, "", nodes4())
+        for label, manifest, peer, want in (("single-node", single, "a", "self_source"),
+                                            ("multi-node", multi, "b", "sources")):
+            with self.subTest(label):
+                calls = []
+                def self_source(self, timeout=None):
+                    calls.append("self_source")
+                    return {"a": "local-transport"}
+                def sources(self, m, timeout=None):
+                    calls.append("sources")
+                    return {"a": "tunnel", "b": "tunnel"}
+                def quote(self, session_id, public):
+                    raise Sentinel("stopped after source selection")
+                node = type("N", (), {"node_id": "a", "clock": staticmethod(lambda: 0), "tpm_clock": staticmethod(lambda: 0),
+                                      "self_source": self_source, "sources": sources, "quote": quote})()
+                host = update.Host.__new__(update.Host)
+                host.node, host.node_id, host.run, host._session = node, "a", lambda *a, **k: None, ("ab" * 32, "cd" * 32)
+                d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, True)
+                with self.assertRaises(Sentinel):
+                    host.lease_from(peer, manifest, "ab" * 32, os.path.join(d, "lease.json"))
+                self.assertEqual(calls, [want], "profile %s must pick %s()" % (label, want))
+
 
 if __name__ == "__main__":
     unittest.main()

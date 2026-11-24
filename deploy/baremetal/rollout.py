@@ -157,19 +157,21 @@ def last_seen(state, manifest, node_id):
     return last[0] if last else None
 
 
-def _up(target, phase):
+def _up(target, phase, single_node=False):
     """Whether a sighting in `phase` shows the node UP on `target`. Where the set is per phase, only a
     quote from the booted system does: a node verified in its initrd asked for its disk and may never have
     come up, so an initrd-phase record never counts, nor does a record with no phase (it cannot be told to
-    be the boot that came up). Where the set has one value per PCR, the values cannot tell the two phases
-    apart: any non-initrd sighting counts, as the node's own verifier has always read an unphased set --
-    including a record written before the phase was recorded, under a multi-node profile. The owner's tool,
-    the single-node profile's only witness (regalia-kms-dx7.8), always writes the phase the request was made
-    in (ownerunlock.attest_booted), so an initrd record is never counted as a boot even there; the no-phase
-    case under single-node is one its witness does not write."""
+    be the boot that came up). Where the set has one value per PCR and the profile is multi-node, the values
+    cannot tell the two phases apart: any non-initrd sighting counts, as the node's own verifier has always
+    read an unphased set -- including a record written before the phase was recorded. Under the single-node
+    profile (regalia-kms-dx7.8) the judge is the owner's tool, and it is the one whose unlock (initrd) writes
+    a record with no phase for an unphased set (attest.py records no phase where the set is not per phase):
+    counting such a record as a boot would fail open, retiring on an initrd that asked for its disk and may
+    never have come up. So under single-node only a record that names the SYSTEM phase counts, whatever the
+    set's shape; attest_booted always stamps it."""
     if phase == "initrd":
         return False
-    return phase == "system" if "phases" in target else True
+    return phase == "system" if (single_node or "phases" in target) else True
 
 
 def seen_on_target(state, manifest, document, node_id):
@@ -314,18 +316,20 @@ def retire_ready(manifest, document, states):
     that is not there, and who says so."""
     measurements.bind(manifest, document)
     _witnesses(manifest, states)
+    single_node = membership.profile(manifest) == membership.SINGLE_NODE
     seen, behind = {}, []
     for node_id in attesting(manifest):
         target = measurements.target(document, node_id)
         want = target["label"]
         # Under single-node the witness is the owner (membership.OWNER), not a peer node; the node's own state is
         # never evidence of itself, and `_witnesses` has admitted nothing but the owner's file anyway.
-        witnesses = [membership.OWNER] if membership.profile(manifest) == membership.SINGLE_NODE else None
+        witnesses = [membership.OWNER] if single_node else None
         said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id and (witnesses is None or peer in witnesses)}
         said = {peer: last for peer, last in said.items() if last is not None}
-        # on another image, or on the target but only in its initrd: it asked for its disk, and may never have come up
+        # on another image, or on the target but not up (its initrd: it asked for its disk and may never have come
+        # up; under single-node also a record with no phase, which the owner's unlock writes and which is not a boot)
         wrong = ["%s last saw it on %r" % (peer, label) if label != want else "%s last saw it in the initrd of %r, not up" % (peer, label)
-                 for peer, (label, phase) in said.items() if label != want or not _up(target, phase)]
+                 for peer, (label, phase) in said.items() if label != want or not _up(target, phase, single_node)]
         if not said:
             if witnesses is not None:
                 behind.append("%s (no witness has verified it under epoch %d)" % (node_id, manifest["epoch"]))
@@ -354,6 +358,7 @@ def stranded(manifest, old, new, states):
     under `manifest`, are not judged here (see unwatched)."""
     measurements.bind(manifest, old)
     _witnesses(manifest, states)
+    single_node = membership.profile(manifest) == membership.SINGLE_NODE
     before, after = measurements.validate(old), measurements.validate(new)
     behind = {}
     for node_id in attesting(manifest):
@@ -362,11 +367,11 @@ def stranded(manifest, old, new, states):
         kept = {e["label"]: e for e in after[node_id]}
         if not {e["label"] for e in before[node_id]} - set(kept):
             continue
-        witnesses = [membership.OWNER] if membership.profile(manifest) == membership.SINGLE_NODE else None
+        witnesses = [membership.OWNER] if single_node else None
         said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id and (witnesses is None or peer in witnesses)}
         said = {peer: last for peer, last in said.items() if last is not None}
         wrong = ["%s last saw it on %r" % (peer, label) if label not in kept else "%s last saw it in the initrd of %r, not up" % (peer, label)
-                 for peer, (label, phase) in said.items() if label not in kept or not _up(kept[label], phase)]
+                 for peer, (label, phase) in said.items() if label not in kept or not _up(kept[label], phase, single_node)]
         if not said:
             behind[node_id] = "no witness has verified it under epoch %d" % manifest["epoch"] if witnesses is not None \
                 else "no other node has verified it under epoch %d" % manifest["epoch"]
@@ -545,7 +550,12 @@ def _cmd_epoch(args):
         _tpm_text(anchored, args.tcti) if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
-def _states(items, profile=None):
+def _states(items, profile=None, required=False):
+    """Read the `--state NODE=FILE` items into a states dict. Under the single-node profile the only witness
+    is the owner (`--state owner=FILE`); when `required` the owner's file must be given (retire-ready always
+    judges from it), and a step that reads no state (an `approve`) is refused it the same way. When `required`
+    is False (a `propose` whose new document takes no set away) the owner's file is optional, and `check_lockout`
+    is the one that refuses it (a step that reads no state takes no state)."""
     states = {}
     for item in items:
         node_id, sep, path = item.partition("=")
@@ -555,8 +565,8 @@ def _states(items, profile=None):
             require(node_id == membership.OWNER, "under the single-node profile the owner's state is the only witness: "
                     "give --state %s=FILE" % membership.OWNER)
         states[node_id] = _json(path, "--state %s" % node_id)
-    if profile == membership.SINGLE_NODE:
-        require(states and membership.OWNER in states, "under the single-node profile the owner's state is the only witness: "
+    if profile == membership.SINGLE_NODE and required:
+        require(membership.OWNER in states, "under the single-node profile the owner's state is the only witness: "
                 "give --state %s=FILE" % membership.OWNER)
     return states
 
@@ -567,7 +577,9 @@ def _cmd_propose(args):
     measurements.bind(current, old)
     kind = measurements.transition(old, new, emergency=args.emergency, dropped=args.dropped)
     require(kind != "unchanged", "the new document changes nothing: there is no manifest to propose")
-    locked = check_lockout(current, old, new, kind, _states(args.state, membership.profile(current)), args.emergency, args.locked_out)
+    # the owner's state is the retire's witness; an `approve` (a step that takes no set away) reads no state, so
+    # a single-node `propose` for it needs no --state, and check_lockout refuses any it is given
+    locked = check_lockout(current, old, new, kind, _states(args.state, membership.profile(current), kind in DROPS), args.emergency, args.locked_out)
     issued = args.issued_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     proposal = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current),
                     policy_version=measurements.version(new), issued_at=issued)
@@ -606,7 +618,9 @@ def _cmd_may_reboot(args):
     if profile == membership.SINGLE_NODE:
         return verdict, "YES: %(node_id)s may reboot into %(target)s (PLANNED OUTAGE: this host is the only node: it is down " \
                         "until the owner unlocks it, having seen it boot on %(target)s (owner attest-booted); no peer lease is " \
-                        "asked for, and none is owed) (epoch %(epoch)d)"
+                        "asked for, and none is owed) (epoch %(epoch)d)" + (
+            "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now)") + (
+            _tpm_text(anchored, args.tcti) if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)")
     return verdict, "YES: %(node_id)s may reboot into %(target)s (vouched for by %(authorizers)s; the shortest lease has %(seconds)d s left)" + (
         "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now): do not act on a lease that is about to expire") + (
         _tpm_text(anchored, args.tcti) if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
@@ -615,7 +629,7 @@ def _cmd_may_reboot(args):
 
 def _cmd_retire_ready(args):
     manifest, anchored = _current(args)
-    states = _states(args.state, membership.profile(manifest))
+    states = _states(args.state, membership.profile(manifest), required=True)
     seen = retire_ready(manifest, _document(args.measurements), states)
     return dict({"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"]}, **_tpm(anchored, args.tcti)), \
         "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \

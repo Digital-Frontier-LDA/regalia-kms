@@ -149,7 +149,7 @@ applies, with these differences:
 |---|---|---|
 | 3.2 `update apply` | asks a fresh lease from each peer; `may_reboot` needs both peers' state | `--planned-outage` (the operator's word that the host is down until the owner unlocks it); no peer lease is asked for or owed; the trail records `planned_outage: true` and `topology: "single-node"` on every event |
 | 3.4 unlock | a peer unlocks the host from its initrd | the owner's tool (`owner.py unlock`) answers on the boot mesh, as the host's only peer |
-| 3.8 `update promote` | needs at least one peer's lease for the boot | needs the host's **own** lease for the boot (the self-issued one, `--planned-outage`); the self-lease is the record that the host booted in this session under this epoch |
+| 3.8 `update promote` | needs at least one peer's lease for the boot | needs the host's **own** lease for the boot (the self-issued one, which the single-node profile alone allows); the self-lease is the record that the host booted in this session under this epoch, and the trail records `planned_outage: true` as it did for the apply |
 | 4.1 `retire-ready` | reads every peer's state file | reads the **owner's** state file only (`--state owner=OWNER.json`): the owner's `attest-booted` record is the retire evidence |
 | 5.1 `propose` (retire) | needs every peer's state | needs the owner's state only |
 
@@ -164,14 +164,19 @@ applies, with these differences:
    quote (initrd phase, under the tip's measurements) and gives the contribution. Each response is a card
    touch. The host opens its volume and comes up.
 
-3. **After the host is up and serving (system phase):** the owner takes the host's quote for the owner's
-   nonce in the **system** phase (the host prints it for the owner's tool, over the tip's PCR selection) and
-   runs `owner.py attest-booted --chain … --root-key … --measurements … --state … --node … --session …
-   --evidence …`. The tool verifies the quote under the tip's measurements (an unlisted image, PCR 11, and
-   an unlisted site, PCR 12, are refused exactly as an unlock is) and writes the record
-   `{"label", "epoch", "phase": "system"}` into the owner's attest state. **That record is the retire
-   evidence.** An unlock (initrd) record is not: a boot that asked for its disk and never came up is not a
-   boot.
+3. **After the host is up and serving (system phase):** the owner issues a nonce and takes the host's
+   quote for it, in this order. First the owner issues the nonce:
+   `python3 -Es -m deploy.baremetal.owner attest-booted --chain … --root-key … --measurements … --state …
+   --node … --nonce` prints it (64 hex). Then, on the host (its serving path is up -- a self-issued lease for
+   this boot is the proof), the operator runs `python3 -Es -m deploy.baremetal.update quote-for-owner
+   --config … --nonce <the hex>`, which prints the host's system-phase quote as one JSON line. The owner
+   carries that line back and, **within 120 s of issuing the nonce** (it lives `NONCE_TTL`, is good once, and
+   is evicted by eight other nonces the same verifier issues in the meantime -- do not run other unlocks or
+   attestations in between), runs `owner.py attest-booted … --session … --evidence <the JSON>`. The tool
+   verifies the quote under the tip's measurements (an unlisted image, PCR 11, and an unlisted site, PCR 12,
+   are refused exactly as an unlock is) and writes the record `{"label", "epoch", "phase": "system"}` into the
+   owner's attest state. **That record is the retire evidence.** An unlock (initrd) record is not: a boot
+   that asked for its disk and never came up is not a boot.
 
 4. **At the retire (step 5):** `rollout propose --state owner=OWNER.json` reads the owner's record. It
    refuses (NOT YET) while the owner has not seen the host up on the new image. The node's own state never

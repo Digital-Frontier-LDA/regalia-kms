@@ -451,7 +451,9 @@ def main(argv=None):
                    "sessions): the same attest.json unlock uses, so the nonce it issues is the one the node's quote answers")
     ab.add_argument("--node", required=True, help="the single-node host's node ID")
     ab.add_argument("--nonce", action="store_true", help="issue a nonce from the verifier and print it (64 hex) for the node to "
-                   "quote against; the owner's tool does this before the node boots the new image")
+                   "quote against; do this AFTER the host is up on the new image (the owner has already unlocked it): the "
+                   "nonce lives 120 s, so the node's quote-for-owner and the owner's --evidence run follow it within that "
+                   "window, and it is evicted by eight other nonces the same verifier issues in the meantime")
     ab.add_argument("--session", help="the boot session ID (64 hex), as the node's console shows it (needed only with --evidence)")
     ab.add_argument("--evidence", help="the node's system-phase quote for the owner's nonce (JSON: ephemeral_public, nonce, "
                    "quote, signature, and phase -- stamped by the node's quote-for-owner, and refused if it says initrd); "

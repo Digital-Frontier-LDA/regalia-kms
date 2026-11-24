@@ -400,6 +400,23 @@ class AttestBooted(Case):
         state = json.load(open(path))
         self.assertEqual(state["nodes"]["a"]["measurement"], record)
 
+    def test_the_node_s_quote_for_owner_evidence_is_accepted_and_is_the_retire_evidence(self):
+        """regalia-kms-dx7.8 review, finding 1: `update quote-for-owner` stamps the evidence with
+        `phase="system"` (a node claim), and `owner.py attest-booted` takes that exact evidence. The phase
+        is a claim, not part of the attestation the verifier checks, so it must be stripped before the
+        verifier's exact-keys check -- the runbook's step 3 (node quote, then attest-booted --evidence) is
+        the retire evidence path and must work. Feeding the phase-stamped quote through is what the old
+        code refused with 'unknown=[phase]'; now it is the record retire_ready reads."""
+        path = self.d + "/qfor.json"
+        attester = self.enrolled_attester(path)
+        # exactly the object update.quote_for_owner prints: the four evidence keys plus phase="system"
+        evidence = self.evidence(self.m1, lt.SESSION, attester, phase="system")
+        self.assertEqual(set(evidence), {"ephemeral_public", "nonce", "quote", "signature", "phase"})
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"], record)
+
     def test_the_attest_booted_cli_issues_the_nonce_and_verifies_under_the_unlock_s_verifier(self):
         """regalia-kms-dx7.8, the runbook's hand-carry: owner.py attest-booted --nonce prints a nonce from the
         owner's ONE verifier (attest.json, the same file contribute and unlock use, where the AK is enrolled), the
