@@ -413,7 +413,8 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		// wrong key, a corrupted or high-S signature, or a public key that is not the pinned one.
 		// Never success, and not retryable as an outage: it is a defect in the token or this daemon
 		// that an operator must look at. Policy's reservation stands (the sequence was spent on the
-		// attempt); COSMOS-SUPPORT.md says how to recover.
+		// attempt), and there is no supported re-initialisation yet: the account stays blocked at that
+		// sequence (regalia-kms-4t4). See COSMOS-SUPPORT.md for what an operator does meanwhile.
 		if errors.Is(err, errCosmosSignatureUnverified) {
 			coordinator.recordOrCount(ctx, request, route, "allow", "signature-unverified", started, true, policyRequest.VerifiedApprovers)
 			return api.Result{}, failure("INTERNAL", http.StatusInternalServerError, false)
