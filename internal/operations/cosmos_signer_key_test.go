@@ -15,6 +15,7 @@ import (
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	secp256k1ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
 // The review of PR #774 (regalia-kms-35b, council items A and B, review findings 1-4): the
@@ -392,6 +393,76 @@ func TestCosmosSignDocSignerKeyMustBeCompressed(t *testing.T) {
 			t.Fatalf("a compressed SignDoc key was refused: %v", err)
 		}
 	})
+}
+
+// TestCosmosVerifierRefusesUncompressedSignerKey (council ruling R4, mutant M-len): the verifier
+// itself must refuse a 65-byte (uncompressed) SignDoc signer key, even when the token reports the
+// same point in SPKI form and the signature is valid. The coordinator's cosmosSignerBound is the
+// first lock (before the reservation); this is the second lock, and it must hold on its own.
+func TestCosmosVerifierRefusesUncompressedSignerKey(t *testing.T) {
+	card := newCosmosCard(t)
+	registered := secp256k1SPKI(card.signer.PubKey())
+	digest := sha256.Sum256(cosmosFixture(t))
+	// A valid low-S signature under the card's key, raw r||s (the backend's form).
+	// secp256k1ecdsa.Sign does not guarantee low-S, so normalise s to [1, N/2].
+	sig := secp256k1ecdsa.Sign(card.signer, digest[:])
+	r, s := sig.R(), sig.S()
+	// s is low-S iff s <= N/2; if s > N/2, replace s with N-s.
+	sBytes := s.Bytes()
+	sInt := new(big.Int).SetBytes(sBytes[:])
+	order := secp256k1.S256().N
+	if sInt.Cmp(new(big.Int).Rsh(order, 1)) > 0 {
+		sInt = new(big.Int).Sub(order, sInt)
+	}
+	lowS := make([]byte, 32)
+	sInt.FillBytes(lowS)
+	rBytes := r.Bytes()
+	raw := make([]byte, 64)
+	copy(raw[:32], rBytes[:])
+	copy(raw[32:], lowS[:])
+	// The control: a compressed signer key (33 bytes, prefix 02) verifies.
+	goodSigner := &policy.CosmosPublicKey{TypeURL: secp256k1KeyType, Key: compressed(card.signer)}
+	if err := verifyCosmosSignature("secp256k1", spkiPin(registered), registered, goodSigner, digest[:], raw); err != nil {
+		t.Fatalf("the control: a compressed SignDoc signer key did not verify: %v", err)
+	}
+	// A 65-byte uncompressed signer key must be refused by the verifier itself, even though the
+	// token reports the same point and the signature is valid.
+	badSigner := &policy.CosmosPublicKey{TypeURL: secp256k1KeyType, Key: card.signer.PubKey().SerializeUncompressed()}
+	if err := verifyCosmosSignature("secp256k1", spkiPin(registered), registered, badSigner, digest[:], raw); err == nil {
+		t.Fatal("DEFECT: the verifier accepted a 65-byte uncompressed SignDoc signer key: M-len survives")
+	}
+	// The same for p256: a 65-byte uncompressed key is refused by the verifier.
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered256, err := x509.MarshalPKIXPublicKey(&p256.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest256 := sha256.Sum256(cosmosFixture(t))
+	r256, s256, err := ecdsa.Sign(rand.Reader, p256, digest256[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	order256 := elliptic.P256().Params().N
+	if s256.Cmp(new(big.Int).Rsh(order256, 1)) > 0 {
+		s256 = new(big.Int).Sub(order256, s256)
+	}
+	if s256.Sign() == 0 {
+		t.Fatal("the p256 signature is not valid")
+	}
+	raw256 := make([]byte, 64)
+	r256.FillBytes(raw256[:32])
+	s256.FillBytes(raw256[32:])
+	goodP256 := &policy.CosmosPublicKey{TypeURL: secp256r1KeyType, Key: elliptic.MarshalCompressed(elliptic.P256(), p256.X, p256.Y)}
+	if err := verifyCosmosSignature("p256", spkiPin(registered256), registered256, goodP256, digest256[:], raw256); err != nil {
+		t.Fatalf("the control: a compressed p256 SignDoc signer key did not verify: %v", err)
+	}
+	badP256 := &policy.CosmosPublicKey{TypeURL: secp256r1KeyType, Key: elliptic.Marshal(elliptic.P256(), p256.X, p256.Y)}
+	if err := verifyCosmosSignature("p256", spkiPin(registered256), registered256, badP256, digest256[:], raw256); err == nil {
+		t.Fatal("DEFECT: the verifier accepted a 65-byte uncompressed p256 SignDoc signer key: M-len survives")
+	}
 }
 
 // TestCosmosP256SignatureMustBeLowS (review finding 4): the Cosmos SDK's secp256r1 key refuses an s

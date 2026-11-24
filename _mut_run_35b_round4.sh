@@ -33,6 +33,6 @@ m A4 $V '	if pin == "" && signerKey == nil {
 	}' '	if pin == "" && signerKey == nil {
 		return nil
 	}'
-m M-len $V '	if len(key.Key) != 33 || (key.Key[0] != 0x02 && key.Key[0] != 0x03) {' '	if len(key.Key) > 65 || (key.Key[0] != 0x02 && key.Key[0] != 0x03) {'
+m M-len $V '	if len(key.Key) != 33 || (key.Key[0] != 0x02 && key.Key[0] != 0x03) {' '	if len(key.Key) < 2 {'
 m M-late $V '		if !cosmosSignerBound(route.Algorithm, route.Binding.PublicKeySHA256, parsed.SignerPublicKey) {' '		if false && !cosmosSignerBound(route.Algorithm, route.Binding.PublicKeySHA256, parsed.SignerPublicKey) {'
 m M99 $V 'func verifySecp256k1(key *secp256k1.PublicKey, digest, signature []byte) bool {' 'func verifySecp256k1(key *secp256k1.PublicKey, digest, signature []byte) bool { // m99'
