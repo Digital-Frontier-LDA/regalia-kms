@@ -91,27 +91,45 @@ CONTROLS = [
      [ENROLLING + "test_a_replacement_writes_it_whole"]),
     ("9 the etcd drop-in sorts after 50-restore.conf", renamed(ETCD_GUARD, "restore-pending.conf"),
      [GATE + "test_the_marker_s_drop_in_sorts_before_restore_s_reset", GATE + "test_restore_s_drop_in_lifts_the_marker_for_etcd_alone"]),
-    # COUNCIL on #775: --bootstrap is refused before any write when the verified chain proves non-genesis. One control per
-    # arm; the guard-removed control kills the whole set at once.
+    # COUNCIL on #775 (refined by the PA addendum): --bootstrap is refused before any write unless this node is exactly a
+    # genesis member (is_genesis_member: first named at epoch 1; None fails closed). One control per arm, then the two
+    # addendum controls: (a) restoring the buggy `is not None` must turn the genesis-accepted test red; (b) swapping the
+    # None outcome to accept must turn the None-refused test red. The guard-removed control kills the whole set at once.
     ("10 the --bootstrap refusal guard removed",
      replaced(ENROL, '    if bootstrap and (manifest["epoch"] != 1 or replace or sole\n'
-                     '                      or first_epoch(chain if isinstance(chain, list) else [chain], root_key,\n'
-                     '                                     journal.doc["node_id"]) is not None):\n',
+                     '                      or not is_genesis_member(chain if isinstance(chain, list) else [chain], root_key,\n'
+                     '                                               journal.doc["node_id"])):\n',
                '    if False:\n'),
      [REFUSAL + "test_a_later_epoch_refuses_before_any_write", REFUSAL + "test_a_replacement_refuses_before_any_write",
       REFUSAL + "test_the_owners_revoked_sole_node_refuses_before_any_write",
-      REFUSAL + "test_a_recorded_prior_heartbeat_refuses_before_any_write"]),
+      REFUSAL + "test_a_node_first_named_above_epoch_1_refuses_before_any_write",
+      REFUSAL + "test_a_node_no_manifest_names_refuses_before_any_write"]),
     ("11 the guard's epoch arm removed",
      replaced(ENROL, '(manifest["epoch"] != 1 or replace or sole', '(False or replace or sole'),
      [REFUSAL + "test_a_later_epoch_refuses_before_any_write"]),
     ("12 the guard's replacement arm removed",
      replaced(ENROL, 'or replace or sole\n', 'or (replace or sole) is True\n'),
-     [REFUSAL + "test_a_replacement_refuses_before_any_write"]),
-    ("13 the guard's recorded-heartbeat arm removed",
-     replaced(ENROL, 'or first_epoch(chain if isinstance(chain, list) else [chain], root_key,\n'
-                     '                                     journal.doc["node_id"]) is not None):',
+     [REFUSAL + "test_a_replacement_refuses_before_any_write",
+      REFUSAL + "test_the_owners_revoked_sole_node_refuses_before_any_write"]),
+    ("13 the guard's genesis-member arm removed",
+     replaced(ENROL, 'or not is_genesis_member(chain if isinstance(chain, list) else [chain], root_key,\n'
+                     '                                               journal.doc["node_id"])):',
                'or False):'),
-     [REFUSAL + "test_a_recorded_prior_heartbeat_refuses_before_any_write"]),
+     [REFUSAL + "test_a_node_first_named_above_epoch_1_refuses_before_any_write",
+      REFUSAL + "test_a_node_no_manifest_names_refuses_before_any_write"]),
+    ("14 the guard's genesis-member arm restored to the buggy `is not None`",
+     replaced(ENROL, 'or not is_genesis_member(chain if isinstance(chain, list) else [chain], root_key,\n'
+                     '                                               journal.doc["node_id"])):',
+               'or first_epoch(chain if isinstance(chain, list) else [chain], root_key,\n'
+               '                                     journal.doc["node_id"]) is not None):'),
+     [REFUSAL + "test_the_genesis_lets_the_commit_proceed",
+      REFUSAL + "test_a_node_no_manifest_names_refuses_before_any_write"]),
+    ("15 is_genesis_member accepts the None case (not named by any manifest)",
+     replaced(ENROL, '    # None (not named by any manifest) is not == 1, so the guard refuses it: fail closed\n'
+                     '    return epoch == 1',
+               '    # None (not named by any manifest) is not == 1, so the guard refuses it: fail closed\n'
+               '    return epoch is None or epoch == 1'),
+     [REFUSAL + "test_a_node_no_manifest_names_refuses_before_any_write"]),
 ]
 
 if __name__ == "__main__":

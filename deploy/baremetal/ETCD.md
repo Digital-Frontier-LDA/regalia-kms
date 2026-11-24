@@ -98,14 +98,16 @@ the same opstate, Reserve, watch cache and state epoch as three nodes, with no r
       The daemon then starts only on the raised epoch read back. Every refusal keeps it. When the exchange's fsync failed,
       the refusal says when it may be removed by hand: only once the live etcd reads the raised epoch.
     - **`--bootstrap` is refused when the verified chain proves non-genesis.** `enrol commit --bootstrap` is the
-      network's genesis: epoch 1, no replacement, no heartbeat ever issued. When the root's chain already proves
-      otherwise — a later epoch (heartbeats were issued), a replacement (`--replace`, or the sole node's revocation),
-      or this TPM's own recorded heartbeat counter — the commit is refused before anything is written. The refusal
-      names the correct path: `enrol commit` without `--bootstrap` (which writes the marker), or `restore.py run`
+      network's genesis: epoch 1, no replacement, and this node a **genesis member** — first named at epoch 1 of the
+      verified chain (`is_genesis_member`, enrol.py). When the chain proves otherwise — a later epoch (heartbeats were
+      issued), a replacement (`--replace`, or the sole node's revocation), or a node not first named at epoch 1 — the
+      commit is refused before anything is written. A node no manifest names is refused too (it fails closed: a signing
+      KMS never treats "unknown" as genesis), though `check_manifest` already refuses that earlier (enrol.py:922). The
+      refusal names the correct path: `enrol commit` without `--bootstrap` (which writes the marker), or `restore.py run`
       once the restore's exchange has raised the epoch.
     - **The same-epoch-1 residual.** A re-enrolment on the very same epoch-1 manifest that the original genesis used
       (the owner rolled the chain back, or reused it) cannot be told apart from genesis: the epoch is 1, no
-      replacement is named, and no heartbeat was ever issued under that manifest. The refusal does not fire, and
+      replacement is named, and the node is first named at epoch 1. The refusal does not fire, and
       no marker is written. In that case the operator holds the marker by hand: `restore.py mark-pending` (root, at
       the console) before the reboot, then `restore.py run` once the restored store is ready. This is the one case
       where the operator must act; the docs and the `mark-pending` subcommand exist for it.

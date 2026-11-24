@@ -1126,6 +1126,18 @@ def first_epoch(envelopes, root_key, node_id):
     return None
 
 
+def is_genesis_member(envelopes, root_key, node_id):
+    """Whether `node_id` is exactly a GENESIS member: first named at epoch 1 of the verified chain. `--bootstrap`
+    is refused UNLESS this holds (a commit under --bootstrap whose verified chain proves otherwise is not the
+    network's first bring-up). first_epoch > 1 is a node that joined after heartbeats ran. None is a node no
+    manifest in the verified chain names, which check_manifest already refuses earlier (enrol.py:922,
+    `require(node_id in nodes, ...)`); this None arm is kept as defence in depth and fails closed, because a
+    signing KMS never treats "unknown" as genesis."""
+    epoch = first_epoch(envelopes, root_key, node_id)
+    # None (not named by any manifest) is not == 1, so the guard refuses it: fail closed
+    return epoch == 1
+
+
 def anchor_and_store(config_path, chain, run=subprocess.run, owner_auth=None):
     """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
     membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
@@ -2312,14 +2324,16 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     sole = replace is not None and sole_node_replacement(chain if isinstance(chain, list) else [chain], root_key,
                                                          journal.doc["node_id"]) == replace
     # --bootstrap is the network's GENESIS (epoch 1, no replacement): the owner's own first bring-up, where no etcd
-    # history exists to lose (regalia-kms-dx7.26). When the verified chain proves otherwise -- a later epoch (heartbeats
-    # were issued), a replacement (--replace typed, or the sole node's revocation) or this node's own recorded heartbeat
-    # counter from an earlier life -- it is refused here, before anything is written. The refusal names the marker
-    # (restore.py mark-pending) and the re-enrolment's own path (enrol commit without --bootstrap). A re-enrolment on the
-    # SAME epoch-1 manifest cannot be told apart from genesis: the operator holds the marker by hand (ETCD.md).
+    # history exists to lose (regalia-kms-dx7.26). It is refused when the verified chain proves this host is not exactly
+    # a genesis member: a later epoch (heartbeats were issued), a replacement (--replace typed, or the sole node's
+    # revocation), or this node not first named at epoch 1 -- is_genesis_member is the last of these, and its None case
+    # (a node no manifest names) fails closed because a signing KMS never treats "unknown" as genesis. It is refused
+    # here, before anything is written. The refusal names the marker (restore.py mark-pending) and the re-enrolment's
+    # own path (enrol commit without --bootstrap). A re-enrolment on the SAME epoch-1 manifest cannot be told apart from
+    # genesis: the operator holds the marker by hand (ETCD.md).
     if bootstrap and (manifest["epoch"] != 1 or replace or sole
-                      or first_epoch(chain if isinstance(chain, list) else [chain], root_key,
-                                     journal.doc["node_id"]) is not None):
+                      or not is_genesis_member(chain if isinstance(chain, list) else [chain], root_key,
+                                               journal.doc["node_id"])):
         raise Refused("--bootstrap is the network's genesis (epoch 1, no replacement): the verified manifest proves this "
                        "is not one, so it is refused before anything is written. A re-enrolment of a lost disk runs "
                        "`enrol commit` without --bootstrap (the marker written as its first persistent write); "

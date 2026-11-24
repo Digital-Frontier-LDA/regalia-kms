@@ -473,38 +473,54 @@ class BootstrapRefusal(unittest.TestCase):
             return result
 
     def test_a_later_epoch_refuses_before_any_write(self):
-        """The verified chain's epoch is above 1: heartbeats were issued, so this is not a first bring-up."""
+        """The verified chain's epoch is above 1: heartbeats were issued, so this is not a first bring-up. The node is a
+        genesis member (first named at epoch 1, counter=1) so only the epoch arm can refuse -- that is the one under
+        test; the is_genesis_member arm stays off."""
         result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 2,
-                                  "topology": {"profile": membership.SINGLE_NODE}})
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=1)
         self.assertIn("--bootstrap is the network's genesis", result["error"])
         self.assertEqual(result["writes"], [])
 
     def test_a_replacement_refuses_before_any_write(self):
         """The manifest is a replacement (--replace typed): its old node held the history, so it is not a first bring-up.
-        Epoch 1: the arm under test is the replacement, not the epoch (a replacement's epoch is 1 only when the chain
-        was rolled back, which the guard does not special-case; the test isolates the arm)."""
+        Epoch 1 and a genesis member (counter=1) so the replacement arm is the one under test, isolated from the epoch
+        and is_genesis_member arms."""
         result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
-                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b")
+                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b", counter=1)
         self.assertIn("--bootstrap is the network's genesis", result["error"])
         self.assertEqual(result["writes"], [])
 
     def test_the_owners_revoked_sole_node_refuses_before_any_write(self):
-        """The chain revoked the sole node and names this one in its place (the dx7.19 case): the history was the lost disk's."""
-        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 3,
-                                  "topology": {"profile": membership.SINGLE_NODE}}, sole="b")
+        """The chain revoked the sole node and names this one in its place (the dx7.19 case): the history was the lost
+        disk's. The sole case always carries --replace (sole_node_replacement requires it), so the replacement arm is
+        what refuses; epoch 1 and a genesis member (counter=1) isolate it."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, replace="b", sole="b", counter=1)
         self.assertIn("--bootstrap is the network's genesis", result["error"])
         self.assertEqual(result["writes"], [])
 
-    def test_a_recorded_prior_heartbeat_refuses_before_any_write(self):
-        """This TPM already counts heartbeats from an earlier life of the same manifest: its counter outlives the disk."""
+    def test_a_node_first_named_above_epoch_1_refuses_before_any_write(self):
+        """The node first named above epoch 1 is not a genesis member (heartbeats ran before it joined): the chain is
+        still at epoch 1, so only the is_genesis_member arm can refuse -- that is the one under test."""
         result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
-                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=1)
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=2)
+        self.assertIn("--bootstrap is the network's genesis", result["error"])
+        self.assertEqual(result["writes"], [])
+
+    def test_a_node_no_manifest_names_refuses_before_any_write(self):
+        """No manifest in the verified chain names this node (first_epoch is None). check_manifest refuses that earlier
+        (enrol.py:922); the guard's None arm is defence in depth and fails closed, because a signing KMS never treats
+        "unknown" as genesis."""
+        result = self.run_commit({"schema": membership.SCHEMA_V5, "epoch": 1,
+                                  "topology": {"profile": membership.SINGLE_NODE}}, counter=None)
         self.assertIn("--bootstrap is the network's genesis", result["error"])
         self.assertEqual(result["writes"], [])
 
     def test_the_genesis_lets_the_commit_proceed(self):
-        """The owner's genesis step is unchanged: epoch 1, no replacement, no recorded counter -- the refusal is the first
-        thing commit does, then every step runs and the marker stays off (--bootstrap: no etcd history existed)."""
+        """The owner's genesis step is unchanged: the verified chain is at epoch 1, no replacement, and this node is a
+        genesis member (first named at epoch 1, the real chain shape) -- the refusal is the first thing commit does,
+        finds the node is a genesis member, and lets every step run; the marker stays off (--bootstrap: no etcd history
+        existed)."""
         manifest = {"schema": membership.SCHEMA_V5, "epoch": 1, "topology": {"profile": membership.SINGLE_NODE}}
         writes = []
 
@@ -552,7 +568,7 @@ class BootstrapRefusal(unittest.TestCase):
                 patch.object(enrol, "check_manifest", check_manifest), \
                 patch.object(enrol, "commit_owner_auth", lambda *a, **k: None), \
                 patch.object(enrol, "sole_node_replacement", lambda envelopes, root_key, node_id: None), \
-                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: None), \
+                patch.object(enrol, "first_epoch", lambda envelopes, root_key, node_id: 1), \
                 patch.object(enrol, "signing_note", lambda directory, manifest: None), \
                 patch.object(enrol, "install_config", install_config), \
                 patch.object(enrol, "hold_restore_pending", lambda manifest, marker, node_json, bootstrap, out: False), \
