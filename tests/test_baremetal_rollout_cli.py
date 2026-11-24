@@ -398,7 +398,8 @@ class Decisions(Case):
         rc, result = self.as_json(*self.reboot("a", self.state()))
         self.assertEqual(rc, 0)
         self.assertEqual(result, {"ok": True, "command": "may-reboot", "node_id": "a", "target": "image-2", "authorizers": ["b", "c"],
-                                  "seconds": lease.MAX_LIFETIME, "epoch": 2, "checked_against_tpm": False, "time_authenticated": True})
+                                  "seconds": lease.MAX_LIFETIME, "epoch": 2, "checked_against_tpm": False, "time_authenticated": True,
+                                  "topology": "multi-node", "planned_outage": False})
         rc, out, _ = self.run_cli(*self.reboot("a", self.state()))
         self.assertIn("YES: a may reboot into image-2", out)
         self.assertIn("Wait until this host is back and serving before starting the next one", out)
@@ -500,6 +501,92 @@ class Decisions(Case):
         rc, result = self.as_json(*self.retire(**done))
         self.assertEqual((rc, result["checked_against_tpm"]), (0, False))
         self.assertNotIn("tpm", result)
+
+
+class SingleNode(Case):
+    """regalia-kms-dx7.8 (docs/design/single-node.md 4.6): the operator's command for the single-node profile.
+    may-reboot takes --planned-outage (and, there, no peer state at all); retire-ready and propose take the owner's
+    state file as --state owner=FILE, the only witness under the profile."""
+
+    def setUp(self):
+        super().setUp()
+        self.s1 = dict(self.single(1, ""), policy_version=measurements.version(rt.SingleNodeReboot.SCUR))
+        self.s2 = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(rt.SingleNodeReboot.SBOTH))
+        self.sboth = rt.SingleNodeReboot.SBOTH
+        self.snext = rt.SingleNodeReboot.SNEXT
+
+    def may_reboot(self, *extra):
+        argv = ["may-reboot", *self.on([self.s1, self.s2]), "--measurements", self.write("sdoc.json", self.sboth),
+                "--node-id", "a", "--running", "image-1", "--session-id", lt.SESSION, "--now", str(self.now)]
+        return argv + list(extra)
+
+    def owner_state(self, label, phase="system", epoch=2):
+        last = {"label": label, "epoch": epoch}
+        if phase is not None:
+            last["phase"] = phase
+        return self.write("owner.json", {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {"a": {"measurement": last}}})
+
+    def test_may_reboot_under_the_single_node_profile_needs_and_says_planned_outage(self):
+        argv = self.may_reboot()
+        rc, _, err = self.run_cli(*argv)
+        self.assertEqual((rc, ""), (rc, ""))
+        self.assertEqual(rc, 1)
+        self.assertIn("may-reboot: NO: a single-node host's reboot is a planned outage: give --planned-outage", err)
+        self.assertEqual(self.run_cli(*argv, "--attest-state", self.write("s.json", {}), "--lease", self.write("l.json", {}))[0], 1)
+        rc, out, _ = self.run_cli(*argv, "--planned-outage")
+        self.assertEqual(rc, 0)
+        self.assertIn("YES: a may reboot into image-2", out)
+        self.assertIn("PLANNED OUTAGE: this host is the only node: it is down until the owner unlocks it", out)
+        rc, result = self.as_json(*argv, "--planned-outage")
+        self.assertEqual((rc, result["planned_outage"], result["authorizers"], result["seconds"], result["topology"]),
+                         (0, True, [], None, "single-node"))
+        # the flag under another profile is a refusal, with and without the peer files
+        argv = ["may-reboot", *self.on([self.m1, self.m2]), "--measurements", self.write("doc.json", BOTH),
+                "--node-id", "a", "--running", "image-1", "--session-id", lt.SESSION, "--attest-state",
+                self.write("state.json", {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}), "--now", str(self.now)]
+        for peer in ("b", "c"):
+            argv += ["--lease", self.write("lease-%s.json" % peer, lt.sign(dict(self.body(self.m2), node_id="a",
+                                                                               ak_name=self.keys["a"].ak_name, issuer=peer), self.keys[peer]))]
+        rc, _, err = self.run_cli(*argv, "--planned-outage")
+        self.assertEqual(rc, 1)
+        self.assertIn("--planned-outage is a single-node decision", err)
+        # and without it the three-node decision stands: the same command line minus the flag is a YES
+        # (the leases vouch), which is what makes the flag the decision
+        rc, _, _ = self.run_cli(*[a for a in argv if a != "--planned-outage"][0:] or argv)
+        self.assertEqual(rc, 0)
+
+    def test_retire_ready_under_the_single_node_profile_takes_the_owner_s_state(self):
+        argv = ["retire-ready", *self.on([self.s1, self.s2]), "--measurements", self.write("sdoc.json", self.sboth)]
+        rc, _, err = self.run_cli(*argv)
+        self.assertEqual(rc, 1)
+        self.assertIn("the owner's state is the only witness: give --state owner=FILE", err)
+        rc, _, err = self.run_cli(*argv, "--state", "a=" + self.owner_state("image-2"))
+        self.assertEqual(rc, 1)
+        self.assertIn("the owner's state is the only witness: give --state owner=FILE", err)
+        rc, result = self.as_json(*argv, "--state", "owner=" + self.owner_state("image-2"))
+        self.assertEqual((rc, result["ready"], result["seen_on_target_by"]), (0, True, {"a": ["owner"]}))
+        rc, _, err = self.run_cli(*argv, "--state", "owner=" + self.owner_state("image-2", phase="initrd"))
+        self.assertEqual(rc, 1)
+        self.assertIn("retire-ready: NO: NOT YET: retiring now would lock out a (owner last saw it in the initrd of 'image-2', not up", err)
+        # the node's own file is never what the command takes
+        rc, _, err = self.run_cli(*argv, "--state", "a=" + self.owner_state("image-2"), "--state", "owner=" + self.owner_state("image-2"))
+        self.assertEqual(rc, 1)
+        self.assertIn("the owner's state is the only witness: give --state owner=FILE", err)
+
+    def test_propose_under_the_single_node_profile_judges_the_retire_from_the_owner_s_state(self):
+        old, new = self.write("sold.json", self.sboth), self.write("snew.json", self.snext)
+        argv = ["propose", *self.on([self.s1, self.s2]), "--old", old, "--new", new, "--issued-at", "2026-11-03T10:00:00Z"]
+        rc, _, err = self.run_cli(*argv)
+        self.assertEqual(rc, 1)
+        self.assertIn("the owner's state is the only witness: give --state owner=FILE", err)
+        rc, _, err = self.run_cli(*argv, "--state", "a=" + self.owner_state("image-2"))
+        self.assertEqual(rc, 1)
+        self.assertIn("the owner's state is the only witness", err)
+        rc, result = self.as_json(*argv, "--state", "owner=" + self.owner_state("image-2"))
+        self.assertEqual((rc, result["transition"], result["unsigned_manifest"]["epoch"], result["locked_out"]), (0, "retire", 3, []))
+        rc, _, err = self.run_cli(*argv, "--state", "owner=" + self.owner_state("image-1"))
+        self.assertEqual(rc, 1)
+        self.assertIn("NOT YET: this retire would lock out a (owner last saw it on 'image-1', not on image-2)", err)
 
 
 if __name__ == "__main__":

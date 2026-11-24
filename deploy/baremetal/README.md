@@ -547,8 +547,10 @@ An update is three documents:
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
    accepted until the retirement. That is the fallback, at every step up to step 5.
 5. **Retire.** When `rollout.retire_ready(...)` passes (given the state of every node that may
-   authorize: under manifest N+1, every peer that has seen a node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
-   the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
+   authorize: under manifest N+1, every peer that has seen a node last saw it on NEXT, for every node;
+   under the single-node profile, the owner's state is the only witness — its `attest-booted` record is
+   the retire evidence, and a node's own state never is), and `transition` says `retire` (not `abandon`,
+   which is the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
    From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
    within one lease lifetime (30 s).

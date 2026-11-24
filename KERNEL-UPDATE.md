@@ -1,9 +1,11 @@
-# Updating the kernel on the three KMS hosts
+# Updating the kernel on the KMS hosts
 
-The whole procedure for a Debian kernel (or boot image) update on the three-site KMS, start to finish,
-with what each step needs and **whether it can be run today**. It cannot, end to end: the decisions and
-the checks exist, are tested on software TPMs and have an operator command; signing with the root key,
-and several pieces of the boot path, do not. Each step says which. The gaps are tracked in #156.
+The whole procedure for a Debian kernel (or boot image) update on the KMS, start to finish,
+with what each step needs and **whether it can be run today**. The three-site procedure (sections 0 to 5)
+cannot be run end to end yet: the decisions and the checks exist, are tested on software TPMs and have an
+operator command; signing with the root key, and several pieces of the boot path, do not. Each step says
+which. The gaps are tracked in #156. The single-node profile's update (the "planned outage" section) is
+built and tested on software TPMs (dx7.8); its hardware run is dx7.13.
 
 Read this before the first update is attempted on real hosts, and update it when a gap closes.
 
@@ -134,6 +136,61 @@ For each host, in order:
 
 **After step 5 there is no automatic fallback.** If the new image then breaks, the root signs again:
 either the next update, or a document that re-approves the old image.
+
+## Single-node host: the update is a planned outage (dx7.8)
+
+The single-node profile (v5 `topology`) has no other node to unlock or lease the host: the owner's machine is
+its only peer, and every reboot is a **planned outage** attended by the owner. The procedure above still
+applies, with these differences:
+
+### What changes
+
+| Step | Three-site | Single-node |
+|---|---|---|
+| 3.2 `update apply` | asks a fresh lease from each peer; `may_reboot` needs both peers' state | `--planned-outage` (the operator's word that the host is down until the owner unlocks it); no peer lease is asked for or owed; the trail records `planned_outage: true` and `topology: "single-node"` on every event |
+| 3.4 unlock | a peer unlocks the host from its initrd | the owner's tool (`owner.py unlock`) answers on the boot mesh, as the host's only peer |
+| 3.8 `update promote` | needs at least one peer's lease for the boot | needs the host's **own** lease for the boot (the self-issued one, `--planned-outage`); the self-lease is the record that the host booted in this session under this epoch |
+| 4.1 `retire-ready` | reads every peer's state file | reads the **owner's** state file only (`--state owner=OWNER.json`): the owner's `attest-booted` record is the retire evidence |
+| 5.1 `propose` (retire) | needs every peer's state | needs the owner's state only |
+
+### The owner's role (what the owner does, and when)
+
+1. **Before the update:** the owner is present, with the decrypted contribution envelope (the two owner
+   cards' touch) and the boot mesh endpoint ready. The host's boot configuration already names the owner
+   as its only peer, with the owner's Ed25519 keys (dx7.5).
+
+2. **At the trial boot (after `update apply --planned-outage` reboots the host):** the owner runs
+   `owner.py unlock` on the boot mesh. The host's initrd asks for its disk; the owner's tool verifies the
+   quote (initrd phase, under the tip's measurements) and gives the contribution. Each response is a card
+   touch. The host opens its volume and comes up.
+
+3. **After the host is up and serving (system phase):** the owner takes the host's quote for the owner's
+   nonce in the **system** phase (the host prints it for the owner's tool, over the tip's PCR selection) and
+   runs `owner.py attest-booted --chain … --root-key … --measurements … --state … --node … --session …
+   --evidence …`. The tool verifies the quote under the tip's measurements (an unlisted image, PCR 11, and
+   an unlisted site, PCR 12, are refused exactly as an unlock is) and writes the record
+   `{"label", "epoch", "phase": "system"}` into the owner's attest state. **That record is the retire
+   evidence.** An unlock (initrd) record is not: a boot that asked for its disk and never came up is not a
+   boot.
+
+4. **At the retire (step 5):** `rollout propose --state owner=OWNER.json` reads the owner's record. It
+   refuses (NOT YET) while the owner has not seen the host up on the new image. The node's own state never
+   counts: it "says nothing about itself."
+
+### Expected downtime
+
+The host is down from the trial boot's reset until the owner's `owner.py unlock` gives it its disk and it
+boots. That is the planned outage: the owner is present, the boot mesh is up, and the downtime is the owner's
+walking time plus the boot. There is no unattended fallback: if the new image does not come up, the owner
+resets through the iLO, and the host boots the old image (still approved under BOTH) and is unlocked again.
+
+### Site advance (PCR 12)
+
+A site advance (moving the host, or changing the credential files that PCR 12 measures) changes PCR 12. The
+owner's unlock tool judges it the same way as an image: the quote is verified against the document the tip
+commits to, and a PCR 12 the document no longer lists is refused, naming the PCR. No separate step: the owner
+updates the document (a new measurement set with the new PCR 12), signs the new manifest, and the host is
+unlocked (or attest-booted) under the new document as usual.
 
 ## A membership format change: schema v3 and typed keys (#199, #156)
 

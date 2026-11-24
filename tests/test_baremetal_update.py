@@ -48,7 +48,7 @@ class FakeHost:
         return self._document
 
     def pcrs(self, selection):
-        values = dict(self.running["pcrs"], **self.running["phases"]["system"])
+        values = dict(self.running["pcrs"], **self.running.get("phases", {}).get("system", {}))
         return {str(i): values[str(i)] for i in selection}
 
     def session(self):
@@ -69,7 +69,7 @@ class FakeHost:
             refusal = self.refusing[peer]
             raise refusal if isinstance(refusal, Exception) else m.Refused(refusal)
         body = dict(self.case.body(manifest), node_id="a", ak_name=self.case.keys["a"].ak_name, issuer=peer, session_id=session)
-        return lt.sign(body, self.case.keys[peer])
+        return lt.sign(body, self.case.keys[peer] if peer in self.case.keys else self.case.keys["a"])
 
     def boot(self):
         return bootnext.state(self.run)
@@ -281,6 +281,70 @@ class Promote(Case):
         """Running image-2's PCRs while BootCurrent's file is image-1 would mean the file changed under it."""
         self.host.running = SET2
         self.refused("it is not that image", self.promote)
+
+
+class SingleNode(Case):
+    """regalia-kms-dx7.8 (docs/design/single-node.md 4.6): the single-node profile's update is a planned outage.
+    apply takes --planned-outage, asks nobody, and records the decision on the trail; promote asks for a lease of its
+    OWN for the boot it promotes (the self-issued one); and the flag under another profile is a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        # the single-node host's accepted images are its own UKI-measured sets: per-phase PCR 11, as the image on the ESP
+        self.sc1 = rt.document("s-current", a=[dict(SET1)])
+        self.scboth = rt.document("s-both", a=[dict(SET1), dict(SET2)])
+        self.s1 = dict(self.single(1, ""), policy_version=measurements.version(self.sc1))
+        self.s2 = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(self.scboth))
+        self.host._manifest, self.host._document = self.s2, self.scboth
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][0]
+        # the self-issued lease this host holds for this boot: a's AK signs for a, as _issue allows under the profile
+        self.self_lease = lt.sign(dict(self.body(self.s2), node_id="a", issuer="a"), self.keys["a"])
+
+    def apply(self, answer="reboot a into image-2", entry="0002", planned_outage=False):
+        return update.apply(self.host, entry, self.esp, self.typed(answer), self.record,
+                            planned_outage=planned_outage, say=lambda line: None)
+
+    def test_apply_under_the_single_node_profile_is_a_planned_outage_and_asks_no_body(self):
+        done = self.apply(planned_outage=True)
+        self.assertEqual(done["state"]["next"], "0002")
+        self.assertEqual((self.host.rebooted, self.host.firmware.current), (1, "0002"))
+        self.assertEqual(self.host.asked, [], "no peer exists: nobody is asked for a lease")
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW"])
+        for event in self.trail:
+            self.assertEqual(event.get("planned_outage"), True)
+            self.assertEqual(event.get("topology"), "single-node")
+            self.assertEqual(event.get("lease_issuers"), [])
+            self.assertEqual(event.get("authorizers"), [])
+        # and the denial says the same on the trail
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.apply)
+        self.assertEqual(self.trail[-1]["planned_outage"], False)
+        self.assertEqual(self.trail[-1]["topology"], "single-node")
+        self.assertEqual(self.host.rebooted, 1)                     # only the one that was planned went down
+
+    def test_apply_refuses_the_planned_outage_flag_under_another_profile(self):
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, self.host.running
+        self.refused("--planned-outage is a single-node decision", self.apply, planned_outage=True)
+        self.assertEqual(self.host.rebooted, 0)
+        self.assertEqual(self.trail[-1]["planned_outage"], True)
+        self.assertEqual(self.trail[-1]["topology"], "multi-node")
+
+    def test_promote_under_the_single_node_profile_needs_the_node_s_own_lease_for_this_boot(self):
+        """promote on three nodes needs a peer's lease for the boot it promotes; with one node it needs its own:
+        the self-issued lease is the record that it booted, in this session, under this epoch."""
+        self.apply(planned_outage=True)
+        self.trail.clear()
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][-1]
+        after = update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record,
+                               say=lambda line: None, planned_outage=True)
+        self.assertEqual(after["order"][:2], ["0002", "0001"])
+        self.assertEqual(self.trail[-1]["lease_issuers"], ["a"])
+        self.assertEqual(self.trail[-1]["planned_outage"], True)
+        # and without the self-lease, refused: no evidence that this boot came up
+        self.host.firmware.order = ["0001", "0002"]
+        self.host.refusing = {"a": "no lease was issued for this boot"}
+        self.refused("no peer gave this boot a lease", update.promote, self.host, self.esp,
+                     self.typed("make 0002 the default on a"), self.record, say=lambda line: None,
+                     planned_outage=True)
 
 
 class Forget(Case):

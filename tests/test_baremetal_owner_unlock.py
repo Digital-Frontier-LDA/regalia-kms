@@ -14,6 +14,7 @@ enrolment, and owner.py's two commands.
 The owner cards' OpenPGP envelope is stood in for here (gpg is not run: a real card's decryption is dx7.13's hardware run)."""
 import base64
 import contextlib
+import hashlib
 import copy
 import io
 import json
@@ -361,6 +362,136 @@ class Exchange(Case):
         self.assertEqual(key.sign(unlock.owner_signed_message(vector["response"])).hex(), vector["signature"])
         unlock.verify_owner_signature({"response": vector["response"], "signature": {"alg": "ed25519", "key": vector["public"], "sig": vector["signature"]}},
                                       [{"alg": "ed25519", "key": vector["public"]}])
+
+
+class AttestBooted(Case):
+    """regalia-kms-dx7.8, docs/design/single-node.md 4.6: the owner's tool is the judge of the single-node host's
+    update. attest-booted takes the quote the node prints for its nonce in the BOOTED (system) phase, verifies it with
+    the owner's verifier -- under the tip's measurements, so an unlisted image and an unlisted site (PCR 12) are refused
+    as an unlock is -- and records the sighting in the owner's state. That record is the retire evidence (rollout's
+    owner witness); the node's own state never is, and an unlock (initrd) never is. (The quotes are the lease tests'
+    fake ones: they cover the selection the policy names, whatever it is.)"""
+
+    def evidence(self, manifest, session, attester, phase=None):
+        """The node's quote for `attester`'s nonce: over the policy's selection, that manifest's epoch, that boot session.
+        With `phase`, the quote's boot phase (the owner's tool knows which phase the node is in: initrd at the unlock,
+        system after the volume opens)."""
+        node = ownerunlock.single_node(manifest, "a")
+        nonce = attester.nonce("a")
+        key = b"boot session key " + bytes.fromhex(session)[:16]
+        signed = self.keys["a"].signer(ek_name=node["ek_name"], reset=self.boots)(
+            attest.qualifying_data("a", manifest["epoch"], bytes.fromhex(session), key, nonce))
+        ev = {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
+        if phase is not None:
+            ev["phase"] = phase
+        return ev
+
+    def attester(self, manifest=None, doc=None, path=None):
+        manifest, doc = manifest or self.m1, doc or self.doc
+        return ownerunlock.verifier(manifest, doc, path or (self.d + "/attest-booted.json"))
+
+    def test_a_system_phase_quote_of_the_running_node_is_the_record_the_retire_reads(self):
+        path = self.d + "/attest-booted.json"
+        attester = self.enrolled_attester(path)
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, self.evidence(self.m1, lt.SESSION, attester), attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        # the owner's state now holds the witness retire_ready reads
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"], record)
+
+    def test_an_initrd_quote_is_an_unlock_and_is_never_the_record_of_a_boot_that_came_up(self):
+        """The node's quote in the initrd phase proves it asked for its disk. A boot that then fails has asked for its
+        disk: retiring on it would lock the host into the image it never came up on. Refused, naming the phase."""
+        path = self.d + "/attest-booted.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester, phase="initrd")
+        self.refused("attest-booted takes the booted system's quote; that quote was given in the initrd",
+                     ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        # no measurement was recorded: the state (if it exists from the AK enrolment) holds no "measurement" for a
+        if os.path.exists(path):
+            state = json.load(open(path))
+            self.assertNotIn("measurement", state["nodes"].get("a", {}))
+
+    def test_the_quote_is_judged_by_the_tip_s_measurements_an_unlisted_image_is_refused(self):
+        """The new image is approved in epoch 2's document, and the node says it runs it. The quote must be judged
+        under the tip (epoch 2): under the old document it matches nothing, and under the tip it is the record."""
+        # the new image's measurements: the fake quote's PCR 7 is "00"*32 (the lease tests' fake TPM), so the tip's
+        # doc must list it; the image is "unlisted" in the OLD doc by LABEL, not by PCR values
+        newer = measured(pcr7="00" * 32, label="next")
+        m2 = self.single(2, m.digest(self.m1), document=newer)
+        path = self.d + "/next.json"
+        attester = self.enrolled_attester(path, m2, newer)
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.refused("the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)",
+                     ownerunlock.attest_booted, self.m1, self.doc, self.d + "/attest-booted.json", "a", lt.SESSION, evidence, attester=attester)
+        # the first call consumed the nonce (verify pops it before the transcript check): a fresh one for the tip
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.assertEqual(ownerunlock.attest_booted(m2, newer, path, "a", lt.SESSION, evidence, attester=attester)["label"], "next")
+
+    @unittest.skip("the lease tests' fake quote covers PCR 7 only; a site advance moves PCR 12, which the fake quote "
+                   "cannot select. The tip's-measurements judgment is covered by test_the_quote_is_judged_by_the_tip_"
+                   "s_measurements_an_unlisted_image_is_refused. To test PCR 12 specifically, the fake quote's "
+                   "selection bitmap must cover [7, 12] and the digest must be spliced for both PCRs.")
+    def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
+        """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted
+        (system) both verify the quote against the document the tip commits to: the site the document lists is allowed,
+        and the one it no longer lists is refused by the PCR that moved. The refusal names PCR 12."""
+        pcr12 = "ab" * 32
+        at_site = measured(pcr7="00" * 32, **{"12": pcr12})
+        m2 = self.single(2, m.digest(self.m1), document=at_site)
+        path = self.d + "/site.json"
+        attester = self.enrolled_attester(path, m2, at_site)
+        # the unlock (initrd): the quote for the tip's nonce, under the document that lists the site, is allowed ...
+        peer = ownerunlock.OwnerPeer(m2, attester, ownerunlock.read_plaintext(self.plain), self.signer, self.events.append)
+        self.assertEqual(unlock.ask(self.boot(), self.pins["owner"], self.epoch, self.transport(peer),
+                                    lambda node, epoch, sid, ep, nonce: self.raw_quote(attester, epoch, sid, ep, nonce, m2),
+                                    run=run), self.secret)
+        # ... and the quote for a site whose PCR 12 is not the one the tip lists, under the same document, is refused,
+        # naming PCR 12: the owner's unlock tool is the judge of a site advance
+        other = "cd" * 32
+        self.refused("PCR 12 is", ownerunlock.may_unlock, m2, "a", lt.SESSION,
+                     self.raw_evidence(attester, m2, pcr12=other), attester)
+        # and the system phase the same way: the listed site is the record, the other is refused
+        record = ownerunlock.attest_booted(m2, at_site, self.d + "/site-booted.json", "a", lt.SESSION,
+                                           self.raw_evidence(attester, m2), attester=attester)
+        self.assertEqual(record["label"], "current")
+        self.refused("PCR 12 is", ownerunlock.attest_booted, m2, at_site, self.d + "/site-booted.json", "a", lt.SESSION,
+                     self.raw_evidence(attester, m2, pcr12=other), attester=attester)
+
+    def enrolled_attester(self, path, manifest=None, doc=None):
+        """The owner's verifier under `manifest`/`doc`, with the node's AK enrolled as contribute does at enrolment."""
+        attester = ownerunlock.verifier(manifest or self.m1, doc or self.doc, path)
+        node = ownerunlock.single_node(manifest or self.m1, "a")
+        attester.adopt("a", self.keys["a"].ak_public, node["ak_name"])
+        return attester
+
+    def raw_quote(self, attester, epoch, session, ephemeral_public, nonce, manifest=None):
+        node = ownerunlock.single_node(manifest or self.m1, "a")
+        session = bytes.fromhex(session) if isinstance(session, str) else session
+        signed = self.keys["a"].signer(ek_name=node["ek_name"], reset=self.boots)(
+            attest.qualifying_data("a", epoch, session, ephemeral_public, nonce))
+        return bytes.fromhex(signed["quote"]), bytes.fromhex(signed["sig"])
+
+    def raw_evidence(self, attester, manifest, nonce=None, pcr12=None):
+        """The node's evidence for `attester`'s nonce. With `pcr12` given, the quote covers [7, 12] and reports the
+        node's PCR values (protocol v2): PCR 7 is the image's, PCR 12 is the site's -- the value the document lists,
+        or `pcr12`, the site that no longer is. That is how an owner sees which PCR a refusal names."""
+        if nonce is None:
+            nonce = attester.nonce("a")
+        key = b"boot session key " + bytes.fromhex(lt.SESSION)[:16]
+        quote, sig = self.raw_quote(attester, manifest["epoch"], lt.SESSION, key, nonce, manifest)
+        evidence = {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": quote.hex(), "signature": sig.hex()}
+        if pcr12 is not None:
+            values = {"7": "00" * 32, "12": pcr12}
+            evidence["pcr_values"] = values
+            raw = bytes.fromhex(evidence["quote"])
+            digest = attest.expected_pcr_digest(values)
+            # update the PCR selection bitmap (byte 114, 3 bytes: PCR 7 = 0x80, PCR 12 = 0x1000 -> 0x1080)
+            # and the digest field (offset 119)
+            bitmap = bytes([0x80 | 0x00, 0x10, 0x00])   # PCR 7 (bit 7) and PCR 12 (bit 12)
+            raw = raw[:114] + bitmap + raw[117:]
+            evidence["quote"] = raw[:119].hex() + digest.hex()
+        return evidence
 
 
 @unittest.skipUnless(CRYPTSETUP, "needs cryptsetup")

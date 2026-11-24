@@ -547,7 +547,9 @@ class Reboot(Case):
         return out
 
     def test_the_first_node_reboots_when_both_peers_vouch_for_it(self):
-        self.assertEqual(self.ask("a"), {"target": "image-2", "authorizers": ["b", "c"], "seconds": lease.MAX_LIFETIME})
+        # the verdict records that no planned outage is in play: on three nodes a reboot stands on leases, not on a flag
+        self.assertEqual(self.ask("a"), {"target": "image-2", "authorizers": ["b", "c"], "seconds": lease.MAX_LIFETIME,
+                                         "planned_outage": False})
 
     def test_the_second_node_waits_until_it_has_itself_seen_the_first_back_on_next(self):
         self.refused("WAIT: it is not b's turn. a updates first", self.ask, "b")
@@ -772,6 +774,71 @@ class SeenUp(Case):
                 self.assertEqual(rollout.seen_on_target(self.state(a=self.record("image-2", phase)), manifest2, BOTH, "a"), (True, "on image-2 at epoch 2"))
 
 
+class SingleNodeReboot(Case):
+    """regalia-kms-dx7.8, docs/design/single-node.md 4.6: the single-node profile has no other node. Its update is a
+    PLANNED OUTAGE: may_reboot passes only under the single-node rule (the node ACTIVE, two sets accepted, and the
+    operator's --planned-outage, which the trail records), with no peer's lease and no turn to wait for; the owner's
+    unlock tool is the judge of the image that comes back. The flag is the operator's decision to take the only node
+    down, and nothing else may take it for them: under another profile it is a refusal."""
+
+    _IMG1, _IMG2 = one("image-1", IMAGE1), one("image-2", IMAGE2)
+    SCUR, SBOTH, SNEXT = (document("s-current", a=[_IMG1]),
+                          document("s-both", a=[_IMG1, _IMG2]),
+                          document("s-next", a=[_IMG2]))
+
+    def setUp(self):
+        super().setUp()
+        self.s1 = dict(self.single(1, ""), policy_version=measurements.version(self.SCUR))
+        self.s2 = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(self.SBOTH))
+        # the same two-image step under the three-node profile: the profile alone is what the flag answers to
+        self.manifest2 = self.under(BOTH, epoch=2, prev=m.digest(self.under(CURRENT)))
+        # and the same flag under a multi-node v5 profile: a decision only the single-node profile can make
+        self.multi5 = dict(self.multi5(), policy_version=measurements.version(BOTH))
+
+    def ask(self, state=None, leases=None, running="image-1", planned_outage=False, manifest=None, node="a", document=None):
+        manifest = manifest if manifest is not None else self.s2
+        document = document if document is not None else (self.SCUR if manifest is self.s1 else self.SBOTH)
+        return rollout.may_reboot(manifest, document, node, running, lt.SESSION,
+                                  state if state is not None else self.state(),
+                                  self.leases(node) if leases is None else leases, self.now, planned_outage=planned_outage)
+
+    @staticmethod
+    def state():
+        return {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}
+
+    def leases(self, node):
+        return [lt.sign(dict(self.body(self.s2), node_id=node, ak_name=self.keys[node].ak_name, issuer=peer), self.keys[peer])
+                for peer in lt.NAMES if peer != node]
+
+    def test_a_single_node_may_reboot_only_when_the_operator_has_said_the_outage_is_planned(self):
+        self.assertEqual(rollout.may_reboot(self.s2, self.SBOTH, "a", "image-1", lt.SESSION, self.state(), [], self.now, planned_outage=True),
+                         {"target": "image-2", "authorizers": [], "planned_outage": True, "seconds": None})
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.ask)
+        # the profile decides: the same flag under a multi-node v5 profile, whose document is the three-node one
+        # it commits to, is a refusal about the profile
+        self.refused("--planned-outage is a single-node decision", self.ask, manifest=self.multi5, document=BOTH, planned_outage=True)
+
+    def test_the_single_node_rule_needs_two_accepted_sets_and_an_active_node(self):
+        current = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(self.SCUR))
+        self.refused("no update is approved for a: the measurements list one set (image-1)", self.ask, manifest=current, document=self.SCUR)
+        taken_out = dict(self.single(2, m.digest(self.s1), state="QUARANTINED"), policy_version=measurements.version(self.SBOTH))
+        self.refused("a is QUARANTINED under epoch 2: only an ACTIVE node is rebooted by the rollout", self.ask, manifest=taken_out)
+        # the document must be the one the manifest commits to, as on three nodes
+        self.refused("is not the one the root approved", rollout.may_reboot, self.s1, self.SBOTH, "a", "image-1", lt.SESSION, self.state(), [], self.now, planned_outage=True)
+
+    def test_a_single_node_needs_no_lease_and_no_turn_and_says_so(self):
+        """No other node exists: the turn is over before it starts, and there is no peer whose lease could count.
+        The leases it is given anyway are the operator's mistake to be told of, not evidence; the verdict says what
+        the outage rests on instead."""
+        verdict = self.ask(planned_outage=True)
+        self.assertEqual((verdict["authorizers"], verdict["seconds"]), ([], None))
+        # the three-node leases it still holds change nothing (there is no third node to ask)
+        self.assertEqual(self.ask(planned_outage=True, leases=self.leases("a"))["target"], "image-2")
+        # and a node that lies to itself is told as on three nodes
+        self.refused("a is already on its target (image-2): nothing to reboot for", self.ask, running="image-2", planned_outage=True)
+        self.refused("a says it runs 'image-9', which is neither of its accepted sets", self.ask, running="image-9", planned_outage=True)
+
+
 class Retire(Case):
     def setUp(self):
         super().setUp()
@@ -867,6 +934,68 @@ class Retire(Case):
         # and a record from an EARLIER epoch is silence too (the node was not seen under this manifest)
         self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, b_says(a={"measurement": {"label": "image-1", "epoch": 1}}))["a"], ["c"])
 
+
+
+class SingleNodeRetire(Case):
+    """The retire evidence of a single-node host is the owner's, not a peer's (docs/design/single-node.md 4.6):
+    `retire_ready` under the profile takes exactly the owner's verifier state -- the one the owner's unlock and
+    attest-booted tools write -- and the node's OWN state is never given (a node's own state says nothing about
+    itself, and on three nodes it is refused the same way). An initrd-phase sighting -- the unlock -- is not a boot
+    that came up, and retires nothing."""
+
+    SCUR, SBOTH, SNEXT = SingleNodeReboot.SCUR, SingleNodeReboot.SBOTH, SingleNodeReboot.SNEXT
+
+    def setUp(self):
+        super().setUp()
+        self.s1 = dict(self.single(1, ""), policy_version=measurements.version(self.SCUR))
+        self.s2 = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(self.SBOTH))
+
+    def states(self, owner_saw=None, epoch=2):
+        """owner_saw: (label, phase), or None for no record."""
+        if owner_saw is None:
+            return {"owner": {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}}
+        label, phase = owner_saw
+        last = {"label": label, "epoch": epoch}
+        if phase is not None:
+            last["phase"] = phase
+        return {"owner": {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {"a": {"measurement": last}}}}
+
+    def test_a_single_node_is_retired_only_when_the_owner_has_seen_it_up_on_the_target(self):
+        self.assertEqual(rollout.retire_ready(self.s2, self.SBOTH, self.states(("image-2", "system"))), {"a": ["owner"]})
+        # the evidence is the owner's system-phase record, under the manifest being judged
+        self.refused("NOT YET: retiring now would lock out a (no witness has verified it under epoch 2)",
+                     rollout.retire_ready, self.s2, self.SBOTH, self.states())
+        self.refused("NOT YET: retiring now would lock out a (owner last saw it on 'image-1', not on image-2)",
+                     rollout.retire_ready, self.s2, self.SBOTH, self.states(("image-1", "system")))
+        self.refused("owner last saw it in the initrd of 'image-2', not up",
+                     rollout.retire_ready, self.s2, self.SBOTH, self.states(("image-2", "initrd")))
+        self.refused("NOT YET: retiring now would lock out a (no witness has verified it under epoch 2)",
+                     rollout.retire_ready, self.s2, self.SBOTH, self.states(("image-2", "system"), epoch=1))
+
+    def test_the_node_s_own_state_is_not_evidence_and_no_node_state_is_given_at_all(self):
+        """The node may believe itself up on the new image; that says nothing about itself, and the command takes the
+        owner's state file and nothing else."""
+        own = {"a": {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}}
+        self.refused("under the single-node profile the owner's state is the only witness: give --state owner=FILE",
+                     rollout.retire_ready, self.s2, self.SBOTH, own)
+        other = {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {"a": {"measurement": {"label": "image-2", "epoch": 2, "phase": "system"}}}}
+        for peer in ("b", "c"):
+            with self.subTest(peer):
+                self.refused("the owner's state is the only witness",
+                             rollout.retire_ready, self.s2, self.SBOTH, {peer: other})
+
+    def test_stranded_uses_the_owner_s_record_for_the_single_node(self):
+        self.assertEqual(rollout.stranded(self.s2, self.SBOTH, self.SNEXT, self.states(("image-2", "system"))), {})
+        self.assertEqual(rollout.stranded(self.s2, self.SBOTH, self.SNEXT, self.states(("image-1", "system"))),
+                         {"a": "owner last saw it on 'image-1', not on image-2"})
+        self.assertEqual(rollout.stranded(self.s2, self.SBOTH, self.SNEXT, self.states(("image-2", "initrd"))),
+                         {"a": "owner last saw it in the initrd of 'image-2', not up, not on image-2"})
+        self.assertEqual(rollout.stranded(self.s2, self.SBOTH, self.SNEXT, self.states()),
+                         {"a": "no witness has verified it under epoch 2"})
+        # and the witnesses are checked as retire_ready checks them
+        self.refused("the owner's state is the only witness", rollout.stranded, self.s2, self.SBOTH, self.SNEXT,
+                     {"a": {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}})
+        self.refused("is not the one the root approved", rollout.stranded, self.s2, self.SNEXT, NEXT, self.states(("image-2", "system")))
 
 
 class Stranded(Retire):

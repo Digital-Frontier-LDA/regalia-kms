@@ -160,8 +160,20 @@ def last_seen(state, manifest, node_id):
 def _up(target, phase):
     """Whether a sighting in `phase` shows the node UP on `target`. Where the set is per phase, only a
     quote from the booted system does: a node verified in its initrd asked for its disk, and may never
-    have come up. (A record written before the phase was recorded has none, and does not count either.)
-    A set with one value per PCR cannot tell the two apart, and any sighting counts, as before."""
+    have come up (an initrd-phase record, or a record from the owner's tool with no phase at all -- the
+    owner saw the host ask for its disk and not the boot that came up -- never counts as one). A record
+    written before the phase was recorded has none, and under a multi-node profile a bare record counts
+    as before: only the owner's tool's own records are read as silence."""
+    if phase == "initrd":
+        return False
+    # A set with one value per PCR cannot tell the two phases apart by its VALUES, but the record still names the
+    # phase the request came from: an unlock (initrd) and a system attestation are two records, and only the
+    # latter is a boot. The owner's tool, the single-node profile's only witness (regalia-kms-dx7.8), always
+    # writes the phase the request was made in (ownerunlock.attest_booted), so an initrd record is never
+    # counted as a boot even under an unphased set. The node's own verifier, which counts any sighting of an
+    # unphased set, is not a witness under the single-node profile.
+    # of its quote -- none on an initrd quote, "system" on the boot that came up -- so under that profile
+    # the owner says "system" when the host comes up, and says nothing at all when it does not.
     return phase == "system" if "phases" in target else True
 
 
@@ -179,12 +191,19 @@ def seen_on_target(state, manifest, document, node_id):
     return True, "on %s at epoch %d" % (want, manifest["epoch"])
 
 
-def may_reboot(manifest, document, node_id, running, session_id, own_state, leases, now, run=subprocess.run):
+def may_reboot(manifest, document, node_id, running, session_id, own_state, leases, now, planned_outage=False, run=subprocess.run):
     """Whether `node_id` may reboot into its target image now. `running` is the label of the set this
     node is running and `session_id` its current boot session (64 hex); `own_state` is this node's
     attest.py state (parsed); `leases` are runtime-lease envelopes this node holds, one per peer; `now`
     is its authenticated time (heartbeat.authenticated_now). Returns {"target": label, "authorizers": [...], "seconds": the
-    shortest lease's time left}, or raises Refused with the reason."""
+    shortest lease's time left}, or raises Refused with the reason.
+
+    Under the single-node profile (docs/design/single-node.md 4.6, regalia-kms-dx7.8) there is no other node to
+    authorize or unlock: the reboot is a PLANNED OUTAGE, and the operator says so -- the manifest is single-node
+    and names the node ACTIVE, the measurements give it two sets, and `planned_outage` is given. No lease is
+    asked, no turn is kept, and the answer records it ("authorizers": [], "seconds": None, "planned_outage": True).
+    The outage itself ends when the owner unlocks the host again (ownerunlock.py), having seen it boot on the
+    target (attest_booted, the retire evidence). `planned_outage` is meaningless under any other profile."""
     sets = measurements.bind(manifest, document)
     nodes = membership.validate(manifest)
     require(isinstance(node_id, str), "node_id is text")
@@ -202,7 +221,18 @@ def may_reboot(manifest, document, node_id, running, session_id, own_state, leas
             "%s says it runs %r, which is neither of its accepted sets (%s)" % (node_id, running, ", ".join(s["label"] for s in accepted)))
     require(running != target, "%s is already on its target (%s): nothing to reboot for" % (node_id, target))
     membership.hex_field(session_id, 64, "session_id")
-    # 3. the turn
+    # 3. the turn (single-node: there is no turn, and no peer to unlock it after -- the outage is the operator's decision)
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        if not planned_outage:
+            require(False, "a single-node host's reboot is a planned outage: give --planned-outage (the host is down until "
+                    "the owner unlocks it; the owner's tool judges its boot on the new image)")
+        # no authorizer, no lease, no turn: the operator said the outage is planned, the owner takes it from there
+        return {"target": target, "authorizers": [], "planned_outage": True, "seconds": None}
+    # --planned-outage is a single-node decision: under any other profile a reboot stands on a peer's lease,
+    # not on the operator's word, and the flag names no outage at all
+    require(not planned_outage,
+            "--planned-outage is a single-node decision: epoch %d is %s, and every node there has a peer to unlock it "
+            "(its reboot stands on a peer's lease, not on the operator's word)" % (manifest["epoch"], membership.profile(manifest)))
     order = attesting(manifest)
     for earlier in order[:order.index(node_id)]:
         yes, said = seen_on_target(own_state, manifest, document, earlier)
@@ -233,23 +263,33 @@ def may_reboot(manifest, document, node_id, running, session_id, own_state, leas
     missing = [n for n in authorizers if n not in left]
     require(not missing, "WAIT: no valid lease from %s. A peer that cannot vouch for this node now may not be able to "
             "unlock it after the reboot" % "; ".join("%s (%s)" % (n, reasons.get(n, "none presented")) for n in missing))
-    return {"target": target, "authorizers": authorizers, "seconds": min(left[n] for n in authorizers)}
+    return {"target": target, "authorizers": authorizers, "seconds": min(left[n] for n in authorizers), "planned_outage": False}
 
 
 def _witnesses(manifest, states):
-    """The checks every peer state file must pass to count as a witness under `manifest` (retire_ready,
-    stranded): the state of every node that may authorize, and only theirs, each a verifier's state whose
-    records of the nodes of the rollout are readable and not from a later epoch. Raises Refused."""
+    """The checks every state file must pass to count as a witness under `manifest` (retire_ready,
+    stranded): under multi-node, the state of every node that may authorize, and only theirs; under single-node
+    (regalia-kms-dx7.8), the OWNER's state and only it -- the owner's tool is the only verifier off the node
+    (its attester), and the node's own state never is evidence of itself. Each file must be a verifier's
+    state whose records of the nodes of the rollout are readable and not from a later epoch. Raises Refused."""
     nodes = membership.validate(manifest)
-    require(isinstance(states, dict) and states and all(isinstance(p, str) for p in states), "no verifier state was given")
-    unknown = sorted(set(states) - set(nodes))
-    require(not unknown, "state from nodes the manifest does not list: %s" % ", ".join(unknown))
-    silent = sorted(p for p in states if not membership.may(manifest, p, "authorize"))
-    require(not silent, "state from nodes that may not authorize under epoch %d: %s. Only a peer that judges unlocks is a witness"
-            % (manifest["epoch"], ", ".join(silent)))
-    absent = sorted(n for n in nodes if membership.may(manifest, n, "authorize") and n not in states)
-    require(not absent, "the state of %s is missing. Every node that may authorize is a witness: the file left out could be "
-            "the one that saw a node fall back" % ", ".join(absent))
+    require(isinstance(states, dict) and all(isinstance(p, str) for p in states), "no verifier state was given")
+    if not states:
+        require(False, "no verifier state was given")
+    if membership.profile(manifest) == membership.SINGLE_NODE:
+        # The host has no peer: its one judge is the owner, who sees the host's system-phase attestation through
+        # owner.py's attest-booted. A node's state for itself (or anything but the owner's) is not evidence here.
+        require(set(states) == {membership.OWNER}, "under the single-node profile the owner's state is the only witness: "
+                "give --state %s=FILE" % membership.OWNER)
+    else:
+        unknown = sorted(set(states) - set(nodes))
+        require(not unknown, "state from nodes the manifest does not list: %s" % ", ".join(unknown))
+        silent = sorted(p for p in states if not membership.may(manifest, p, "authorize"))
+        require(not silent, "state from nodes that may not authorize under epoch %d: %s. Only a peer that judges unlocks is a witness"
+                % (manifest["epoch"], ", ".join(silent)))
+        absent = sorted(n for n in nodes if membership.may(manifest, n, "authorize") and n not in states)
+        require(not absent, "the state of %s is missing. Every node that may authorize is a witness: the file left out could be "
+                "the one that saw a node fall back" % ", ".join(absent))
     # ... and a file that was collected empty, or is not a verifier's state at all, is as good as left out
     hollow = sorted(p for p, state in states.items() if not (
         isinstance(state, dict) and state.get("schema") == attest.STATE_SCHEMA and isinstance(state.get("nodes"), dict)))
@@ -283,13 +323,19 @@ def retire_ready(manifest, document, states):
     for node_id in attesting(manifest):
         target = measurements.target(document, node_id)
         want = target["label"]
-        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
+        # Under single-node the witness is the owner (membership.OWNER), not a peer node; the node's own state is
+        # never evidence of itself, and `_witnesses` has admitted nothing but the owner's file anyway.
+        witnesses = [membership.OWNER] if membership.profile(manifest) == membership.SINGLE_NODE else None
+        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id and (witnesses is None or peer in witnesses)}
         said = {peer: last for peer, last in said.items() if last is not None}
         # on another image, or on the target but only in its initrd: it asked for its disk, and may never have come up
         wrong = ["%s last saw it on %r" % (peer, label) if label != want else "%s last saw it in the initrd of %r, not up" % (peer, label)
                  for peer, (label, phase) in said.items() if label != want or not _up(target, phase)]
         if not said:
-            behind.append("%s (no other node has verified it under epoch %d)" % (node_id, manifest["epoch"]))
+            if witnesses is not None:
+                behind.append("%s (no witness has verified it under epoch %d)" % (node_id, manifest["epoch"]))
+            else:
+                behind.append("%s (no other node has verified it under epoch %d)" % (node_id, manifest["epoch"]))
         elif wrong:
             behind.append("%s (%s, not on %s)" % (node_id, "; ".join(wrong), want))
         else:
@@ -321,12 +367,14 @@ def stranded(manifest, old, new, states):
         kept = {e["label"]: e for e in after[node_id]}
         if not {e["label"] for e in before[node_id]} - set(kept):
             continue
-        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
+        witnesses = [membership.OWNER] if membership.profile(manifest) == membership.SINGLE_NODE else None
+        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id and (witnesses is None or peer in witnesses)}
         said = {peer: last for peer, last in said.items() if last is not None}
         wrong = ["%s last saw it on %r" % (peer, label) if label not in kept else "%s last saw it in the initrd of %r, not up" % (peer, label)
                  for peer, (label, phase) in said.items() if label not in kept or not _up(kept[label], phase)]
         if not said:
-            behind[node_id] = "no other node has verified it under epoch %d" % manifest["epoch"]
+            behind[node_id] = "no witness has verified it under epoch %d" % manifest["epoch"] if witnesses is not None \
+                else "no other node has verified it under epoch %d" % manifest["epoch"]
         elif wrong:
             behind[node_id] = "%s, not on %s" % ("; ".join(wrong), " or ".join(sorted(kept)))
     return behind
@@ -359,8 +407,9 @@ def check_lockout(manifest, old, new, kind, states, emergency, locked_out):
         return None
     # A node still running the set that goes would be refused at its next unlock and lease, for good: the
     # root's signature cannot be taken back. So the peers' records say first that nobody runs it.
-    require(states, "the new document takes a set away (%s): give --state NODE=STATE.json for every node that may authorize, "
-            "so that no node still running it is locked out (rollout retire-ready reads the same files)" % kind)
+    if not states:
+        require(False, "the new document takes a set away (%s): give --state NODE=STATE.json for every node that may authorize, "
+                "so that no node still running it is locked out (rollout retire-ready reads the same files)" % kind)
     behind = stranded(manifest, old, new, states)
     require(not behind or emergency, "NOT YET: this %s would lock out %s. Wait until every node is seen up on a set the new "
             "document keeps, or, if the set that goes must go now, make it an emergency (--emergency) and name each node it "
@@ -501,13 +550,19 @@ def _cmd_epoch(args):
         _tpm_text(anchored, args.tcti) if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
-def _states(items):
+def _states(items, profile=None):
     states = {}
     for item in items:
         node_id, sep, path = item.partition("=")
         require(sep and node_id and path, "--state takes NODE=FILE, not %r" % item)
         require(node_id not in states, "--state names %s twice" % node_id)
+        if profile == membership.SINGLE_NODE:
+            require(node_id == membership.OWNER, "under the single-node profile the owner's state is the only witness: "
+                    "give --state %s=FILE" % membership.OWNER)
         states[node_id] = _json(path, "--state %s" % node_id)
+    if profile == membership.SINGLE_NODE:
+        require(states and membership.OWNER in states, "under the single-node profile the owner's state is the only witness: "
+                "give --state %s=FILE" % membership.OWNER)
     return states
 
 
@@ -517,7 +572,7 @@ def _cmd_propose(args):
     measurements.bind(current, old)
     kind = measurements.transition(old, new, emergency=args.emergency, dropped=args.dropped)
     require(kind != "unchanged", "the new document changes nothing: there is no manifest to propose")
-    locked = check_lockout(current, old, new, kind, _states(args.state), args.emergency, args.locked_out)
+    locked = check_lockout(current, old, new, kind, _states(args.state, membership.profile(current)), args.emergency, args.locked_out)
     issued = args.issued_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     proposal = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current),
                     policy_version=measurements.version(new), issued_at=issued)
@@ -535,11 +590,28 @@ def _cmd_propose(args):
 
 def _cmd_may_reboot(args):
     manifest, anchored = _current(args)
+    profile = membership.profile(manifest)
+    if profile == membership.SINGLE_NODE:
+        # The single-node profile asks no peer state at all (its one witness, the owner's, is read at retire time
+        # from the owner's machine): --attest-state and --lease are meaningless here and are refused if given, so a
+        # copy-pasted three-node command line cannot be read as a single-node decision.
+        require(not args.attest_state and not args.lease, "the single-node profile asks no peer state: drop --attest-state and "
+                "--lease; its reboot is a planned outage (give --planned-outage), and the owner's state is read at retire time")
+        own_state = {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {}}
+    else:
+        require(args.attest_state, "--attest-state is this node's attestation verifier state: the peers' turn is judged from it")
+        own_state = _json(args.attest_state, "--attest-state")
     leases = [_json(path, "--lease") for path in args.lease]
     authenticated = args.now is not None
     verdict = may_reboot(manifest, _document(args.measurements), args.node_id, args.running, args.session_id,
-                         _json(args.attest_state, "--attest-state"), leases, args.now if authenticated else int(time.time()))
-    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], time_authenticated=authenticated, **_tpm(anchored, args.tcti))
+                         own_state, leases, args.now if authenticated else int(time.time()),
+                         planned_outage=args.planned_outage)
+    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], time_authenticated=authenticated, topology=profile,
+                   **_tpm(anchored, args.tcti))
+    if profile == membership.SINGLE_NODE:
+        return verdict, "YES: %(node_id)s may reboot into %(target)s (PLANNED OUTAGE: this host is the only node: it is down " \
+                        "until the owner unlocks it, having seen it boot on %(target)s (owner attest-booted); no peer lease is " \
+                        "asked for, and none is owed) (epoch %(epoch)d)"
     return verdict, "YES: %(node_id)s may reboot into %(target)s (vouched for by %(authorizers)s; the shortest lease has %(seconds)d s left)" + (
         "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now): do not act on a lease that is about to expire") + (
         _tpm_text(anchored, args.tcti) if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
@@ -548,7 +620,7 @@ def _cmd_may_reboot(args):
 
 def _cmd_retire_ready(args):
     manifest, anchored = _current(args)
-    states = _states(args.state)
+    states = _states(args.state, membership.profile(manifest))
     seen = retire_ready(manifest, _document(args.measurements), states)
     return dict({"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"]}, **_tpm(anchored, args.tcti)), \
         "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \
@@ -613,9 +685,13 @@ def main(argv=None):
     c.add_argument("--node-id", required=True)
     c.add_argument("--running", required=True, metavar="LABEL", help="the set this node is running")
     c.add_argument("--session-id", required=True, metavar="HEX", help="this boot's attested session (64 hex)")
-    c.add_argument("--attest-state", required=True, help="this node's attestation verifier state")
+    c.add_argument("--attest-state", help="this node's attestation verifier state (never read under the single-node profile, "
+                                          "which asks no peer state at all: give --planned-outage instead)")
     c.add_argument("--lease", action="append", default=[], metavar="LEASE.json", help="a runtime lease this node holds; repeat")
     c.add_argument("--now", type=int, metavar="SECONDS", help="the node's authenticated time; without it the system clock, and the output says so")
+    c.add_argument("--planned-outage", action="store_true",
+                   help="the operator says this single-node host may be taken down: the reboot is a planned outage, and the "
+                        "host is down until the owner unlocks it (single-node profile only)")
     c.set_defaults(run=_cmd_may_reboot)
     c = sub.add_parser("retire-ready", help="may CURRENT be retired? (every node seen on its target by its peers)")
     chain(c)

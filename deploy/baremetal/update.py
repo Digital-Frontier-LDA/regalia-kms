@@ -183,9 +183,15 @@ def close_cut(host, path, record, say=print):
 
 # ---- the four commands ----
 
-def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MINUTES, say=print):
-    """See the module text. Returns the BootNext outcome; the host is then rebooted (host.reboot)."""
-    event = {"event": "update-apply", "node_id": host.node_id, "entry": entry}
+def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MINUTES, planned_outage=False, say=print):
+    """See the module text. Returns the BootNext outcome; the host is then rebooted (host.reboot).
+
+    Under the single-node profile (docs/design/single-node.md 4.6, regalia-kms-dx7.8) there is no peer to ask
+    for a lease: `planned_outage` is the operator's word that the only node may go down, and it is what
+    `may_reboot` asks for (refused without it; refused under any other profile). No body is asked, and the
+    trail records the decision (planned_outage, topology) on every event of the run."""
+    event = {"event": "update-apply", "node_id": host.node_id, "entry": entry,
+             "planned_outage": planned_outage, "topology": membership.profile(host.manifest())}
     try:
         require(isinstance(deadline_minutes, int) and 5 <= deadline_minutes <= 120, "the deadline is 5 to 120 minutes")
         manifest = host.manifest()
@@ -207,13 +213,16 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         target = measurements.target(document, node_id)
         require(running["label"] != target["label"], "%s already runs its target %s: there is nothing to apply" % (node_id, target["label"]))
         session = host.session()
-        leases, refused = fresh_leases(host, manifest, authorizers(manifest, node_id), session)
+        # the single-node profile asks no body: there is no peer whose lease would vouch (the operator's
+        # --planned-outage is the decision, and may_reboot refuses it under any other profile)
+        single_node = membership.profile(manifest) == membership.SINGLE_NODE
+        leases, refused = ({}, {}) if single_node else fresh_leases(host, manifest, authorizers(manifest, node_id), session)
         event.update({"from": running["label"], "to": target["label"], "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
                       "lease_issuers": sorted(leases), "no_lease": refused})
         now = host.now()
         try:
             verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, host.own_state(), list(leases.values()),
-                                         now, run=host.run)
+                                         now, planned_outage=planned_outage, run=host.run)
         except Refused as refusal:
             raise Refused("%s%s" % (refusal, "".join("; %s gave no lease: %s" % (p, refused[p]) for p in sorted(refused)))) from None
         boot = host.boot()
@@ -228,8 +237,13 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     deadline = int(time.time()) + 60 * deadline_minutes
     current = boot["current"]
     event.update({"booted": current, "authorizers": verdict["authorizers"], "deadline": deadline})
-    say("%s runs %s (Boot%s). Its peers %s vouch for this boot (the shortest lease has %d s left)."
-        % (node_id, running["label"], current, " and ".join(verdict["authorizers"]), verdict["seconds"]))
+    if single_node:
+        say("%s runs %s (Boot%s). PLANNED OUTAGE: this host is the only node: it is down until the owner unlocks it, "
+            "having seen it boot on %s (owner attest-booted); no peer lease is asked for, and none is owed."
+            % (node_id, running["label"], current, target["label"]))
+    else:
+        say("%s runs %s (Boot%s). Its peers %s vouch for this boot (the shortest lease has %d s left)."
+            % (node_id, running["label"], current, " and ".join(verdict["authorizers"]), verdict["seconds"]))
     say("Boot%s's image measures %s in every phase. BootNext := %s, then this host reboots." % (entry, target["label"], entry))
     say("DEADLINE %s: if %s is not back up on %s by then (no peer has unlocked it, or it hangs), reset it through the iLO "
         "(Power: Reset). BootNext is used once: that boot follows BootOrder, Boot%s, %s, still approved, and its peers unlock it."
@@ -242,12 +256,12 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         raise failure
     # The leases vouch for this boot NOW, for a few minutes. Once the operator has answered, they are asked for
     # again and may_reboot judges the fresh ones on the authenticated clock: a slow confirmation never arms
-    # BootNext on evidence from before it
+    # BootNext on evidence from before it (the single-node profile re-asks no body: there is nothing to ask)
     try:
-        leases, refused = fresh_leases(host, manifest, authorizers(manifest, node_id), session)
+        leases, refused = ({}, {}) if single_node else fresh_leases(host, manifest, authorizers(manifest, node_id), session)
         event.update({"lease_issuers": sorted(leases), "no_lease": refused})
         verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, host.own_state(), list(leases.values()),
-                                     host.now(), run=host.run)
+                                     host.now(), planned_outage=planned_outage, run=host.run)
         event["authorizers"] = verdict["authorizers"]
     except (Refused, attest.Refused, OSError, ValueError) as failure:
         failure = Refused("the peers' leases no longer allow it after the confirmation (%s%s): nothing was changed; run apply again"
@@ -281,8 +295,9 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     return done
 
 
-def promote(host, esp, typed, record, say=print):
-    event = {"event": "update-promote", "node_id": host.node_id}
+def promote(host, esp, typed, record, say=print, planned_outage=False):
+    event = {"event": "update-promote", "node_id": host.node_id,
+             "planned_outage": planned_outage, "topology": membership.profile(host.manifest())}
     try:
         manifest = host.manifest()
         document = host.document(manifest)
@@ -295,7 +310,12 @@ def promote(host, esp, typed, record, say=print):
         current = boot["current"]
         event.update({"entry": current, "set": target["label"], "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest)})
         bootnext.measures(bootnext.image(esp, current, boot, **host.where), target)
-        leases, refused = fresh_leases(host, manifest, authorizers(manifest, node_id), host.session())
+        # on three nodes a peer's lease for this boot is the evidence it came up; under the single-node profile
+        # (regalia-kms-dx7.8) there is no peer: the node's own self-issued lease for this boot is the record
+        # that it booted, in this session, under this epoch (lease.py allows self-issued leases only there)
+        single_node = membership.profile(manifest) == membership.SINGLE_NODE
+        peers = [node_id] if single_node else authorizers(manifest, node_id)
+        leases, refused = fresh_leases(host, manifest, peers, host.session())
         event.update({"lease_issuers": sorted(leases), "no_lease": refused})
         require(leases, "no peer gave this boot a lease (%s): nobody has seen %s up on %s yet"
                 % ("; ".join("%s: %s" % (p, refused[p]) for p in sorted(refused)) or "no peer may authorize", node_id, target["label"]))
@@ -479,6 +499,9 @@ def main(argv=None, typed=None, run=None):
         if name == "apply":
             c.add_argument("--deadline-minutes", type=int, default=DEFAULT_DEADLINE_MINUTES,
                            help="after this, an operator resets a trial boot that has not come up (default %(default)s)")
+            c.add_argument("--planned-outage", action="store_true",
+                           help="the operator says this single-node host may be taken down: the update is a planned outage, and the "
+                                "host is down until the owner unlocks it (single-node profile only; refused under any other)")
     args = ap.parse_args(argv)
 
     def record(event):
@@ -505,7 +528,8 @@ def main(argv=None, typed=None, run=None):
             return 0 if found["promoted"] or not args.require_promoted else 1
         close_cut(host, args.audit_log, record)
         if args.command == "apply":
-            apply(host, args.entry, args.esp, ask, record, args.deadline_minutes)
+            apply(host, args.entry, args.esp, ask, record, args.deadline_minutes,
+                  planned_outage=args.planned_outage if hasattr(args, "planned_outage") else False)
         elif args.command == "promote":
             promote(host, args.esp, ask, record)
         else:

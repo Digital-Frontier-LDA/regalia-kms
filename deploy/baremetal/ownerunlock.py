@@ -220,6 +220,55 @@ def may_unlock(manifest, requester, session_id, evidence, attester):
     lease.reattest(attester, evidence, requester, session_id, manifest, node, phase="initrd")
 
 
+def attest_booted(manifest, document, state_path, node_id, session_id, evidence, attester):
+    """The owner's decision that `node_id` booted, under `manifest` (regalia-kms-dx7.8, docs/design/single-node.md 4.6):
+    the single-node host's update is a planned outage, and the JUDGE of the new image is the owner's tool, not the node.
+    `evidence` is the quote the node printed for the owner's nonce in the BOOTED (system) phase, over the tip's
+    selection. It is verified exactly as an unlock's quote is (lease.reattest under the policy `manifest` commits to:
+    an image the tip no longer lists, and a site it no longer lists, are refused by the PCR that moved), only from the
+    system phase instead of the initrd. The record then written is what a boot is: it names the SYSTEM phase. A set
+    given per phase names it when its system quote is verified; a set with one value per PCR cannot tell the two
+    phases apart by its values, and the owner's tool names the phase the request was made in, so that an unlock (a
+    quote in the initrd, a boot that asked for its disk and never came up) is never recorded as a boot. The record
+    ("label", "epoch", "phase") is written into the owner's attest state at `state_path`, and returned. That record
+    is the retire evidence (rollout's owner witness); the node's own state never is, and an unlock never is.
+    `attester` is the owner's verifier under `manifest`/`document` (the same one that issued the evidence's nonce)."""
+    node = single_node(manifest, node_id)
+    membership.hex_field(session_id, 64, "session_id")
+    require(attester is not None, "attest-booted verifies under the owner's verifier: it must be given")
+    # The quote's phase: the owner's tool knows which phase the node is in (initrd at the unlock, system after the
+    # volume opens), and says so. A quote given in the initrd is an unlock, not a boot: a boot that asked for its
+    # disk and never came up is not a boot, and retiring on it would lock the host into the image it never came up on.
+    # Checked BEFORE any verification: a refusal must leave the nonce outstanding and the state unwritten.
+    phase = evidence.get("phase")
+    if phase is not None:
+        require(phase == "system", "attest-booted takes the booted system's quote; that quote was given in the %s "
+                "(a boot that asked for its disk and never came up is not a boot; retiring on it would lock the host "
+                "into the image it never came up on)" % phase)
+    try:
+        lease.reattest(attester, evidence, node_id, session_id, manifest, node, phase="system")
+    except Refused as refusal:
+        message = str(refusal)
+        if "accepted only from the system phase" in message:
+            raise Refused("attest-booted takes the booted system's quote; that quote was given in the initrd (a boot "
+                          "that asked for its disk and never came up is not a boot; retiring on it would lock the "
+                          "host into the image it never came up on)") from None
+        raise
+    # The verifier's record names the phase the request came from only when the set is given per phase. Where the
+    # set has one value per PCR, the record then names no phase, and the owner's tool -- the judge -- names the
+    # phase the request was made in, so that an unlock (initrd) and a boot (system) are two records, not one.
+    with attest.locked_state(state_path) as (state, save):
+        record = state["nodes"].get(node_id, {})
+        measurement = record.get("measurement")
+        require(isinstance(measurement, dict), "attest-booted recorded nothing for %s: the verification wrote no "
+                "measurement" % node_id)
+        if measurement.get("phase") is None:
+            measurement["phase"] = "system"
+            record["measurement"] = measurement
+            save()
+    return measurement
+
+
 class OwnerPeer:
     """The owner's machine answering one single-node host's unlock requests (unlock.serve takes it as a Peer).
     `manifest` is the tip of the owner's verified chain; `attester` the owner's attest.Verifier under the policy that
