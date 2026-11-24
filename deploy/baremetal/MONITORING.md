@@ -50,8 +50,8 @@ group on `job`, so combining multiple clusters under the name would skew those c
 **The collector scrape job is `regalia-collector`.** Configure `job_name: regalia-collector` with
 `metrics_path: /metrics` for the audit collector's own witness (regalia-kms-dx7.9, D1=A): the off-host
 reference the single-node behind rules compare a node against. It is scraped on the owner's monitoring
-service (not the node), and relabels the series' `site` to `instance` so the reference carries the node's
-instance under the collector's job (section 4.1).
+service (not the node), and a `metric_relabel_configs` rule copies each series' `site` label onto
+`instance` so the reference carries the node's instance under the collector's job (section 4.1).
 
 As a commissioning prerequisite, register **both** endpoints for every node in persistent external scrape
 inventory. Set the target label `topology_profile` to the fixed value `single-node` or `multi-node` on both jobs.
@@ -147,8 +147,12 @@ The rules:
 **The collector's reference (D1=A).** `regalia_collector_witnessed_membership_epoch` and
 `regalia_collector_witnessed_anchor_epoch` are scraped from the audit collector's own `/metrics` endpoint, on
 the collector's mTLS listener (the same listener and client CA the sink's protocol uses — one door, not a
-second). The endpoint labels each series by the node's own `site` (the stream's identity); the scrape job
-`regalia-collector` adds its own `job` and relabels `site` to `instance`, so the reference carries the node's
+second). The endpoint emits ONE series per node: the membership series (from the node's sync trail) and the
+anchor series (from its esp-advances trail) share the label `site` = the node's own site (the stream's site
+minus its trail suffix), so a node's two gauges agree on identity and a node the collector has not seen gets
+no series. The scrape job `regalia-collector` adds its own `job` and copies `site` onto `instance`
+(`metric_relabel_configs` — series labels are rewritten only there; `relabel_configs` rewrites target
+metadata, which a scraped series no longer has), so the reference carries the node's
 instance under the collector's job. The behind rules compare on the full label set minus `job` and
 `topology_profile` (the two labels the sides carry differently), so one-to-one on `instance`: a node is judged
 against its own off-host witness, and another node's witness cannot be its floor. While the collector is not
@@ -162,11 +166,14 @@ configured or not scraping, the comparisons have no right-hand side and stay sil
   # mTLS: the service's client certificate, issued by the collector's client CA (the same CA the
   # sink's clients are). The collector's listener is RequireAndVerifyClientCert; a scrape with no
   # chain-verified certificate never reaches a handler.
-  # Relabel the collector's site label to the node's instance so the behind rules' one-to-one
+  # Copy the collector's site label onto the node's instance so the behind rules' one-to-one
   # match on instance works. The site is the node's own; the instance is the node's own.
-  relabel_configs:
-    - source_labels: [__meta_label_site]
+  # This is metric_relabel_configs (series labels, post-scrape): relabel_configs only rewrites
+  # target metadata at discovery time and cannot touch a label the endpoint itself emits.
+  metric_relabel_configs:
+    - source_labels: [site]
       target_label: instance
+      action: replace
 ```
 
 **The restore-pending metric.** `regalia_restore_pending` (0 or 1) is written by `deploy/baremetal/metrics.py`

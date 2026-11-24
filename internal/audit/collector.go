@@ -318,21 +318,32 @@ func (c *Collector) Handler() http.Handler {
 // listener as the sink protocol (one listener, one certificate, the sink's own discipline), because
 // a second listener would be a second door on the same state.
 //
-// It exposes two gauges, labeled by the client's instance and job, so a rule can compare them
-// to the node's own series on the same label set (the monitoring service's scrape job is
-// regalia-collector; instance is the node's own, the same value the node's own series carry):
+// ONE SERIES PER NODE, NOT PER TRAIL. The collector's streams are keyed <site>.<trail> (one per
+// trail the shipper ships), but the node the rules judge is the SITE: the gauges are therefore
+// labeled by the site alone (the stream's site minus its .<trail> suffix), and each node's
+// series takes its two values from its own two trails — the membership epoch from the node's sync
+// trail, the anchor epoch from its esp-advances trail — with no cross-trail inference. A node the
+// collector has not seen in a trail has no series for that trail, and the rules see it as absent:
+// RegaliaCollectorEpochMissing is the blind state, and a 0 the endpoint invented would not be one.
 //
-//	regalia_collector_witnessed_membership_epoch{job,instance}  the highest manifest epoch
-//	committed in that node's sync trail, the reading recover.witness_epoch takes from the same lines
-//	regalia_collector_witnessed_anchor_epoch{job,instance}      the highest epoch committed in
-//	that node's esp-advances trail
+// The scrape job (job regalia-collector, MONITORING.md section 4.1) copies the site label onto
+// instance with a metric_relabel_configs rule — a series-label transform, the only place the
+// mapping can happen (relabel_configs rewrites TARGET labels before the scrape and cannot reach a
+// label in the scraped series). The reference then carries the node's own instance under the
+// collector's job, and the behind rules join one-to-one on instance, ignoring job and
+// topology_profile (the two labels the sides carry differently).
 //
-// Both are 0 (absent) while the trail holds no such line yet. The values are recomputed from the
-// committed stream files on every scrape: the commit path is append-only, the files verify on open,
-// and the walk is bounded by maxTrailContent per line — a scrape is a read, and a wedged collector
-// is the owner's alarm, not this endpoint's failure.
+//	regalia_collector_witnessed_membership_epoch{site}  the highest manifest epoch committed in
+//	that node's sync trail, the reading recover.witness_epoch takes from the same lines
+//	regalia_collector_witnessed_anchor_epoch{site}      the highest epoch committed in that node's
+//	esp-advances trail
+//
+// The values are recomputed from the committed stream files on every scrape: the commit path is
+// append-only, the files verify on open, and a scrape opens its OWN read-only handle and walks
+// through the committed size — it shares no file offset with the commit path, and a stream whose
+// file cannot be read yields no series (the blind state), never a value the endpoint invented.
 func (c *Collector) MetricsHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_membership_epoch The highest manifest epoch committed in the node's sync trail.")
@@ -345,102 +356,121 @@ func (c *Collector) MetricsHandler() http.Handler {
 			streams[key] = stream
 		}
 		c.mu.Unlock()
+		// One entry per (identity, node site): the committed sizes of the node's two witness
+		// trails — sync (the membership epoch) and esp-advances (the anchor epoch) — under the
+		// stream sites that hold them.
+		type witness struct {
+			identity string
+			site     string
+			size     int64
+		}
+		type nodeWitness struct {
+			sync *witness
+			esp  *witness
+			node string
+		}
+		nodes := map[string]*nodeWitness{}
 		for _, stream := range streams {
-			membership, anchor := c.witnessedEpochs(stream)
-			// The collector knows the node by its site (the stream's identity); the monitoring
-			// service knows it by its instance. The two are the same value: the site is the
-			// node's own, and the instance is the node's own. The collector does not know the
-			// monitoring service's naming, so the scrape job's relabeling carries the site to
-			// the instance label.
-			fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", stream.site, membership)
-			fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", stream.site, anchor)
+			nodeSite := splitWitnessTrail(stream.site)
+			if nodeSite == "" {
+				continue
+			}
+			key := stream.identity + "\x1f" + nodeSite
+			node := nodes[key]
+			if node == nil {
+				node = &nodeWitness{node: nodeSite}
+				nodes[key] = node
+			}
+			switch {
+			case strings.HasSuffix(stream.site, ".sync"):
+				node.sync = &witness{identity: stream.identity, site: stream.site, size: stream.size}
+			case strings.HasSuffix(stream.site, ".esp-advances"):
+				node.esp = &witness{identity: stream.identity, site: stream.site, size: stream.size}
+			}
+		}
+		for _, node := range nodes {
+			if node.sync != nil {
+				if membership, ok := c.witnessedTrail(node.sync.identity, node.sync.site, node.sync.size, epochFromLine); ok {
+					fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", node.node, membership)
+				}
+			}
+			if node.esp != nil {
+				if anchor, ok := c.witnessedTrail(node.esp.identity, node.esp.site, node.esp.size, epochFromLine); ok {
+					fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", node.node, anchor)
+				}
+			}
 		}
 	})
 }
 
-// witnessedEpochs is the reading recover.witness_epoch takes, from the collector's own committed
-// streams: the highest epoch in the site's sync trail (its ALLOW lines, which name the manifest
-// epoch) and in its esp-advances trail (its ALLOW lines, which name the anchored epoch). Both are
-// the same value the owner reads off the collector's export offline, so the metric and the owner's
-// procedure cannot disagree. The walk is one pass per stream, bounded by the committed size.
-func (c *Collector) witnessedEpochs(stream *collectorStream) (membership, anchor uint64) {
-	if stream.site == "" {
-		return 0, 0
+// splitWitnessTrail is the node's site in a stream's site <site>.<trail>: the part before the
+// LAST dot, and only when something follows it. A stream the shipper named without a trail (an
+// empty or bare site) is not a node the witness gauges describe: it has no trail, and the
+// metrics endpoint has nothing to say about it. (The collector's own site charset admits dots —
+// <site>.<trail> is the shipper's naming, and the LAST dot is the trail's, not the node's.)
+func splitWitnessTrail(site string) string {
+	i := strings.LastIndexByte(site, '.')
+	if i <= 0 || i == len(site)-1 {
+		return ""
 	}
-	epochLine := func(event *Event) (uint64, bool) {
-		if event.Outcome != "ALLOW" || event.Detail == nil {
-			return 0, false
-		}
-		var detail struct {
-			Line string `json:"line"`
-		}
-		if json.Unmarshal(event.Detail, &detail) != nil || detail.Line == "" {
-			return 0, false
-		}
-		var line struct {
-			Event   string `json:"event"`
-			Outcome string `json:"outcome"`
-			Epoch   int64  `json:"epoch"`
-		}
-		if json.Unmarshal([]byte(detail.Line), &line) != nil || line.Outcome != "ALLOW" {
-			return 0, false
-		}
-		return uint64(line.Epoch), true
-	}
-	for _, event := range c.committedEvents(stream) {
-		epoch, ok := epochLine(&event)
-		if !ok || event.Detail == nil {
-			continue
-		}
-		var detail struct {
-			Trail string `json:"trail"`
-		}
-		if json.Unmarshal(event.Detail, &detail) != nil {
-			continue
-		}
-		switch detail.Trail {
-		case "sync":
-			if epoch > membership {
-				membership = epoch
-			}
-		case "esp-advances":
-			if epoch > anchor {
-				anchor = epoch
-			}
-		}
-	}
-	return membership, anchor
+	return site[:i]
 }
 
-// committedEvents re-reads one stream's committed lines (through stream.size: a torn append is
-// truncated back on commit, and the collector verifies the stream on open), one Event per line.
-// A read failure yields what held before it: the endpoint reports a floor, never a value it
-// invented.
-func (c *Collector) committedEvents(stream *collectorStream) []Event {
-	committed := stream.size
-	if committed <= 0 {
-		return nil
+// witnessedTrail reads one stream's committed lines through the committed size, from a FRESH
+// read-only handle: the commit path's file is O_WRONLY|O_APPEND and shares no offset with a
+// scrape, and a read error (the file vanished, the disk failed) yields no value, so the endpoint
+// reports absence — the blind state RegaliaCollectorEpochMissing exists for — never a floor it
+// invented. The walk is one line at a time, bounded by the committed size: a torn append is
+// truncated back to it on commit, so the committed size is a line boundary.
+func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, ok bool) {
+	if size <= 0 {
+		return 0, false
 	}
-	restored, err := stream.file.Seek(0, io.SeekStart)
+	file, err := os.Open(c.streamPath(identity, site))
 	if err != nil {
-		return nil
+		return 0, false
 	}
-	_ = restored
-	var events []Event
-	reader := bufio.NewReaderSize(io.LimitReader(stream.file, committed), 64*1024)
+	defer file.Close()
+	reader := bufio.NewReaderSize(io.LimitReader(file, size), 64*1024)
 	for {
-		line, err := reader.ReadString('\n')
-		if trimmed := strings.TrimSuffix(line, "\n"); trimmed != "" {
+		line, readErr := reader.ReadString('\n')
+		trimmed := strings.TrimSuffix(line, "\n")
+		if trimmed != "" {
 			var event Event
 			if json.Unmarshal([]byte(trimmed), &event) == nil {
-				events = append(events, event)
+				if value, found := epochOf(&event); found && value > epoch {
+					epoch = value
+				}
 			}
 		}
-		if err != nil {
-			break
+		if readErr != nil {
+			return epoch, true
 		}
 	}
-	return events
+}
+
+// epochFromLine is the reading recover.witness_epoch takes from a trail line: an ALLOW line that
+// names an epoch, the highest one the walk holds. A line that is not an allowed epoch is not an
+// epoch (its kind may not carry one), never an error: the walk keeps going to the next line.
+func epochFromLine(event *Event) (uint64, bool) {
+	if event.Outcome != "ALLOW" || event.Detail == nil {
+		return 0, false
+	}
+	var detail struct {
+		Line string `json:"line"`
+	}
+	if json.Unmarshal(event.Detail, &detail) != nil || detail.Line == "" {
+		return 0, false
+	}
+	var line struct {
+		Event   string `json:"event"`
+		Outcome string `json:"outcome"`
+		Epoch   int64  `json:"epoch"`
+	}
+	if json.Unmarshal([]byte(detail.Line), &line) != nil || line.Outcome != "ALLOW" {
+		return 0, false
+	}
+	return uint64(line.Epoch), true
 }
 
 // peerIdentity extracts the client identity from the connection. The mTLS listener is

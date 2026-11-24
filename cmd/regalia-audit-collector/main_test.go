@@ -198,6 +198,172 @@ func TestTheMetricsEndpointServesTheWitnessedEpochs(t *testing.T) {
 	}
 }
 
+// THE WITNESS REPORTS WHAT THE COMMIT PATH COMMITTED, NOT 0 (regalia-kms-dx7.9 review finding 1):
+// the collector's stream file is opened write-only for the commit path, and a scrape that read
+// through that handle would fail every read and serve epoch 0 for every node — a reference the
+// behind rules can never exceed, so both stay silent. This test commits real sync and
+// esp-advances lines THROUGH the sink's own POST /v1/events path and scrapes: the values must be
+// the epochs the lines carry. The series is ONE PER NODE (finding 2): labeled by the node's site
+// (the stream's site minus its .<trail> suffix), the membership value from the node's sync trail,
+// the anchor value from its esp-advances trail, and nothing for a node the collector has not seen.
+func TestTheMetricsEndpointReportsTheCommittedWitness(t *testing.T) {
+	dir := t.TempDir()
+	authorityPath, clientTLS, serverPEM, serverKey := collectorPKIFiles(t, dir)
+
+	collector, err := audit.OpenCollector(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", collector.Handler())
+	mux.Handle("GET /metrics", collector.MetricsHandler())
+	server, err := buildServer("127.0.0.1:0", serverPEM, serverKey, authorityPath, mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+
+	authenticated, err := audit.NewMTLSHTTPClient(clientTLS, clientRoots(t, authorityPath), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "https://" + listener.Addr().String() + "/v1/events"
+
+	// One line a trail event, committed exactly the way the shipper commits it: the stream
+	// is the shipper's <site>.<trail>, the event's chain position is the stream's, and the line
+	// is the shape recover.witness_epoch reads — an ALLOW that names the epoch.
+	ship := func(stream, line string, sequence uint64, previousHash string) {
+		t.Helper()
+		dot := strings.LastIndexByte(stream, '.')
+		events, err := audit.TrailEvents(stream[dot+1:], []byte(line+"\n"))
+		if err != nil {
+			t.Fatalf("the %s line %q does not map: %v", stream, line, err)
+		}
+		event := events[0]
+		event.Sequence = sequence
+		event.PreviousHash = previousHash
+		event.Hash = audit.EventHashForTest(event)
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-Regalia-Site", stream)
+		response, err := authenticated.Do(request)
+		if err != nil {
+			t.Fatalf("commit the %s line: %v", stream, err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("commit the %s line: %d %s", stream, response.StatusCode, mustReadBody(t, response))
+		}
+	}
+
+	// node-a's sync trail: two ALLOW lines, epochs 3 and 7, chained like trails.py writes.
+	// The event chain is built over BOTH lines at once (TrailEvents chains them: the second
+	// event's previous_hash is the first event's hash), and each is committed one at a time.
+	first := `{"at":1790000000,"event":"epoch","prev":"","seq":1,"outcome":"ALLOW","epoch":3}`
+	second := `{"at":1790000001,"event":"epoch","prev":"` + hex.EncodeToString(func() []byte {
+		sum := sha256.Sum256(append([]byte(first), '\n'))
+		return sum[:]
+	}()) + `","seq":2,"outcome":"ALLOW","epoch":7}`
+	events, err := audit.TrailEvents("sync", []byte(first+"\n"+second+"\n"))
+	if err != nil {
+		t.Fatalf("the sync trail does not chain: %v", err)
+	}
+	for i, line := range []string{first, second} {
+		_ = line
+		event := events[i]
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-Regalia-Site", "nodea.sync")
+		response, err := authenticated.Do(request)
+		if err != nil {
+			t.Fatalf("commit the sync line: %v", err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("commit the sync line: %d %s", response.StatusCode, mustReadBody(t, response))
+		}
+	}
+	// node-a's esp-advances trail: anchor 5.
+	ship("nodea.esp-advances", `{"at":1790000002,"event":"anchor","prev":"","seq":1,"outcome":"ALLOW","epoch":5}`, 1, audit.GenesisHash())
+
+	scrape := func() string {
+		t.Helper()
+		response, err := authenticated.Get("https://" + listener.Addr().String() + "/metrics")
+		if err != nil {
+			t.Fatalf("scrape the metrics endpoint: %v", err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("the metrics endpoint answered %d", response.StatusCode)
+		}
+		return mustReadBody(t, response)
+	}
+
+	body := scrape()
+	for _, want := range []string{
+		`regalia_collector_witnessed_membership_epoch{site="nodea"} 7`,
+		`regalia_collector_witnessed_anchor_epoch{site="nodea"} 5`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the scrape does not hold the committed witness %q:\\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `site="nodeb"`) {
+		t.Fatalf("a node the collector has not seen gets a series the endpoint invented:\\n%s", body)
+	}
+
+	// A reloaded collector re-reads the committed lines from disk and reports the same witness:
+	// the value comes from the file, not from memory the commit path keeps.
+	if err := collector.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := audit.OpenCollector(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopenedMux := http.NewServeMux()
+	reopenedMux.Handle("GET /metrics", reopened.MetricsHandler())
+	reopenedServer, err := buildServer("127.0.0.1:0", serverPEM, serverKey, authorityPath, reopenedMux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopenedServer.Close()
+	go func() { _ = reopenedServer.ServeTLS(reopenedListener, "", "") }()
+	response, err := authenticated.Get("https://" + reopenedListener.Addr().String() + "/metrics")
+	if err != nil {
+		t.Fatalf("scrape the reloaded collector: %v", err)
+	}
+	defer response.Body.Close()
+	body = mustReadBody(t, response)
+	if !strings.Contains(body, `regalia_collector_witnessed_membership_epoch{site="nodea"} 7`) ||
+		!strings.Contains(body, `regalia_collector_witnessed_anchor_epoch{site="nodea"} 5`) {
+		t.Fatalf("the reloaded collector does not hold the committed witness:\\n%s", body)
+	}
+}
+
 func mustReadBody(t *testing.T, response *http.Response) string {
 	t.Helper()
 	contents, err := io.ReadAll(response.Body)

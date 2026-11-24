@@ -58,6 +58,16 @@ func durable(err error) error {
 
 const genesisHash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
+// GenesisHash is the previous-hash of the first event of every stream: the collector verifies
+// a chain against it (verifyEvents), so a test that commits through the sink's own handler builds
+// its first event against the same value.
+func GenesisHash() string { return genesisHash }
+
+// EventHashForTest computes the chain hash of an event whose Sequence, PreviousHash and Hash
+// fields are already set to what the stream will hold: the same sha256 the commit path verifies
+// (eventHash), for a test that commits one line at a time through POST /v1/events.
+func EventHashForTest(event Event) string { return eventHash(event) }
+
 type Draft struct {
 	Timestamp           time.Time
 	RequestID           string

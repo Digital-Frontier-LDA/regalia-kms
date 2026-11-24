@@ -67,6 +67,10 @@ func (value *reservingPolicy) Evaluate(ctx context.Context, _ policy.Request) po
 	return policy.Decision{Allowed: true, Code: policy.CodeAllowed, PolicyID: "sops"}
 }
 
+func (*reservingPolicy) ReservesCosmosSequence(objectID, operation, contentType string) bool {
+	return false
+}
+
 func anchorReservation(n int) policy.Reservation {
 	return policy.Reservation{
 		PolicyID: "sops", ObjectID: "production-sops", Principal: "spiffe://regalia/workload/sops-prod",

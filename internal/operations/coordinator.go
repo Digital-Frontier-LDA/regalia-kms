@@ -45,6 +45,9 @@ type Router interface {
 
 type Policy interface {
 	Evaluate(context.Context, policy.Request) policy.Decision
+	// ReservesCosmosSequence is the single-node collector requirement's view of the policy:
+	// will an allowed request of this content reserve a Cosmos account sequence?
+	ReservesCosmosSequence(objectID, operation, contentType string) bool
 }
 
 type Auditor interface {
@@ -249,10 +252,25 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	// passed, and the same one the runner re-checks while the operation runs): the refusal follows
 	// the admission, not a startup reading of it. A collector that is configured but unreachable is
 	// not a refusal: the trail ships later and the backlog alerts. A stateless operation (named by
-	// SetStatelessOperations) reserves nothing and keeps serving. Multi-node and a single node with a
-	// configured collector are unchanged.
-	if coordinator.singleNodeMode != nil && !coordinator.collectorConfigured &&
-		coordinator.singleNodeMode(ctx) && !coordinator.statelessOperations[request.Operation] {
+	// SetStatelessOperations) keeps serving; ONE operation that name is not enough for — a sign that
+	// carries a Cosmos transaction also reserves the policy's state (the account sequence the
+	// trail records as spent), so it is refused like the rest, before the reservation. Multi-node
+	// and a single node with a configured collector are unchanged.
+	contentType := request.ContentType
+	if contentType == "" {
+		contentType = DataKeyContentType
+	}
+	// The requirement is one: single admission, no configured collector. Under it a request is
+	// refused when the POLICY says it will reserve a spend the trail records — a nonce, a quota,
+	// a Cosmos sequence, a data key — and the stateless set is that spend's own acceptance:
+	// what the PA decided a node without the collector may still spend (the D2 set's complement
+	// stays served, and its nonce and quota are the accepted spend). The one shape the name
+	// cannot cover is the sign that carries a Cosmos transaction: it is named stateless, but
+	// its policy also reserves the account sequence, and the sequence is the spend a replayed
+	// disk can make.
+	if coordinator.singleNodeMode != nil && !coordinator.collectorConfigured && coordinator.singleNodeMode(ctx) &&
+		(!coordinator.statelessOperations[request.Operation] ||
+			coordinator.policy.ReservesCosmosSequence(request.ObjectID, request.Operation, contentType)) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "collector-not-configured", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
@@ -351,10 +369,6 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
 		return api.Result{}, failure(code, status, retryable)
 	}
-	contentType := request.ContentType
-	if contentType == "" {
-		contentType = DataKeyContentType
-	}
 	policyRequest := policy.Request{
 		RequestID: request.RequestID, Principal: request.Principal, ObjectID: request.ObjectID,
 		Purpose: request.Context.Purpose, Environment: request.Context.Environment, Operation: request.Operation,
@@ -384,7 +398,7 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		Environment: request.Context.Environment, Nonce: request.Context.Nonce,
 		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request), Signer: coordinator.nodeID,
 	})
-	if contentType == "application/vnd.cosmos.tx+protobuf" {
+	if contentType == policy.CosmosSignDocContentType {
 		parsed, err := policy.ParseCosmosSignDoc(request.Data)
 		if err != nil {
 			coordinator.recordOrCount(ctx, request, route, "deny", "policy-cosmos-malformed", started, false, policyRequest.VerifiedApprovers)

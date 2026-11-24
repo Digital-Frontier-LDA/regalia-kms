@@ -242,6 +242,87 @@ func TestNoAdmissionAtAllIsUnchanged(t *testing.T) {
 // statefulRequest is a wrap: the operation that reserves the spend-once nonce and quota (the
 // data key the trail would record as spent). operationRequest is its complement, the unwrap of an
 // already-spent seal.
+// THE SIGN THAT CARRIES A COSMOS TRANSACTION IS THE STATEFUL ONE (regalia-kms-dx7.9 review
+// finding 3, the D2 set narrowed the way the review's remedy allows). D2 is "every route that
+// reserves policy or opstate state is refused" under a single-node admission with no collector,
+// and the policy engine reserves on EVERY allowed evaluation — a nonce and a quota, and, for a
+// Cosmos transaction, the account sequence. The daemon's stateless set names sign among the
+// operations that keep serving, so the coordinator cannot tell a plain sign from the one that
+// carries a Cosmos transaction by name alone: the POLICY says. A sign whose content is a Cosmos
+// SignDoc under a policy that names a Cosmos section will reserve the sequence if allowed, so it
+// is refused like the stateful set — before the reservation — and the plain sign keeps serving.
+// unwrap and certificate-sign reserve only the nonce and quota the D2 set itself accepts without
+// the collector; they are not refused.
+func TestASingleNodeWithNoCollectorRefusesASignWithACosmosTransaction(t *testing.T) {
+	coordinator, semantic, recorder, hardware, router := collectorFixture(t, admission.ModeSingle, false)
+	semantic.cosmos = true // this object's sign policy names a Cosmos section: its content is a SignDoc
+	result, err := coordinator.Execute(context.Background(), cosmosSignRequest())
+	wantCollectorNotConfigured(t, result, err)
+	if semantic.calls != 0 {
+		t.Fatalf("policy was evaluated %d times: the refusal must come before any policy state is reserved", semantic.calls)
+	}
+	if hardware.calls != 0 || router.calls != 0 {
+		t.Fatalf("token used %d times, routing asked %d times: a refused operation does no work", hardware.calls, router.calls)
+	}
+	if len(recorder.drafts) != 1 || recorder.drafts[0].Decision != "deny" || recorder.drafts[0].Outcome != "collector-not-configured" {
+		t.Fatalf("audit events = %#v: the refusal is recorded and named", recorder.drafts)
+	}
+}
+
+// THE PLAIN SIGN KEEPS SERVING: the same refusal, the same node, a sign that carries a digest —
+// no Cosmos section in its policy, no sequence to reserve. The D2 set's acceptance: a nonce and
+// a quota are the spend the PA decided a node without the collector may still make.
+func TestASingleNodeWithNoCollectorServesAPlainSign(t *testing.T) {
+	coordinator, semantic, recorder, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
+	result, err := coordinator.Execute(context.Background(), statelessNamedRequest("sign"))
+	wantServed(t, hardware, recorder, result, err)
+	if semantic.calls != 1 {
+		t.Fatalf("policy evaluated %d times, want 1", semantic.calls)
+	}
+}
+
+// THE REQUIREMENT FOLLOWS THE POLICY'S OWN ANSWER, NOT A STATIC LIST: a policy that names no
+// Cosmos section reserves no sequence, so its sign serves even under the refusal — and the same
+// sign under a Cosmos policy is refused. The shape is judged per request, by the engine.
+func TestTheCosmosRefusalFollowsThePolicyAnswer(t *testing.T) {
+	_, _, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
+	_ = hardware
+	// A non-Cosmos policy's sign: served.
+	coordinator, semantic, _, hardware, _ := collectorFixture(t, admission.ModeSingle, false)
+	semantic.cosmos = false
+	if result, err := coordinator.Execute(context.Background(), cosmosSignRequest()); err != nil {
+		t.Fatalf("a sign whose policy names no Cosmos section is refused: %v", err)
+	} else if string(result.Data) != "data-key" {
+		t.Fatalf("the served sign returned %q", result.Data)
+	}
+	if hardware.calls != 1 {
+		t.Fatalf("the token was used %d times, want 1", hardware.calls)
+	}
+	// The SAME request under a Cosmos policy: refused.
+	coordinator, semantic, recorder, hardware, router := collectorFixture(t, admission.ModeSingle, false)
+	semantic.cosmos = true
+	result, err := coordinator.Execute(context.Background(), cosmosSignRequest())
+	wantCollectorNotConfigured(t, result, err)
+	if semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {
+		t.Fatalf("a refused sign did work: policy %d, token %d, routing %d", semantic.calls, hardware.calls, router.calls)
+	}
+	if len(recorder.drafts) != 1 || recorder.drafts[0].Outcome != "collector-not-configured" {
+		t.Fatalf("audit events = %#v: the refusal is named", recorder.drafts)
+	}
+}
+
+// cosmosSignRequest is a sign carrying the Cosmos content type: the ONE shape whose allowed
+// evaluation reserves a Cosmos account sequence, under a policy that names a Cosmos section.
+func cosmosSignRequest() api.Request {
+	request := operationRequest()
+	request.Operation = "sign"
+	request.Format = ""
+	request.Data = []byte("a cosmos SignDoc")
+	request.ContentType = policy.CosmosSignDocContentType
+	request.Context.Purpose = "sops-data-key"
+	return request
+}
+
 func statefulRequest() api.Request {
 	request := operationRequest()
 	request.Operation = "wrap"

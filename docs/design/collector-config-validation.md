@@ -16,7 +16,10 @@ Single-node configuredness enforcement is now in place (regalia-kms-dx7.9, PA de
 single-node admission with no audit collector configured, the daemon refuses every stateful operation
 (wrap, key-agreement, release-secret, seal-envelope) with `collector-not-configured` (503, retryable)
 before any policy or opstate reservation — the refusal is in the coordinator, before the spend.
-Stateless operations (sign, unwrap, certificate-sign) keep serving. A collector that is configured
+A sign carrying a Cosmos transaction (content type `application/vnd.cosmos.tx+protobuf`) is refused
+likewise: its allowed evaluation reserves the Cosmos account sequence, so the coordinator asks the
+policy engine before it routes — a plain sign reserves nothing the decision did not already accept.
+Stateless operations (plain sign, unwrap, certificate-sign) keep serving. A collector that is configured
 but unreachable does not refuse: the shipper retries, and the outage is an alert, not a refusal.
 Existing synchronous audit acknowledgement, backlog readiness and startup continuity checks remain in
 force. Collector downtime is not an additional offline configuration failure; those separate controls
