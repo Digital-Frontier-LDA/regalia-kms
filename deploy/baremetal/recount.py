@@ -296,21 +296,23 @@ def main(argv=None, ask=None, run=None):
             owner_statement = _read_json(args.owner_statement, 65536)
             # the statement is checked like the heartbeats: by recover.verify_owner, over this node's manifest,
             # for this node, this boot's session, by authenticated time, with purpose recount (its v2 keys carry
-            # collector_sequence). Under a multi-node tip it is refused by plan().
+            # collector_sequence). Under a multi-node tip it is refused by plan(). Every refusal on this path --
+            # the boot's session (held_session: another boot, or older than the TTL), the node's clock, or the
+            # statement itself -- is an audit event, not just a printed refusal (independent review of PR #778,
+            # 2026-11-24, and its re-read: the first version recorded only the verify_owner refusal, and the
+            # session/boot/now refusals before it were printed, not written, though the command says every
+            # decision is a line there): the whole check is one recorded DENY, with nothing defined or changed
             from deploy.baremetal import recover
-            node = node_module.Node(cfg, run)
-            with open("/proc/sys/kernel/random/boot_id") as f:
-                boot_id = f.read().strip()
-            seconds = heartbeat.authenticated_now(node.clock(), node.tpm_clock(), None)[0]
-            session = recover.held_session(os.path.join(cfg["run_dir"], recover.SESSION_FILE), boot_id, now=lambda: seconds)
             try:
+                node = node_module.Node(cfg, run)
+                with open("/proc/sys/kernel/random/boot_id") as f:
+                    boot_id = f.read().strip()
+                seconds = heartbeat.authenticated_now(node.clock(), node.tpm_clock(), None)[0]
+                session = recover.held_session(os.path.join(cfg["run_dir"], recover.SESSION_FILE), boot_id, now=lambda: seconds)
                 recover.verify_owner(manifest, owner_statement, "recount", cfg["node_id"],
                                      recover.session_id(session), seconds,
                                      single_node=membership.profile(manifest) == membership.SINGLE_NODE)
             except Refused as refusal:
-                # a refused owner statement is an audit event, not just a printed refusal (independent review of
-                # PR #778, 2026-11-24: it was printed but never written to the trail, though the command says
-                # every decision is a line there): record it before refusing, with nothing defined or changed
                 record({"event": "recount", "outcome": "DENY", "reason": str(refusal)[:240],
                         "counter": index, "phase": "owner-statement"})
                 raise

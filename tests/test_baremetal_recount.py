@@ -528,6 +528,29 @@ class CommandLine(TheHostsTpmAndChain):
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
         self.assertEqual(json.loads(open(self.d + "/recount-floor-0x01500018.json").read())["floor"], 60)
 
+    def test_an_expired_recovery_session_is_a_recorded_deny_not_just_printed(self):
+        """`recount --owner-statement` whose boot's recovery session is older than the TTL is a DENY the
+        command records in the audit trail, not only prints (independent re-read of PR #778, 2026-11-24: the
+        session check (recover.held_session) runs BEFORE verify_owner, and its refusal used to go straight to
+        main's `except Refused` -- printed, never written, though the command says every decision is a line in
+        the trail): the owner-statement check is one recorded path, from the session to the signature. The
+        statement itself is a good one; what refuses is the session. Nothing is defined or changed."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        # the session (issued T0-60 in the host) is made older than SESSION_TTL: held_session refuses it
+        with open(os.path.join(self.d, "recovery-session.json"), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "00ff00ff-0000-4000-8000-000000000000",
+                       "issued": T0 - 2000}, f)
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        with open(self.d + "/audit.jsonl") as f:
+            trail = [json.loads(line) for line in f]
+        self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
+        self.assertIn("older than", trail[0]["reason"])
+        self.assertEqual(trail[0]["phase"], "owner-statement")
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.remains(), (None, []))          # the counter stays unusable: nothing was defined
+
     def test_a_v1_shaped_recount_statement_is_refused_not_a_traceback(self):
         """`recount --owner-statement` given a v1-shaped recount document (purpose recount, NO collector_epoch)
         is a REFUSED command, rc 1, nothing changed (council 2026-11-24 on PR #778, M1b): recover.message's v1
@@ -563,8 +586,10 @@ class CommandLine(TheHostsTpmAndChain):
         with open(self.d + "/membership.json", "wb") as f:
             f.write(m.canonical([signed(self.m1)]))
         self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
-        # the refusal is recorded (the CONFLICT from current() is before the owner-statement path;
-        # the owner-statement refusal itself is tested by test_a_v1_shaped_recount_statement_is_refused_not_a_traceback)
+        # the statement check never ran: the chain's CONFLICT (current()) is refused before the owner-statement
+        # path, and that refusal is a CONFLICT the command prints, not a recorded DENY (the owner-statement
+        # refusal itself -- a DENY in the trail -- is tested by
+        # test_a_v1_shaped_recount_statement_is_refused_not_a_traceback)
         self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
 
 
