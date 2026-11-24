@@ -260,7 +260,7 @@ class SingleNodeRecovery(unittest.TestCase):
         passed 42 is refused, and the statement is refused too when it omits the field and the witness holds 0
         (the derived path, tested in test_single_node_recount_requires_collector_sequence)."""
         from deploy.baremetal import membership as mm
-        self.refused("is not what the collector's witnessed export holds",
+        self.refused("is not what the collector's witnessed exports hold",
                      self.do_sign, "recount", witnesses=[(None, None, None, None, None)], collector_sequence=42)
 
     def test_single_node_recount_derives_collector_sequence_from_the_witness(self):
