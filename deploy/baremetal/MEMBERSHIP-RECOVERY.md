@@ -275,8 +275,9 @@ check (the owner is not a node). No `--peer` with it.
 
 **Recount** (`recount --owner-statement`): the owner's v2 recount statement (purpose `recount`, with
 `collector_sequence`) is a floor source beside the heartbeats. The owner makes it with
-`owner sign-recovery --purpose recount --chain CHAIN.json --witness EXPORT.json:RECEIPT.json
---receipt-keys KEYS.json --collector-identity ID --node-id a --session SESSION --session-issued ISSUED
+`owner sign-recovery --purpose recount --chain CHAIN.json --root-key KEY --record signing-record.jsonl
+--witness EXPORT.json:RECEIPT.json --stream site-a.sync --receipt-keys KEYS.json --collector-identity ID
+--node-id a --session SESSION --session-issued ISSUED --module MODULE.so --serial SERIAL
 --out ST.json` (single-node tip only: the collector is mandatory there, and the `collector_sequence` is
 derived from the same verified witness, never taken from the operator). The floor is the max of the old
 counter, the prior floor, every held heartbeat, the statement's `collector_sequence` (an integer from 0

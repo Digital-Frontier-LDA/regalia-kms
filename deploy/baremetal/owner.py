@@ -174,10 +174,16 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         # under single-node the collector is MANDATORY (decision Q4): no "no collector" escape
         require(False, "under single-node the audit collector is mandatory (docs/design/single-node.md 4.7, decision Q4): "
                 "give a --witness (the collector's export and receipt) for this node's sync stream")
-    if is_single and purpose == "recount" and collector_sequence is None:
-        # for recount, the collector's sequence (beat-propose ALLOW) is also needed
-        require(False, "a recount statement under single-node needs the collector's witnessed sequence: "
-                "pass collector_sequence (from recover.witness_sequence)")
+    if is_single and purpose == "recount":
+        # for recount, the collector's sequence (the highest beat-propose ALLOW) is ALSO witnessed, over the same
+        # verified --witness exports the epoch came from -- never taken from the operator (review defcc750, finding 2).
+        # an explicit collector_sequence (its caller already derived it) must equal what the witness holds
+        witnessed = recover.witness_sequence(*witnesses[0])
+        if collector_sequence is not None:
+            require(collector_sequence == witnessed,
+                    "collector_sequence %d is not what the collector's witnessed export holds (%d)" % (collector_sequence, witnessed))
+        else:
+            collector_sequence = witnessed
     lines = ["A %s of node %s%s:" % (purpose.upper(), node_id,
              ", the owner the second source" if not is_single else " from the owner's chain (single-node)"),
              "  the peer's tip       epoch %d, %s" % (tip["epoch"], membership.digest(tip)),

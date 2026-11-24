@@ -148,6 +148,9 @@ def plan(counter, manifest, documents, prior=0, owner_statement=None, signer=Non
         # floor the TPM cannot define (review PR #778 thread PRRT_kwDOUcLtQM67UKHy)
         require(isinstance(st.get("collector_sequence"), int) and not isinstance(st["collector_sequence"], bool),
                 "the recount statement must name collector_sequence (an integer)")
+        require(0 <= st["collector_sequence"] < 2 ** 63,
+                "the recount statement's collector_sequence %d is outside the counter's range (an integer from 0 to 2^63 - 1): "
+                "refused here, before the floor is carried and the counter deleted" % st["collector_sequence"])
     else:
         st = None
     old, _ = counter.remains()
