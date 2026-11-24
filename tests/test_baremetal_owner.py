@@ -171,6 +171,12 @@ class SingleNodeRecovery(unittest.TestCase):
         self.said.append(text)
         return self.typed
 
+    def refused(self, reason, fn, *args, **kw):
+        import deploy.baremetal.membership as mm
+        with self.assertRaises(mm.Refused) as caught:
+            fn(*args, **kw)
+        self.assertIn(reason, str(caught.exception))
+
     def do_sign(self, purpose="recover", witnesses=None, collector_sequence=None, counter_epoch=None):
         self.typed = None
         self.said = []
@@ -231,15 +237,14 @@ class SingleNodeRecovery(unittest.TestCase):
         raw = recover.message(st)
         self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
 
-    def test_single_node_recount_with_collector_sequence(self):
-        """A recount statement under single-node with a witness and collector_sequence is v2 with both fields."""
-        from deploy.baremetal import recover
-        signed = self.do_sign("recount", witnesses=[(None, None, None, None, None)], collector_sequence=42)
-        st = signed["statement"]
-        self.assertEqual(st["collector_epoch"], 1)
-        self.assertEqual(st["collector_sequence"], 42)
-        msg = recover.message(st)
-        self.assertIn(b"v2", msg)
+    def test_single_node_recount_with_a_collector_sequence_the_witness_does_not_hold_is_refused(self):
+        """The operator cannot pass a collector_sequence the witness does not hold: the value is witnessed,
+        never free (review defcc750, finding 2). The do_sign helper mocks witness_sequence to return 0, so a
+        passed 42 is refused, and the statement is refused too when it omits the field and the witness holds 0
+        (the derived path, tested in test_single_node_recount_requires_collector_sequence)."""
+        from deploy.baremetal import membership as mm
+        self.refused("is not what the collector's witnessed export holds",
+                     self.do_sign, "recount", witnesses=[(None, None, None, None, None)], collector_sequence=42)
 
     def test_single_node_recount_derives_collector_sequence_from_the_witness(self):
         """A recount under single-node with no collector_sequence given derives it from the witness itself
