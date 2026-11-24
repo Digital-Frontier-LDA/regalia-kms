@@ -79,10 +79,15 @@ type Coordinator struct {
 	// nodeID is this node as the membership manifest spells it (SetNodeID): the only signer an
 	// approval is verified for here (#432 G3).
 	nodeID string
-	// The single-node collector requirement (regalia-kms-dx7.9, SetSingleNodeAdmission): under the
-	// single-node profile's self-issued lease a stateful operation is refused while no audit
-	// collector is configured. statelessOperations names what is served instead (SetStatelessOperations).
-	singleNodeAdmission bool
+	// The single-node collector requirement (regalia-kms-dx7.9, SetSingleNodeCollectorRequirement):
+	// under the single-node profile's self-issued lease a stateful operation is refused while no
+	// audit collector is configured. The mode is the LIVE admission, read from the gate's own answer
+	// on each request (singleNodeMode: admission.ModeSingle when admitted): a node the lease service
+	// admits single AFTER the daemon started is refused from the first stateful operation, and a node
+	// the lease service stops admitting is no longer refused at all (it is not-admitted, and that
+	// refusal comes first). collectorConfigured is the configured sink; an outage is not a refusal.
+	// statelessOperations names what is served instead (SetStatelessOperations).
+	singleNodeMode      func(context.Context) bool
 	collectorConfigured bool
 	statelessOperations map[string]bool
 
@@ -135,10 +140,10 @@ type ObjectAdmission interface {
 // (admission.Status.Mode: ModeLease, ModeRecovery, ModeSingle). The coordinator reads it to apply
 // the single-node collector requirement (regalia-kms-dx7.9) to the same answer it already checks,
 // without a second read of the file. An Admission that does not report a mode is not one: the
-// requirement is set only by SetSingleNodeAdmission, and only against a gate that does.
+// requirement is set only by SetSingleNodeCollectorRequirement, and only against a gate that does.
 type ModeAdmission interface {
 	Admission
-	Mode() string
+	Mode(ctx context.Context) string
 }
 
 // RequireAdmission makes every operation need a runtime lease. Call it before the coordinator
@@ -156,16 +161,23 @@ func (coordinator *Coordinator) SetNodeID(nodeID string) {
 	coordinator.nodeID = nodeID
 }
 
-// SetSingleNodeAdmission names this node's admission as the single-node profile's self-issued lease
-// (admission.ModeSingle) and whether its audit collector is configured (regalia-kms-dx7.9, PA
-// decision D2): a STATEFUL operation is refused while single and unconfigured, before any policy
-// state is reserved. The mode is the daemon's reading at startup, from the admission gate's own
-// status, not the request's; the collector's presence is the configured sink (auditSinkFor), and a
-// collector that is configured but unreachable is not a refusal (it ships later and the backlog
+// SetSingleNodeCollectorRequirement turns on the single-node collector requirement (regalia-kms-dx7.9,
+// PA decision D2): while the gate reports the single-node profile's self-issued lease (admission.ModeSingle)
+// and no audit collector is configured, a STATEFUL operation is refused, before any policy state is
+// reserved. The mode is read from the gate's own answer on every request, not snapshotted at startup:
+// the lease service writes the admission file after the daemon opens (main.go: the gate is opened
+// before the file exists), so a single node that starts unadmitted is still refused once it is
+// admitted, and a node that is no longer admitted is refused "not-admitted" instead, by the earlier
+// check, whatever it served as. The collector's presence is the configured sink (auditSinkFor), and
+// a collector that is configured but unreachable is not a refusal (it ships later and the backlog
 // alerts). The operations that reserve state are the stateless-operation set's complement, named by
 // SetStatelessOperations; everything the daemon serves that is not named there is stateful.
-func (coordinator *Coordinator) SetSingleNodeAdmission(single, collectorConfigured bool) {
-	coordinator.singleNodeAdmission, coordinator.collectorConfigured = single, collectorConfigured
+// The gate must report its mode (ModeAdmission): the production gate does, and so does the test's.
+func (coordinator *Coordinator) SetSingleNodeCollectorRequirement(gate ModeAdmission, collectorConfigured bool) {
+	coordinator.singleNodeMode = func(ctx context.Context) bool {
+		return gate.Mode(ctx) == admission.ModeSingle
+	}
+	coordinator.collectorConfigured = collectorConfigured
 }
 
 // SetStatelessOperations names the operations that reserve no policy or opstate state and are
@@ -232,12 +244,15 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	// single-node profile's self-issued lease a STATEFUL operation — one that reserves policy or
 	// opstate state: a spend-once nonce and quota, a Cosmos sequence, a data key bound to that spend —
 	// is refused while no audit collector is configured, BEFORE any of that state is reserved: a
-	// replayed disk would replay the spend, and with no off-host copy nothing could ever say so. A
-	// collector that is configured but unreachable is not a refusal: the trail ships later and the
-	// backlog alerts. A stateless operation (named by SetStatelessOperations) reserves nothing and
-	// keeps serving. Multi-node and a single node with a configured collector are unchanged.
-	if coordinator.singleNodeAdmission && !coordinator.collectorConfigured &&
-		!coordinator.statelessOperations[request.Operation] {
+	// replayed disk would replay the spend, and with no off-host copy nothing could ever say so. The
+	// mode is the gate's LIVE answer, read above (the same answer whose admission this check just
+	// passed, and the same one the runner re-checks while the operation runs): the refusal follows
+	// the admission, not a startup reading of it. A collector that is configured but unreachable is
+	// not a refusal: the trail ships later and the backlog alerts. A stateless operation (named by
+	// SetStatelessOperations) reserves nothing and keeps serving. Multi-node and a single node with a
+	// configured collector are unchanged.
+	if coordinator.singleNodeMode != nil && !coordinator.collectorConfigured &&
+		coordinator.singleNodeMode(ctx) && !coordinator.statelessOperations[request.Operation] {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "collector-not-configured", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}

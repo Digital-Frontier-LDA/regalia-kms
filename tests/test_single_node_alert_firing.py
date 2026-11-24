@@ -282,12 +282,20 @@ def cross_profile_matrix():
         scenarios.append(("matrix: " + alert + " stays silent on a single-node fixture", fault, alert, [],
                           "32m" if alert in ("RegaliaMembershipBehindFleet", "RegaliaAnchorBehindFleet", "RegaliaNodeExporterDown",
                                             "RegaliaNotServing", "RegaliaNotReady") else "6m"))
-    # single-node rules, faulted on a multi-node fixture: must stay silent
+    # single-node rules, faulted on a multi-node fixture: must stay silent.
+    #
+    # The behind rules' fault carries the collector's witness on the MULTI-NODE NODE'S OWN
+    # instance (dict(COLLECTOR, instance=MULTI["instance"])): the reference and the series it
+    # would compare join one-to-one on that instance, so the ONLY thing keeping the rule silent
+    # is the node series' topology_profile="single-node" matcher. A witness on another instance
+    # would keep it silent by the join, and a dropped profile matcher would pass the matrix green
+    # (the check's M2/M7 mutant), letting a real multi-node node behind its own witness page the
+    # single-node alert.
     for alert, fault in (
         (BEHIND_M, [("regalia_membership_epoch", MULTI, "4+0x40"),
-                    ("regalia_collector_witnessed_membership_epoch", COLLECTOR, "5+0x40")]),
+                    ("regalia_collector_witnessed_membership_epoch", dict(COLLECTOR, instance=MULTI["instance"]), "5+0x40")]),
         (BEHIND_A, [("regalia_esp_anchor_epoch", MULTI, "4+0x40"),
-                    ("regalia_collector_witnessed_anchor_epoch", COLLECTOR, "5+0x40")]),
+                    ("regalia_collector_witnessed_anchor_epoch", dict(COLLECTOR, instance=MULTI["instance"]), "5+0x40")]),
         (EPOCH_MISSING, [("up", MULTI, "1+0x40")]),
         (CANNOT_RENDER, [("regalia_esp_boot_renderable", MULTI, "0+0x40")]),
         (OWNER, [("regalia_topology_nodes", MULTI, "1+0x40")]),

@@ -28,22 +28,24 @@ import (
 // Status, so the refusal lives in the real shape of the answer.
 
 // modeGate is an Admission that also reports the mode its answer was made under
-// (ModeAdmission: admission.Status.Mode), the way the production gate does. SetSingleNodeAdmission
-// accepts only a gate that reports its mode, so the fixture is the interface, not a superset of it.
+// (ModeAdmission: admission.Status.Mode), the way the production gate does.
+// SetSingleNodeCollectorRequirement accepts only a gate that reports its mode, so the fixture is
+// the interface, not a superset of it.
 type modeGate struct {
 	ready bool
 	mode  string
 }
 
-func (gate *modeGate) Ready(context.Context) bool { return gate.ready }
-func (gate *modeGate) Mode() string               { return gate.mode }
+func (gate *modeGate) Ready(context.Context) bool  { return gate.ready }
+func (gate *modeGate) Mode(context.Context) string { return gate.mode }
 
 var _ ModeAdmission = (*modeGate)(nil)
 
 // collectorFixture builds the coordinator the way the daemon does (New, admission runner over the
-// executor on the same gate, RequireAdmission) and, when the mode is single, names the single-node
-// collector requirement: the two knobs are the admission's mode and whether the collector is
-// configured.
+// executor on the same gate, RequireAdmission) and names the single-node collector requirement
+// against the gate itself: the live mode its answer reports and whether the collector is
+// configured. The daemon turns it on whenever a gate exists, whatever the mode reads (multi-node
+// and no collector must keep serving), so the fixture does the same.
 func collectorFixture(t *testing.T, mode string, collectorConfigured bool) (*Coordinator, *fakePolicy, *fakeAudit, *fakeHardware, *fakeRouter) {
 	t.Helper()
 	router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
@@ -57,10 +59,8 @@ func collectorFixture(t *testing.T, mode string, collectorConfigured bool) (*Coo
 		t.Fatal(err)
 	}
 	coordinator.RequireAdmission(gate)
+	coordinator.SetSingleNodeCollectorRequirement(gate, collectorConfigured)
 	coordinator.SetStatelessOperations(api.StatelessOperations()...)
-	if mode == admission.ModeSingle {
-		coordinator.SetSingleNodeAdmission(true, collectorConfigured)
-	}
 	return coordinator, semantic, recorder, hardware, router
 }
 
@@ -160,6 +160,67 @@ func TestAMultiNodeNodeWithoutACollectorIsUnchanged(t *testing.T) {
 	wantServed(t, hardware, recorder, result, err)
 	if semantic.calls != 1 {
 		t.Fatalf("policy evaluated %d times, want 1", semantic.calls)
+	}
+}
+
+// THE REQUIREMENT FOLLOWS THE LIVE ADMISSION, NOT A READING OF IT AT STARTUP (regalia-kms-dx7.9).
+// The lease service writes the admission file after the daemon has opened its gate (main.go
+// names the ordering): a single node starts unadmitted, the first lease arrives later, and the
+// requirement must be in force for the FIRST stateful operation it admits. A snapshot of the
+// mode at startup would read "" (not single) and serve stateful operations with no collector
+// for the life of the process. The same gate that stopped being admitted is refused
+// "not-admitted" by the earlier check, never "collector-not-configured": the two refusals are
+// distinct and both named.
+func TestTheSingleNodeRequirementFollowsTheLiveAdmission(t *testing.T) {
+	router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
+		Algorithm: "rsa2048", PolicyID: "sops", Binding: registry.Binding{DeviceID: "hsm-sitea"}}}
+	semantic := &fakePolicy{decision: policy.Decision{Allowed: true, Code: policy.CodeAllowed, PolicyID: "sops", Rule: "allow"}}
+	recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("data-key")}
+	// The node starts UNADMITTED, as a single node does before its lease service's first write.
+	gate := &modeGate{ready: false, mode: ""}
+	coordinator, err := New(fakeAuthorizer{allowed: true}, router, semantic, recorder,
+		admission.NewRunner(gate, directRunner{}), hardware, "sha256:policy", nil, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.RequireAdmission(gate)
+	coordinator.SetSingleNodeCollectorRequirement(gate, false)
+	coordinator.SetStatelessOperations(api.StatelessOperations()...)
+
+	// Unadmitted: refused not-admitted, before the collector question.
+	if result, err := coordinator.Execute(context.Background(), statefulRequest()); err == nil {
+		t.Fatalf("Execute = %#v, nil: an unadmitted node serves nothing", result)
+	} else if len(recorder.drafts) != 1 || recorder.drafts[0].Outcome != "not-admitted" {
+		t.Fatalf("audit events = %#v: the unadmitted refusal is named", recorder.drafts)
+	}
+	// The lease service admits the node single. From THIS operation on, the stateful work is the
+	// collector's: no collector configured, so it is refused collector-not-configured, and no
+	// policy state is reserved.
+	gate.ready, gate.mode = true, admission.ModeSingle
+	result, err := coordinator.Execute(context.Background(), statefulRequest())
+	wantCollectorNotConfigured(t, result, err)
+	if semantic.calls != 0 {
+		t.Fatalf("policy was evaluated %d times: the refusal must come before any policy state is reserved", semantic.calls)
+	}
+	if hardware.calls != 0 || router.calls != 0 {
+		t.Fatalf("token used %d times, routing asked %d times: a refused operation does no work", hardware.calls, router.calls)
+	}
+	if len(recorder.drafts) != 2 || recorder.drafts[1].Decision != "deny" || recorder.drafts[1].Outcome != "collector-not-configured" {
+		t.Fatalf("audit events = %#v: the live single admission is refused and named", recorder.drafts)
+	}
+	// A stateless operation is served under the same requirement: the refusal is for state, not
+	// for the node.
+	statelessResult, statelessErr := coordinator.Execute(context.Background(), statelessNamedRequest("sign"))
+	wantServed(t, hardware, recorder, statelessResult, statelessErr)
+	// And a node that STOPS being admitted is refused not-admitted again, not collector-not-configured:
+	// the two refusals stay distinct.
+	gate.ready = false
+	recorder.drafts = recorder.drafts[:0]
+	if result, err := coordinator.Execute(context.Background(), statefulRequest()); err == nil {
+		t.Fatalf("Execute = %#v, nil: a node that stopped being admitted serves nothing", result)
+	}
+	if len(recorder.drafts) != 1 || recorder.drafts[0].Outcome != "not-admitted" {
+		t.Fatalf("audit events = %#v: the lapse is not-admitted, a distinct refusal", recorder.drafts)
 	}
 }
 
