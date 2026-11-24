@@ -1013,25 +1013,38 @@ class OwnerChainReanchor(Case):
         store._judge_by = lambda manifests: None
         return store, hw
 
+    def check_ok(self):
+        """The owner-check for the happy-path owner-chain tests: the statement is checked (council 2026-11-24
+        on PR #778, B1) and returns. main builds the real one from --owner-statement and --node-config
+        (owner_check); these tests stand it in."""
+        return lambda tip, single_node=None: None
+
     def test_single_node_plan_with_owner_chain(self):
-        """Under a single-node tip the owner's chain alone is a valid source: plan succeeds with sources={}."""
+        """Under a single-node tip the owner's chain alone is a valid source: plan succeeds with sources={},
+        and the owner-check is called on the chain's newest manifest (council 2026-11-24 on PR #778, B1)."""
         chain = self.single_chain(3)
         store, hw = self._store_for(chain, node_id="a")
-        planned = reanchor.plan(store, {}, "a", owner_chain=chain)
+        seen = []
+        planned = reanchor.plan(store, {}, "a", owner_chain=chain,
+                                owner_chain_check=lambda tip, single_node=None: seen.append((tip["epoch"], single_node)))
         self.assertEqual(planned["epoch"], 3)
         self.assertEqual(planned["sources"], ["owner-chain"])
+        # the check ran on the chain's NEWEST manifest, under a single-node tip
+        self.assertEqual(seen, [(3, True)])
 
     def test_single_node_plan_refuses_node_sources_with_owner_chain(self):
         """--owner-chain takes the owner's chain alone: a node source alongside it is refused."""
         chain = self.single_chain(3)
         store, _ = self._store_for(chain)
-        self.refused("--owner-chain takes the owner's chain alone", reanchor.plan, store, {"a": chain}, "a", owner_chain=chain)
+        self.refused("--owner-chain takes the owner's chain alone", reanchor.plan, store, {"a": chain}, "a",
+                     owner_chain=chain, owner_chain_check=self.check_ok())
 
     def test_multi_node_refuses_owner_chain(self):
         """Under a multi-node tip the owner chain is refused: only a single-node manifest accepts it as the sole source."""
         chain = self.multi_chain(3)
         store, _ = self._store_for(chain, node_id="a")
-        self.refused("owner_chain is refused under a multi-node tip", reanchor.plan, store, {}, "a", owner_chain=chain)
+        self.refused("owner_chain is refused under a multi-node tip", reanchor.plan, store, {}, "a",
+                     owner_chain=chain, owner_chain_check=self.check_ok())
 
     def test_single_node_reanchor_with_owner_chain(self):
         """The full reanchor() call: the owner chain is the sole source, the anchor is written, and the event
@@ -1042,7 +1055,7 @@ class OwnerChainReanchor(Case):
         planned = reanchor.reanchor(store, {}, "a",
                                     lambda p: reanchor.phrase("a", p),
                                     events.append,
-                                    owner_chain=chain)
+                                    owner_chain=chain, owner_chain_check=self.check_ok())
         self.assertEqual(planned["epoch"], 3)
         self.assertEqual((hw.value(), hw.record()), (3, (3, m.digest(chain[-1]["manifest"]))))
         self.assertEqual([e.get("sources") for e in events], [["owner-chain"], ["owner-chain"]])
@@ -1054,7 +1067,8 @@ class OwnerChainReanchor(Case):
         short = self.single_chain(2)
         store, _ = self._store_for(full)
         # anchored at epoch 3, chain ends at 2
-        self.refused("a fetched chain ends at epoch 2, below the TPM high-water 3", reanchor.plan, store, {}, "a", owner_chain=short)
+        self.refused("a fetched chain ends at epoch 2, below the TPM high-water 3", reanchor.plan, store, {}, "a",
+                     owner_chain=short, owner_chain_check=self.check_ok())
 
     def test_owner_chain_refuses_without_a_checked_statement(self):
         """--owner-chain takes a CHECKED owner statement: without the owner-check callable the plan is
