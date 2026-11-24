@@ -730,7 +730,10 @@ class SingleNodeCommand(Recovers):
         #    The check that runs is the module's own owner_check (real_owner_check): apply() calls it with the
         #    statement and the tip's purpose and single-node profile, and it reads the session from the node's
         #    run_dir, so nothing about the call's arguments is stood in.
-        self.assertEqual(apply_with(self.single_v2(tip, key=OWNER_KEYS[0])), 1)
+        try:
+            self.assertEqual(apply_with(self.single_v2(tip, key=OWNER_KEYS[0])), 1)
+        except recover.Refused as e:
+            self.fail("good statement refused: %s" % e)
         self.assertEqual(fresh.load()["epoch"], 1)
         self.assertEqual(self.asked[-1], "recover c to epoch 1 %s from owner-chain collector at epoch 1"
                          % m.digest(tip["manifest"])[:8])

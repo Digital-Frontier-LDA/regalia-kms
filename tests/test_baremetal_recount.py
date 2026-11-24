@@ -524,8 +524,11 @@ class CommandLine(TheHostsTpmAndChain):
         self.assertEqual(recount.main(argv, ask=ask, run=run), 0)
         counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
         self.assertEqual(counter.value(), 60)
-        with open(self.d + "/audit.jsonl") as f:
-            self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line)["event"] for line in f]
+        self.assertEqual(trail, ["recount-requested", "recount"])
         self.assertEqual(json.loads(open(self.d + "/recount-floor-0x01500018.json").read())["floor"], 60)
 
     def test_an_expired_recovery_session_is_a_recorded_deny_not_just_printed(self):
@@ -543,8 +546,10 @@ class CommandLine(TheHostsTpmAndChain):
         argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
                 "--owner-statement", self.d + "/statement.json"]
         self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
-        with open(self.d + "/audit.jsonl") as f:
-            trail = [json.loads(line) for line in f]
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line) for line in f]
         self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
         self.assertIn("older than", trail[0]["reason"])
         self.assertEqual(trail[0]["phase"], "owner-statement")
@@ -568,8 +573,10 @@ class CommandLine(TheHostsTpmAndChain):
         # the refusal is a line in the audit trail (independent non-author review of PR #778, item 3: the
         # statement check ran in main, and its refusal was printed but NOT written, though the command
         # says every decision is a line there): a DENY naming the refusal, nothing else
-        with open(self.d + "/audit.jsonl") as f:
-            trail = [json.loads(line) for line in f]
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line) for line in f]
         self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
         self.assertIn("a recount statement must be v2", trail[0]["reason"])
         counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
