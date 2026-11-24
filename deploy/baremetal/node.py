@@ -82,8 +82,8 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
-                              measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
+from deploy.baremetal import (admission, etcdconf, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch,
+                              lease, measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
@@ -535,6 +535,19 @@ def site_check_metrics(ok, publish=None):
     try:
         publish([("regalia_site_check_ok", {}, 1 if ok else 0), ("regalia_site_check_run_timestamp_seconds", {}, int(time.time()))])
     except Exception:                                   # noqa: BLE001 - a metric does not change the run's outcome
+        pass
+
+
+def restore_pending_metrics(publish=None):
+    """The restore-pending boot guard's metric (regalia-kms-dx7.26, watched by regalia-kms-dx7.9's
+    RegaliaRestorePending), written at every boot by the node and at mark/clear by restore.py.
+    1 while the marker exists: etcd and the daemon hold SKIPPED and the node serves nothing,
+    silently (skipped, not failed). Never raises: a metric does not change the run's outcome."""
+    publish = publish or (lambda samples: metrics.publish("restore", samples))
+    try:
+        pending = os.path.lexists(etcdconf.STORED_RESTORE_PENDING)
+        publish([("regalia_restore_pending", {}, 1 if pending else 0)])
+    except Exception:                                   # noqa: BLE001 - see above
         pass
 
 
@@ -1268,6 +1281,7 @@ class Sync:
         watch, proposer = self.watch(), self.proposer()
         unable = None                           # the last refusal the proposer could not even start under
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
+        restore_pending_metrics()               # the boot guard's state, from the start (regalia-kms-dx7.9)
         try:
             while not stop():
                 self.observe_state()

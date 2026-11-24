@@ -15,6 +15,13 @@ from tests.test_alert_firing import REQUIRE_PROMTOOL, render, series
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "deploy" / "monitoring" / "regalia-node.rules.yml"
+# Every rule file the node's series are watched by, for the structural tests: a series that is
+# alerted on in the single-node file (regalia-kms-dx7.9) or the KMS file is not context.
+RULES_PATHS = [
+    RULES_PATH,
+    ROOT / "deploy" / "monitoring" / "regalia-kms.rules.yml",
+    ROOT / "deploy" / "monitoring" / "regalia-single-node.rules.yml",
+]
 # series a node writes for context, with no alert of their own (each says why)
 CONTEXT = {
     "regalia_heartbeat_max_lifetime_seconds": "what the manifest allows",
@@ -192,9 +199,8 @@ SCENARIOS = {
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
-    "RegaliaOwnerAssistedReboot": {
-        "fault": [("regalia_topology_nodes", NODE_A, "1+0x5")],
-        "healthy": [("regalia_topology_nodes", NODE_A, "3+0x5")], "at": 120},
+    # RegaliaOwnerAssistedReboot moved to regalia-single-node.rules.yml as RegaliaNextBootNeedsOwner
+    # (regalia-kms-dx7.9), held by tests/test_single_node_alert_firing.py.
     "RegaliaNodeMetricsStale": {
         "fault": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+0x10")],
         "healthy": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+60x10")], "at": 600},
@@ -236,15 +242,21 @@ class Structure(unittest.TestCase):
                     self.assertIn(series_name, metrics.METRICS)
 
     def test_every_registered_series_is_alerted_on_or_stated_context(self):
-        named = {s for rule in rules().values() for s in re.findall(r"regalia_[a-z0-9_]+", rule["expr"])}
+        # A series is "named" if ANY rule file (node, KMS, single-node) alerts on it: the
+        # single-node rules (regalia-kms-dx7.9) watch series the fleet file does not.
+        named = set()
+        for path in RULES_PATHS:
+            document = yaml.safe_load(path.read_text())
+            for group in document["groups"]:
+                for rule in group["rules"]:
+                    named.update(re.findall(r"regalia_[a-z0-9_]+", rule["expr"]))
         self.assertEqual(set(metrics.METRICS) - named, set(CONTEXT))
 
     def test_every_alert_has_a_severity_a_summary_and_a_fault_scenario(self):
         found = rules()
         self.assertEqual(set(found), set(SCENARIOS))
         for name, rule in found.items():
-            allowed = ("info",) if name == "RegaliaOwnerAssistedReboot" else ("critical", "warning")
-            self.assertIn(rule["labels"]["severity"], allowed)
+            self.assertIn(rule["labels"]["severity"], ("critical", "warning"))
             self.assertTrue(rule["annotations"]["summary"])
 
 

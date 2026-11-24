@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -150,6 +151,60 @@ func TestTheListenerRefusesClientsWithoutACertificate(t *testing.T) {
 		}
 	default:
 	}
+}
+
+// THE METRICS ENDPOINT IS ON THE SAME LISTENER (regalia-kms-dx7.9, D1=A): a client with a
+// chain-verified certificate can scrape it, and the two witnessed-epoch gauges are there,
+// labeled by the site (the stream's identity — the scrape job relabels site to instance).
+func TestTheMetricsEndpointServesTheWitnessedEpochs(t *testing.T) {
+	dir := t.TempDir()
+	authorityPath, clientTLS, serverPEM, serverKey := collectorPKIFiles(t, dir)
+
+	collector, err := audit.OpenCollector(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", collector.Handler())
+	mux.Handle("GET /metrics", collector.MetricsHandler())
+	server, err := buildServer("127.0.0.1:0", serverPEM, serverKey, authorityPath, mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+
+	authenticated, err := audit.NewMTLSHTTPClient(clientTLS, clientRoots(t, authorityPath), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := authenticated.Get("https://" + listener.Addr().String() + "/metrics")
+	if err != nil {
+		t.Fatalf("an authenticated client could not scrape /metrics: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("the metrics endpoint answered %d", response.StatusCode)
+	}
+	body := mustReadBody(t, response)
+	if !strings.Contains(body, "# HELP regalia_collector_witnessed_membership_epoch") ||
+		!strings.Contains(body, "# HELP regalia_collector_witnessed_anchor_epoch") {
+		t.Fatalf("the metrics endpoint does not name both witnessed-epoch gauges:\n%s", body)
+	}
+}
+
+func mustReadBody(t *testing.T, response *http.Response) string {
+	t.Helper()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(contents)
 }
 
 func clientRoots(t *testing.T, authorityPath string) *x509.CertPool {

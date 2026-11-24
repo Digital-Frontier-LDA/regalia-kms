@@ -170,6 +170,10 @@ type Status struct {
 	HSMSerials []string
 	// State is the held lease's operational state, zero when not admitted.
 	State LeaseState
+	// Mode is the admitted document's mode (ModeLease, ModeRecovery, ModeSingle), "" when not admitted. The
+	// coordinator reads it to apply the single-node collector requirement (regalia-kms-dx7.9) to the same
+	// answer it already checks, without a second read of the file.
+	Mode string
 	// Recovery is true when the file is a lone survivor's (mode recovery, under the owner's authorization). Then
 	// Disabled is the set of keys the survivor's directives disable, or DirectivesError says why they could not be
 	// read, and every key is refused (regalia-j18, owner item 212).
@@ -390,6 +394,13 @@ func (gate *Gate) Ready(ctx context.Context) bool {
 	return gate.Check(ctx).Admitted
 }
 
+// Mode reports the mode the node is admitted under (ModeLease, ModeRecovery, ModeSingle), "" when
+// it is not admitted at all: the coordinator's single-node collector requirement (regalia-kms-dx7.9)
+// reads the mode from the same answer Ready reads the admission from.
+func (gate *Gate) Mode(ctx context.Context) string {
+	return gate.Check(ctx).Mode
+}
+
 // Check evaluates the admission file and returns the decision.
 func (gate *Gate) Check(ctx context.Context) Status {
 	if gate == nil {
@@ -540,7 +551,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 			"membership chain is configured")
 	}
 	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials,
-		State: document.State}
+		State: document.State, Mode: document.Mode}
 }
 
 func (gate *Gate) read() (Document, error) {

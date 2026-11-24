@@ -1,6 +1,31 @@
-# External target metadata outlives a failed scrape. Each up series provides
-# the alert identity. Only fresh affirmative evidence from that target can
-# suppress a page, including when no exporter or readiness series exists.
+# The single-node rule set (regalia-kms-dx7.9, docs/design/single-node.md 4.11): what a one-node
+# installation is watched by, and what replaces the multi-node rules that exclude it.
+#
+# EXTERNAL METADATA OUTLIVES A FAILED SCRAPE. Each up series provides the alert identity. Only
+# fresh affirmative evidence from that target can suppress a page, including when no exporter or
+# readiness series exists.
+#
+# Every rule here matches on the EXTERNAL inventory label topology_profile="single-node" (the
+# owner's scrape inventory, set on both jobs), never on a sync-written value: a target that is
+# one node in the manifest is watched by this file, and a multi-node target can never match these
+# rules no matter what its telemetry says. The fleet rules in regalia-node.rules.yml carry the
+# mirror exclusion (topology_profile!="single-node"), and the cross-profile matrix in
+# tests/test_single_node_alert_firing.py holds the two files to each other: every rule here is
+# faulted on a multi-node fixture and must stay silent, and every multi-node-only rule is faulted
+# on a single-node fixture and must stay silent.
+#
+# THE COLLECTOR'S REFERENCE (D1=A): regalia_collector_witnessed_membership_epoch and
+# regalia_collector_witnessed_anchor_epoch are scraped from the audit collector's own /metrics
+# (job regalia-collector): the highest epoch committed in that node's sync and esp-advances
+# streams. The endpoint labels them by the node's own site (the stream's identity); the scrape
+# job carries job=regalia-collector and relabels site to instance, so the reference series
+# carries the same instance the node's own series carry, under a different job. The comparisons
+# therefore match on the full label set minus job, and one-to-one on instance: the node is
+# judged against its own off-host witness, and another node's witness cannot be its floor. The
+# reference comes from the off-host witness, not from the node it judges, so a rolled-back or
+# withholding node cannot supply its own floor. While the collector is not configured or not
+# scraping, the comparison has no right-hand side and stays silent: that blind state is its own
+# warning (RegaliaCollectorEpochMissing).
 groups:
   - name: regalia-single-node
     rules:
@@ -57,3 +82,98 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} reports a verified topology that disagrees with its external topology metadata."
+      # The fleet comparisons (BehindFleet) are excluded for single-node targets and have no peer to
+      # compare against anyway. Their replacement compares the node to the COLLECTOR's own witness
+      # (regalia-kms-dx7.9, D1=A): the highest epoch the off-host collector committed in this node's
+      # sync stream. A node that withholds or loses its newer chain (a sync that stops publishing, a
+      # rolled-back store) goes unseen by every rule on the node alone; the collector already holds
+      # what it shipped, and the gap is the alert. The comparison is strictly less: the reference is
+      # what the node has already shipped, so equal is caught up. The reference lags membership by
+      # the shipping interval, and a node a new epoch reaches first warns while its trail catches up:
+      # thirty minutes is many shipper passes, as the fleet rules' hold.
+      #
+      # The comparison is written with the collector's witness on the left (the reference) and the
+      # node's own series on the right, so the alert's labels are the reference's: the node's
+      # instance, under the collector's job. The match is on the full label set minus job and
+      # topology_profile (the two labels the sides carry differently), so one-to-one on instance:
+      # the node's own instance is the join key, and another node's witness cannot be this node's
+      # floor.
+      - alert: RegaliaMembershipBehindCollector
+        expr: regalia_collector_witnessed_membership_epoch{job="regalia-collector"} > ignoring(job, topology_profile) regalia_membership_epoch{topology_profile="single-node"}
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} holds a membership epoch older than the highest the audit collector already committed for it: it is withholding the newer chain, or it lost state."
+          description: "The reference is the collector's witness (job regalia-collector), not the node's own telemetry: it cannot be supplied by a rolled-back node. deploy/baremetal/AUDIT-COLLECTOR.md."
+      # The same, from the collector's esp-advances witness: the node's sync cannot hide a lagging
+      # anchor by writing a higher epoch in membership.prom than it anchored, and no other node can
+      # inflate the reference (there is none).
+      - alert: RegaliaAnchorBehindCollector
+        expr: regalia_collector_witnessed_anchor_epoch{job="regalia-collector"} > ignoring(job, topology_profile) regalia_esp_anchor_epoch{topology_profile="single-node"}
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }}'s TPM anchor is older than the highest epoch the audit collector committed in its esp-advances trail: rollback protection lags what the node has already shipped."
+          description: "Read `journalctl -u regalia-esp-advance` on that node; fix the ESP, then `systemctl start regalia-esp-advance`. The reference is the collector's witness (job regalia-collector)."
+      # The blind state of the two comparisons above: a scraped single-node target whose collector
+      # reference is absent (the collector not configured, its scrape job missing, or no witness
+      # committed yet) has no right-hand side, and the behind rules silently cannot fire. Warn, not
+      # page: the availability half of the page is RegaliaSingleNodeDown's, and a fresh single-node
+      # installation has nothing in the witness until its first shipper pass.
+      - alert: RegaliaCollectorEpochMissing
+        # The witness carries the node's instance and the collector's job, not the node's job or
+        # its topology label; ignoring both is what one-to-one on instance requires here.
+        expr: (up{job="regalia-node",topology_profile="single-node"} == 1) unless ignoring(job, topology_profile) regalia_collector_witnessed_membership_epoch{job="regalia-collector"}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped, but the audit collector holds no witnessed epoch for it: the behind-the-collector rules are blind for it (collector not configured or not scraping)."
+      # regalia-esp-advance writes regalia_esp_boot_renderable on EVERY run, success or not
+      # (deploy/baremetal/node.py): 0 says the initrd has nothing to render. Under multi-node that is
+      # RegaliaNextBootNeedsRecoveryKey (the peer can still be asked); under single-node there is no
+      # peer, and the owner's card is the only unlock, so an unrenderable ESP means the next boot
+      # cannot be unlocked at all by the usual path. No `for:`: like the fleet rule and like
+      # RegaliaSiteMismatch, a check that ran and refused will not pass until the chain is fixed.
+      - alert: RegaliaNextBootCannotRender
+        expr: regalia_esp_boot_renderable{topology_profile="single-node"} == 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The chain on {{ $labels.instance }}'s ESP leaves the initrd nothing to render: its next boot cannot be unlocked without the owner's recovery path (no peer, and the node is gone from the manifest)."
+      # Renamed from RegaliaOwnerAssistedReboot (design 4.5's name; MONITORING.md names the old alert
+      # as renamed). Keyed on the EXTERNAL inventory like the rest of this file, not on sync's
+      # gauge: a sync-written value cannot decide which set of rules a target belongs to. Info, as
+      # before: it is the standing state of a single-node installation, not an incident.
+      - alert: RegaliaNextBootNeedsOwner
+        expr: regalia_topology_nodes{topology_profile="single-node"} == 1
+        labels:
+          severity: info
+        annotations:
+          summary: "Owner presence is required at each boot of this single-node installation, including the next reboot."
+      # THE BOOT GUARD (regalia-kms-dx7.26) seen from monitoring: while /etc/regalia/restore-pending
+      # exists, etcd and the daemon hold SKIPPED at every boot and the node serves nothing, reading
+      # silently (skipped, not failed). RegaliaSingleNodeDown pages on the outage; this names the
+      # cause: a replacement disk is waiting for its restore. It is the only way the page says why.
+      - alert: RegaliaRestorePending
+        expr: regalia_restore_pending{topology_profile="single-node"} == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is held at every boot by /etc/regalia/restore-pending: etcd and the daemon are skipped (a replacement disk is awaiting its restore). Restore per docs/design/single-node.md 4.8, which removes the marker once the raised store is exchanged."
+      # A FILE THAT IS NOT THERE MUST ALERT TOO (as regalia-node.rules.yml's textfile rules): the
+      # pending gauge is written at boot and at mark/clear, so a scraped node whose file is absent
+      # has no series the value rule can see. The file exists on every single-node host from
+      # commissioning; absence is a writer that died before its first write or an unreadable file.
+      - alert: RegaliaRestoreMetricsMissing
+        expr: |
+          (up{job="regalia-node",topology_profile="single-node"} == 1)
+          unless on(job, instance)
+          node_textfile_mtime_seconds{job="regalia-node",file=~"(.*/)?pending\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no pending.prom: the restore-pending marker's state is not watched (ls /run/regalia-metrics/restore)."

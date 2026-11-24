@@ -218,16 +218,32 @@ def dropin():
             "[Service]\nExecStart=\nExecStart=%s --config-file %s\n" % (etcdconf.CONFIG_PATH, takeover.ETCD, RESTORE_CONFIG))
 
 
+def _pending_metric(pending):
+    """The boot guard's metric (regalia-kms-dx7.9's RegaliaRestorePending), published by the node at every boot and here at
+    mark/clear. The node runs as regalia-sync and cannot write root's metrics directory, so root writes the file whole in
+    its own mode; the gauge's value is the marker's existence and nothing the marker's content says. Never raises: a
+    metrics write must not stand between the marker and the boot guard it names."""
+    from deploy.baremetal import metrics
+    try:
+        text = metrics.render("restore", [("regalia_restore_pending", {}, 1 if pending else 0)])
+        metrics.write(metrics.path("restore", "pending.prom"), text)
+    except Exception:                             # noqa: BLE001 - see above
+        pass
+
+
 def mark_pending(host, reason, now):
     """The restore-pending marker, written whole and its directory fsynced: from here a reboot starts neither etcd nor the
-    daemon. Its content is for the operator; the units read only that it exists."""
+    daemon. Its content is for the operator; the units read only that it exists. The metric says it is held now, not at
+    the next boot: RegaliaRestorePending names the cause of the SingleNodeDown a held host raises."""
     host.write(STORED_PENDING, json.dumps({"schema": PENDING_SCHEMA, "reason": reason, "written_at": stamp(now)}, sort_keys=True) + "\n")
     host.sync_dir(os.path.dirname(STORED_PENDING))
+    _pending_metric(True)
 
 
 def clear_pending(host):
     host.remove(STORED_PENDING)
     host.sync_dir(os.path.dirname(STORED_PENDING))
+    _pending_metric(False)
 
 
 def one_member(host, node_id):

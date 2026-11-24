@@ -440,6 +440,17 @@ func run() error {
 		}
 		if admissionGate != nil {
 			coordinator.RequireAdmission(admissionGate)
+			// THE COLLECTOR IS MANDATORY FOR A SINGLE NODE'S STATEFUL OPERATIONS (regalia-kms-dx7.9,
+			// PA decision D2): under the self-issued single lease a stateful operation is refused while
+			// no audit sink is configured (a configured-but-unreachable one is not a refusal: it ships
+			// later and the backlog alerts). The mode comes from the gate's own status, and the sink's
+			// presence is the configured one built above (auditSinkFor), already validated.
+			single := admissionGate.Mode(ctx) == admission.ModeSingle
+			coordinator.SetSingleNodeAdmission(single, auditSink != nil)
+			coordinator.SetStatelessOperations(api.StatelessOperations()...)
+			if single && auditSink == nil {
+				slog.Warn("single-node admission with no audit collector configured: stateful operations are refused", "node", settings.NodeID)
+			}
 		}
 		if policyState != nil {
 			coordinator.SetPolicyHead(policyState.Head)

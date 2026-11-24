@@ -58,6 +58,9 @@ WRITERS = {
     "esp-advance": ("esp-advance", ("esp-advance.prom",)),      # not admission.prom: a trail is called admission (its shipper's file)
     # regalia-site-check (root): the rootfs site configuration against the measured site document (#615)
     "site-check": ("site-check", ("site-check.prom",)),
+    # the restore-pending boot guard's state (regalia-kms-dx7.26, watched by regalia-kms-dx7.9):
+    # written at every boot by the node and at mark/clear by restore.py (root)
+    "restore": ("restore", ("pending.prom",)),
     "audit-ship": ("audit-ship", None),     # one file per trail: <trail>.prom (cmd/regalia-audit-ship -metrics)
 }
 
@@ -91,6 +94,10 @@ METRICS = {
     "regalia_site_check_ok": ("gauge", "1 when regalia-site-check found the rootfs site configuration and the measured site "
                               "document in agreement this boot, 0 when they differ or the document could not be read: the "
                               "tunnels are not brought up.", {}, "site-check"),
+    # the boot guard (regalia-kms-dx7.26): 1 while /etc/regalia/restore-pending exists, so etcd and the
+    # daemon hold SKIPPED at every boot; the node serves nothing and reads "skipped", not failed
+    "regalia_restore_pending": ("gauge", "1 while /etc/regalia/restore-pending holds etcd and the daemon stopped at every boot "
+                                 "(a replacement disk awaiting its restore), else 0.", {}, "restore"),
     "regalia_site_check_run_timestamp_seconds": ("gauge", "When regalia-site-check last ran.", {}, "site-check"),
     "regalia_admission_serving": ("gauge", "1 while this node holds a runtime lease that lets the KMS daemon serve, else 0.",
                                   {}, "admission"),

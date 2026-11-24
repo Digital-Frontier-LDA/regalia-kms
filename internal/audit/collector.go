@@ -295,7 +295,7 @@ func (c *Collector) Close() error {
 	return firstErr
 }
 
-// Handler serves the three endpoints the sink talks to. Method dispatch is the mux's
+// Handler serves the endpoints the sink talks to. Method dispatch is the mux's
 // (Go 1.22 patterns): a GET to /v1/events is a 405, not a handler that forgot to check.
 func (c *Collector) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -308,6 +308,139 @@ func (c *Collector) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
+}
+
+// MetricsHandler is the collector's own read-only metrics endpoint (regalia-kms-dx7.9, PA decision
+// D1=A): the monitoring service scrapes it over the SAME mTLS contract the sink's world uses (the
+// collector's listener, its client CA), so the reference the single-node behind rules compare
+// against comes from the off-host witness, not from the node it judges — a rolled-back or
+// withholding node cannot supply its own floor. It is mounted by the collector's binary on the same
+// listener as the sink protocol (one listener, one certificate, the sink's own discipline), because
+// a second listener would be a second door on the same state.
+//
+// It exposes two gauges, labeled by the client's instance and job, so a rule can compare them
+// to the node's own series on the same label set (the monitoring service's scrape job is
+// regalia-collector; instance is the node's own, the same value the node's own series carry):
+//
+//	regalia_collector_witnessed_membership_epoch{job,instance}  the highest manifest epoch
+//	committed in that node's sync trail, the reading recover.witness_epoch takes from the same lines
+//	regalia_collector_witnessed_anchor_epoch{job,instance}      the highest epoch committed in
+//	that node's esp-advances trail
+//
+// Both are 0 (absent) while the trail holds no such line yet. The values are recomputed from the
+// committed stream files on every scrape: the commit path is append-only, the files verify on open,
+// and the walk is bounded by maxTrailContent per line — a scrape is a read, and a wedged collector
+// is the owner's alarm, not this endpoint's failure.
+func (c *Collector) MetricsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_membership_epoch The highest manifest epoch committed in the node's sync trail.")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_membership_epoch gauge")
+		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_anchor_epoch The highest epoch committed in the node's esp-advances trail.")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_anchor_epoch gauge")
+		c.mu.Lock()
+		streams := make(map[string]*collectorStream, len(c.streams))
+		for key, stream := range c.streams {
+			streams[key] = stream
+		}
+		c.mu.Unlock()
+		for _, stream := range streams {
+			membership, anchor := c.witnessedEpochs(stream)
+			// The collector knows the node by its site (the stream's identity); the monitoring
+			// service knows it by its instance. The two are the same value: the site is the
+			// node's own, and the instance is the node's own. The collector does not know the
+			// monitoring service's naming, so the scrape job's relabeling carries the site to
+			// the instance label.
+			fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", stream.site, membership)
+			fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", stream.site, anchor)
+		}
+	})
+}
+
+// witnessedEpochs is the reading recover.witness_epoch takes, from the collector's own committed
+// streams: the highest epoch in the site's sync trail (its ALLOW lines, which name the manifest
+// epoch) and in its esp-advances trail (its ALLOW lines, which name the anchored epoch). Both are
+// the same value the owner reads off the collector's export offline, so the metric and the owner's
+// procedure cannot disagree. The walk is one pass per stream, bounded by the committed size.
+func (c *Collector) witnessedEpochs(stream *collectorStream) (membership, anchor uint64) {
+	if stream.site == "" {
+		return 0, 0
+	}
+	epochLine := func(event *Event) (uint64, bool) {
+		if event.Outcome != "ALLOW" || event.Detail == nil {
+			return 0, false
+		}
+		var detail struct {
+			Line string `json:"line"`
+		}
+		if json.Unmarshal(event.Detail, &detail) != nil || detail.Line == "" {
+			return 0, false
+		}
+		var line struct {
+			Event   string `json:"event"`
+			Outcome string `json:"outcome"`
+			Epoch   int64  `json:"epoch"`
+		}
+		if json.Unmarshal([]byte(detail.Line), &line) != nil || line.Outcome != "ALLOW" {
+			return 0, false
+		}
+		return uint64(line.Epoch), true
+	}
+	for _, event := range c.committedEvents(stream) {
+		epoch, ok := epochLine(&event)
+		if !ok || event.Detail == nil {
+			continue
+		}
+		var detail struct {
+			Trail string `json:"trail"`
+		}
+		if json.Unmarshal(event.Detail, &detail) != nil {
+			continue
+		}
+		switch detail.Trail {
+		case "sync":
+			if epoch > membership {
+				membership = epoch
+			}
+		case "esp-advances":
+			if epoch > anchor {
+				anchor = epoch
+			}
+		}
+	}
+	return membership, anchor
+}
+
+// committedEvents re-reads one stream's committed lines (through stream.size: a torn append is
+// truncated back on commit, and the collector verifies the stream on open), one Event per line.
+// A read failure yields what held before it: the endpoint reports a floor, never a value it
+// invented.
+func (c *Collector) committedEvents(stream *collectorStream) []Event {
+	committed := stream.size
+	if committed <= 0 {
+		return nil
+	}
+	restored, err := stream.file.Seek(0, io.SeekStart)
+	if err != nil {
+		return nil
+	}
+	_ = restored
+	var events []Event
+	reader := bufio.NewReaderSize(io.LimitReader(stream.file, committed), 64*1024)
+	for {
+		line, err := reader.ReadString('\n')
+		if trimmed := strings.TrimSuffix(line, "\n"); trimmed != "" {
+			var event Event
+			if json.Unmarshal([]byte(trimmed), &event) == nil {
+				events = append(events, event)
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return events
 }
 
 // peerIdentity extracts the client identity from the connection. The mTLS listener is
