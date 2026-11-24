@@ -8,6 +8,7 @@ image's boot entry (forget). Run on the node, as root, by hand.
     python3 -Es -m deploy.baremetal.update promote --config /etc/regalia/node.json [--esp /efi]
     python3 -Es -m deploy.baremetal.update forget  --config /etc/regalia/node.json --entry 0001 [--esp /efi]
     python3 -Es -m deploy.baremetal.update status  --config /etc/regalia/node.json [--esp /efi] [--json] [--require-promoted]
+    python3 -Es -m deploy.baremetal.update quote-for-owner --config /etc/regalia/node.json --nonce <owner's 64-hex nonce>
 
 APPLY refuses unless all of this holds, from the host's own state, never from files an operator collected:
   1  the manifest is this node's published chain, verified from the root key and against the TPM's
@@ -60,6 +61,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -336,6 +338,49 @@ def promote(host, esp, typed, record, say=print, planned_outage=False):
     return after
 
 
+def quote_for_owner(host, nonce, record, say=print):
+    """The single-node host's evidence for the owner (docs/design/single-node.md 4.6, regalia-kms-dx7.8): after the
+    planned-outage reboot, the serving path has come up under the new image and can self-issue a lease for this boot.
+    This quote, over the owner's nonce, is what the owner's tool verifies with attest-booted. It is the system phase:
+    a boot that came up, not the initrd that only asked for its disk. Read-only: it changes nothing and records no
+    change -- it is a DENY on the trail if the serving path is not up (no self-lease) or the host is not single-node.
+
+    `owner.py attest-booted --nonce` printed the nonce first (the owner's verifier, the same one unlock uses); the
+    node quotes it here, and the resulting JSON is carried back to the owner for `--evidence`. The owner is already
+    at the host for every single-node reboot (design 4.12): no network endpoint, no new listener. Returns the
+    evidence object (also printed as one JSON line)."""
+    event = {"event": "update-quote-for-owner", "node_id": host.node_id,
+             "topology": membership.profile(host.manifest())}
+    try:
+        manifest = host.manifest()
+        require(membership.profile(manifest) == membership.SINGLE_NODE,
+                "quote-for-owner is the single-node profile's: under %s a peer gives the lease and the quote, not the "
+                "node to the owner" % membership.profile(manifest))
+        require(isinstance(nonce, str) and re.fullmatch(r"[0-9a-f]{64}", nonce), "the owner's nonce is 64 lowercase hex")
+        document = host.document(manifest)
+        measurements.bind(manifest, document)
+        node_id = host.node_id
+        session = host.session()
+        # the serving path must have come up: a valid self-issued lease for THIS boot is the proof. Asking the node
+        # itself (peer = node_id) is how promote proves the same, under the single-node profile only (lease.py).
+        leases, refused = fresh_leases(host, manifest, [node_id], session)
+        require(leases, "the serving path has not come up: no self-issued lease for this boot (%s): the node is not "
+                "unlocked on the new image yet, so its system-phase quote would be nothing"
+                % ("; ".join("%s: %s" % (p, refused[p]) for p in sorted(refused)) or "no lease"))
+        event["lease_issuers"] = sorted(leases)
+        # the node's system-phase quote over the owner's nonce: the owner's tool verifies it under the tip, and that
+        # record is the retire evidence. `phase` is what the node's quote-for-owner stamped (system: a boot that came
+        # up), and attest_booted refuses a quote it says was taken in the initrd before verifying anything.
+        evidence = dict(host.quote(nonce, manifest), phase="system")
+        say(json.dumps(evidence, sort_keys=True))
+        say("CARRY to the owner: python3 -Es -m deploy.baremetal.owner attest-booted --evidence <this file> --session %s"
+            % session)
+    except (Refused, attest.Refused, OSError, ValueError) as failure:
+        _denied(record, event, failure)
+        raise
+    return evidence
+
+
 def forget(host, entry, esp, typed, record, say=print):
     event = {"event": "update-forget", "node_id": host.node_id, "entry": entry}
     try:
@@ -449,6 +494,13 @@ class Host:
         self._session = self._node_module.boot_session(self.node.runtime)
         return self._session[0]
 
+    def quote(self, nonce, manifest):
+        """This node's system-phase TPM quote over `nonce` (64 hex), bound to this boot session and the manifest's
+        epoch: what owner.py attest-booted verifies under the tip. The boot session (its ID and ephemeral key) is
+        this node's, read from the runtime; the quote is over the node's selected PCRs (its configuration)."""
+        session_id, ephemeral_public = self._node_module.boot_session(self.node.runtime)
+        return self.node.quote(session_id, ephemeral_public)(nonce, manifest)
+
     def own_state(self):
         with open(self.node.path("attest.json"), "rb") as f:
             return membership.load(f.read(4 * 1024 * 1024 + 1), limit=4 * 1024 * 1024)
@@ -502,6 +554,12 @@ def main(argv=None, typed=None, run=None):
             c.add_argument("--planned-outage", action="store_true",
                            help="the operator says this single-node host may be taken down: the update is a planned outage, and the "
                                 "host is down until the owner unlocks it (single-node profile only; refused under any other)")
+    q = sub.add_parser("quote-for-owner", help="single-node: print this host's system-phase TPM quote over the owner's nonce, as "
+                        "the evidence owner.py attest-booted verifies (the serving path must be up: a self-issued lease for "
+                        "this boot is the proof)")
+    q.add_argument("--config", required=True, help="this node's node.json")
+    q.add_argument("--nonce", required=True, help="the owner's nonce (64 hex), as owner.py attest-booted --nonce printed it")
+    q.add_argument("--audit-log", default=trails.where("update"), help="the update trail (default %(default)s)")
     args = ap.parse_args(argv)
 
     def record(event):
@@ -526,6 +584,11 @@ def main(argv=None, typed=None, run=None):
                 print("PROMOTED: a reset boots %s" % found["target"] if found["promoted"] else
                       "NOT PROMOTED: BootOrder's first entry is not %s, or BootNext is armed" % found["target"])
             return 0 if found["promoted"] or not args.require_promoted else 1
+        if args.command == "quote-for-owner":
+            # read-only: it changes nothing and arms no BootNext, so close_cut (which clears a cut apply's BootNext)
+            # does not apply to it
+            quote_for_owner(host, args.nonce, record)
+            return 0
         close_cut(host, args.audit_log, record)
         if args.command == "apply":
             apply(host, args.entry, args.esp, ask, record, args.deadline_minutes,

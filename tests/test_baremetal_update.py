@@ -1,7 +1,9 @@
 """deploy/baremetal/update.py: the acting half of a rolling image update (#75, Phase 15). The decisions are the
 real ones (rollout.may_reboot on leases signed by the OpenSSL TPM fixtures, bootnext on PE images built as
 ukify lays them out); the host's TPM, sync client and firmware are fakes."""
+import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -70,6 +72,12 @@ class FakeHost:
             raise refusal if isinstance(refusal, Exception) else m.Refused(refusal)
         body = dict(self.case.body(manifest), node_id="a", ak_name=self.case.keys["a"].ak_name, issuer=peer, session_id=session)
         return lt.sign(body, self.case.keys[peer] if peer in self.case.keys else self.case.keys["a"])
+
+    def quote(self, nonce, manifest):
+        """A stand-in for Host.quote: this node's system-phase quote over `nonce`, in the shape node.quote gives
+        (ephemeral_public, nonce, quote, signature). The FakeHost's boot session is fixed (lt.SESSION / SESSION_KEY)."""
+        assert re.fullmatch(r"[0-9a-f]{64}", nonce), nonce
+        return {"ephemeral_public": lt.SESSION_KEY, "nonce": nonce, "quote": "aa" * 64, "signature": "bb" * 64}
 
     def boot(self):
         return bootnext.state(self.run)
@@ -345,6 +353,35 @@ class SingleNode(Case):
         self.refused("no peer gave this boot a lease", update.promote, self.host, self.esp,
                      self.typed("make 0002 the default on a"), self.record, say=lambda line: None,
                      planned_outage=True)
+
+    def test_quote_for_owner_prints_the_system_phase_quote_over_the_owner_s_nonce(self):
+        """regalia-kms-dx7.8: after the planned-outage reboot the serving path is up (a self-lease for this boot),
+        and quote-for-owner prints the node's system-phase quote over the owner's nonce -- the evidence owner.py
+        attest-booted verifies, carried back to the owner by hand. Read-only: it records nothing on success (like
+        status), and a DENY on the trail only when the serving path is not up, the host is not single-node, or the
+        nonce is malformed."""
+        nonce = "11" * 32
+        out = []
+        self.trail.clear()
+        evidence = update.quote_for_owner(self.host, nonce, self.record, say=out.append)
+        self.assertEqual(evidence, {"ephemeral_public": lt.SESSION_KEY, "nonce": nonce, "quote": "aa" * 64,
+                                    "signature": "bb" * 64, "phase": "system"})
+        self.assertEqual(self.trail, [], "read-only: no change, nothing on the trail")
+        self.assertIn(json.dumps(evidence, sort_keys=True), out)
+        # the serving path not up (no self-lease) is a refusal: the quote would be of a boot that never came up
+        self.host.refusing = {"a": "no lease was issued for this boot"}
+        self.refused("the serving path has not come up", update.quote_for_owner, self.host, nonce, self.record,
+                     say=lambda line: None)
+        self.assertEqual((self.trail[-1]["event"], self.trail[-1]["outcome"]), ("update-quote-for-owner", "DENY"))
+        # under another profile it is refused: a peer, not the owner, is the source of the lease and the quote
+        self.host.refusing = {}
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, SET2
+        self.refused("quote-for-owner is the single-node profile's", update.quote_for_owner, self.host, nonce,
+                     self.record, say=lambda line: None)
+        # a nonce that is not the owner's (64 hex) is refused before anything is asked
+        self.host._manifest, self.host._document, self.host.running = self.s2, self.scboth, self.scboth["nodes"]["a"]["accepted"][0]
+        self.refused("the owner's nonce is 64 lowercase hex", update.quote_for_owner, self.host, "zz", self.record,
+                     say=lambda line: None)
 
 
 class Forget(Case):

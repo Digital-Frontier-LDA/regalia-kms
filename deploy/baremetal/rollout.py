@@ -159,21 +159,16 @@ def last_seen(state, manifest, node_id):
 
 def _up(target, phase):
     """Whether a sighting in `phase` shows the node UP on `target`. Where the set is per phase, only a
-    quote from the booted system does: a node verified in its initrd asked for its disk, and may never
-    have come up (an initrd-phase record, or a record from the owner's tool with no phase at all -- the
-    owner saw the host ask for its disk and not the boot that came up -- never counts as one). A record
-    written before the phase was recorded has none, and under a multi-node profile a bare record counts
-    as before: only the owner's tool's own records are read as silence."""
+    quote from the booted system does: a node verified in its initrd asked for its disk and may never have
+    come up, so an initrd-phase record never counts, nor does a record with no phase (it cannot be told to
+    be the boot that came up). Where the set has one value per PCR, the values cannot tell the two phases
+    apart: any non-initrd sighting counts, as the node's own verifier has always read an unphased set --
+    including a record written before the phase was recorded, under a multi-node profile. The owner's tool,
+    the single-node profile's only witness (regalia-kms-dx7.8), always writes the phase the request was made
+    in (ownerunlock.attest_booted), so an initrd record is never counted as a boot even there; the no-phase
+    case under single-node is one its witness does not write."""
     if phase == "initrd":
         return False
-    # A set with one value per PCR cannot tell the two phases apart by its VALUES, but the record still names the
-    # phase the request came from: an unlock (initrd) and a system attestation are two records, and only the
-    # latter is a boot. The owner's tool, the single-node profile's only witness (regalia-kms-dx7.8), always
-    # writes the phase the request was made in (ownerunlock.attest_booted), so an initrd record is never
-    # counted as a boot even under an unphased set. The node's own verifier, which counts any sighting of an
-    # unphased set, is not a witness under the single-node profile.
-    # of its quote -- none on an initrd quote, "system" on the boot that came up -- so under that profile
-    # the owner says "system" when the host comes up, and says nothing at all when it does not.
     return phase == "system" if "phases" in target else True
 
 
