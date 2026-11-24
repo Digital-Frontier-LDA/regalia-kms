@@ -81,7 +81,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
       credentials are decrypted straight into it and never to a file; a 0600 file or a typed password remain for
       commissioning. The bytes it reads are zeroed, but the password is then a Python str (and part of the Basic
       header), which cannot be zeroed: it stays in the process's memory until the process ends, by whichever path it
-      came;
+      came. The tpm-* verbs (tpm-status, tpm-clear, tpm-proof; regalia-kms-dx7.40) are built and tested against the
+      stand-in only, as the power paths are: the attribute's name and values, whether the iLO's BIOS-settings PATCH
+      asks for physical presence (a TPM-PPI-type attribute, which the first dry run's registry read would show, and
+      which nothing here sets silently), and the consumption's timing are measured on the first staging dry run, from
+      the discovery tpm-status prints;
     - the fence on real iLOs. `deploy/baremetal/fence.py` (`owner.py fence`) exists. It runs from the owner's machine
       on the management network, never a node, and does, in order:
       1. TLS pinned to each iLO's certificate before any credential is sent;
