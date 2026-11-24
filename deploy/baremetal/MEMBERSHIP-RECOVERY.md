@@ -256,6 +256,57 @@ the owner", above, #387). Both peers gone remains a root ceremony.
   `tests/test_baremetal_recover.py` and `tests/test_baremetal_reanchor.py`, not run on three nodes) and both peers
   destroyed (a root ceremony).
 
+## Single node (docs/design/single-node.md 4.7)
+
+Under a single-node topology (schema v5, `topology.profile` = `single-node`), the node has no peers to
+recover from: there is no other node whose chain it could take. The owner's whole chain is the sole
+source, checked by the owner's v2 statement (with `collector_epoch`), which the audit collector
+witnesses. The collector is mandatory: there is no "no collector" escape.
+
+**Crash-window recovery** (`recover apply --owner-chain`): the owner's chain replaces the chain from
+peers. The owner's v2 statement must name `collector_epoch <= tip epoch` (a collector that saw a higher
+epoch is a refusal: a revocation was withheld).
+
+**Re-anchor** (`reanchor --owner-chain`): under a single-node tip the owner's chain alone is a valid
+source. It goes through the same floor, records and extends-disk checks but skips the "may authorize"
+check (the owner is not a node). No `--peer` with it.
+
+**Recount** (`recount --owner-statement`): the owner's v2 recount statement (purpose `recount`, with
+`collector_sequence`) is a floor source beside the heartbeats. The floor is the max of the old counter,
+the prior floor, every held heartbeat, the statement's `collector_sequence`, and — under single-node —
+the node's own beat signing counter (the node signs its own heartbeats on the same TPM). With neither a
+verified heartbeat nor the statement, the recount is refused.
+
+**What this path loses, per design 4.7:** the two-node quorum that bounds a re-anchor from below. The
+owner's chain is the sole source; the collector's witness (its `collector_epoch` and, for recount,
+`collector_sequence`) is the substitute. A collector that has not seen the latest epoch cannot witness
+it, and the statement is refused.
+
+### What is tested
+
+- `tests/test_baremetal_convergence.py` (`OwnerChain`): `agreed` accepts the owner chain under a
+  single-node tip and refuses it under a multi-node tip; the chain must reach the anchored epoch; a
+  forged link is refused; an empty `owner_chain` is refused; a node named `"owner"` in the `sources`
+  dict gains nothing (it is not the owner chain); `recover` with the owner chain as the sole source
+  under single-node; `recover` in the crash window with minimum 1 (no record) and the owner chain.
+- `tests/test_baremetal_recover.py` (`SingleNodeStatement`): the v2 statement has `collector_epoch`
+  and the v2 prefix; a recount statement has `collector_sequence` (refused without it);
+  `verify_owner` under `single_node=True` requires v2 (v1 refused) and refuses a collector above the
+  tip; a multi-node tip accepts v1 as before.
+- `tests/test_baremetal_reanchor.py` (`OwnerChainReanchor`): `plan` with `sources={}` and
+  `owner_chain` under a single-node tip; a node source alongside the owner chain is refused;
+  the owner chain is refused under a multi-node tip; the full `reanchor()` call writes the anchor and
+  names `"owner-chain"` as the source in the audit events.
+- `tests/test_baremetal_recount.py` (`SingleNodeRecount`): the owner statement is a floor source
+  (the floor rises to `collector_sequence` with no heartbeat); the statement is refused under a
+  multi-node manifest; the liveness floor must not go below the signing counter (max of all sources,
+  no margin); with neither heartbeat nor statement the recount is refused; the floor is the max of
+  all sources (old counter, prior, held heartbeats, `collector_sequence`, signing counter).
+- `tests/test_baremetal_owner.py` (`SingleNodeRecovery`): under a single-node tip the collector is
+  mandatory (no witness, no statement); the v2 statement carries `collector_epoch`; a recount
+  statement under single-node needs `collector_sequence`; a multi-node tip keeps v1 and the
+  "no collector" escape.
+
 ## What is tested, and what is not
 
 - A record write cut at every byte is repaired by the next load; cuts all the way through a restore

@@ -47,9 +47,19 @@ from deploy.baremetal import membership
 
 Refused, require = membership.Refused, membership.require
 
-PURPOSES = ("recover", "reanchor")
-PREFIX = {"recover": b"regalia-recover/v1\0", "reanchor": b"regalia-reanchor/v1\0"}
-STATEMENT_KEYS = ("purpose", "node_id", "epoch", "tip_digest", "session", "expires")
+PURPOSES = ("recover", "reanchor", "recount")
+PREFIX_V1 = {"recover": b"regalia-recover/v1\0", "reanchor": b"regalia-reanchor/v1\0"}
+PREFIX_V2 = {
+    "recover":  b"regalia-recover/v2\0",
+    "reanchor": b"regalia-reanchor/v2\0",
+    "recount":  b"regalia-recount/v2\0",
+}
+STATEMENT_KEYS_V1 = ("purpose", "node_id", "epoch", "tip_digest", "session", "expires")
+# v2 binds the collector's witness into the owner's statement (docs/design/single-node.md 4.7, decision Q4):
+# for recover/reanchor, the collector's highest witnessed epoch; for recount, both that and the collector's
+# highest witnessed beat-propose sequence (the recount floor).
+STATEMENT_KEYS_V2 = STATEMENT_KEYS_V1 + ("collector_epoch",)
+STATEMENT_KEYS_V2_RECOUNT = STATEMENT_KEYS_V2 + ("collector_sequence",)
 SESSION_TTL = 900                      # seconds: a statement is good for this one operation, for minutes
 SESSION_FILE = "recovery-session.json"
 SYNC_USER = "regalia-sync"
@@ -59,16 +69,45 @@ MAX_CHAIN_BYTES = membership.MAX_CHAIN_BYTES
 
 # ---- the statement ----
 
+def _statement_keys(purpose, collector_epoch=None, collector_sequence=None):
+    """The exact keys a statement of `purpose` must hold: v2 keys for single-node (with collector fields),
+    v1 keys for multi-node. The collector fields are always present in v2 (design 4.7: the collector is
+    mandatory under single-node)."""
+    if purpose == "recount":
+        return STATEMENT_KEYS_V2_RECOUNT
+    if collector_epoch is not None or collector_sequence is not None:
+        return STATEMENT_KEYS_V2
+    return STATEMENT_KEYS_V1
+
+
 def message(statement):
     """What the owner signs: the purpose's own prefix and the canonical statement."""
-    membership.exact(statement, STATEMENT_KEYS, "the recovery statement")
-    require(statement["purpose"] in PURPOSES, "the purpose is one of %s" % ", ".join(PURPOSES))
-    return PREFIX[statement["purpose"]] + membership.canonical(statement)
+    purpose = statement.get("purpose")
+    require(purpose in PURPOSES, "the purpose is one of %s" % ", ".join(PURPOSES))
+    # v2: has collector_epoch; v1: does not
+    if "collector_epoch" in statement:
+        keys = STATEMENT_KEYS_V2_RECOUNT if purpose == "recount" else STATEMENT_KEYS_V2
+        prefix = PREFIX_V2[purpose]
+    else:
+        keys = STATEMENT_KEYS_V1
+        prefix = PREFIX_V1[purpose]
+    membership.exact(statement, keys, "the recovery statement")
+    return prefix + membership.canonical(statement)
 
 
-def statement(purpose, node_id, tip, session, expires):
-    return {"purpose": purpose, "node_id": node_id, "epoch": tip["epoch"], "tip_digest": membership.digest(tip),
-            "session": session, "expires": int(expires)}
+def statement(purpose, node_id, tip, session, expires, collector_epoch=None, collector_sequence=None):
+    st = {"purpose": purpose, "node_id": node_id, "epoch": tip["epoch"], "tip_digest": membership.digest(tip),
+          "session": session, "expires": int(expires)}
+    if purpose == "recount":
+        # v2: the collector's highest witnessed sequence (the heartbeat sequence, not the epoch)
+        require(collector_epoch is not None, "a recount statement needs collector_epoch")
+        require(collector_sequence is not None, "a recount statement needs collector_sequence")
+        st["collector_epoch"] = collector_epoch
+        st["collector_sequence"] = collector_sequence
+    elif collector_epoch is not None:
+        # v2 for recover/reanchor: the collector's highest witnessed epoch
+        st["collector_epoch"] = collector_epoch
+    return st
 
 
 def session_id(session):
@@ -88,9 +127,13 @@ def verify_chain(chain, root_key, last_known=None):
     return tip
 
 
-def verify_owner(tip, signed, purpose, node_id, session, now):
+def verify_owner(tip, signed, purpose, node_id, session, now, single_node=False):
     """The owner's statement `signed` ({"statement", "key", "sig"}), if it is over this tip, for this node, this
-    operation and purpose, unexpired, by one of the tip's owner_keys. Returns the statement."""
+    operation and purpose, unexpired, by one of the tip's owner_keys. Returns the statement.
+
+    Under `single_node` (the tip's topology profile is SINGLE_NODE), the statement must be v2: it must name
+    `collector_epoch`, and `collector_epoch <= tip["epoch"]` (a collector that saw a higher epoch is a
+    refusal, docs/design/single-node.md 4.7). Under a multi-node tip, v1 statements are accepted as before."""
     membership.exact(signed, ("statement", "key", "sig"), "the owner's statement")
     st = signed["statement"]
     raw = message(st)
@@ -101,6 +144,15 @@ def verify_owner(tip, signed, purpose, node_id, session, now):
             "the statement is over epoch %s (%s...), not the peer's tip, epoch %d" % (st["epoch"], str(st["tip_digest"])[:16], tip["epoch"]))
     require(isinstance(st["expires"], int) and not isinstance(st["expires"], bool) and now < st["expires"] <= now + SESSION_TTL,
             "the statement has expired, or expires further ahead than %d s" % SESSION_TTL)
+    if single_node:
+        require("collector_epoch" in st,
+                "under single-node the statement must be v2 (with collector_epoch): the collector is mandatory "
+                "(docs/design/single-node.md 4.7, decision Q4)")
+        require(isinstance(st["collector_epoch"], int) and not isinstance(st["collector_epoch"], bool),
+                "collector_epoch must be an integer")
+        require(st["collector_epoch"] <= tip["epoch"],
+                "the collector's witnessed epoch %d is above the tip's epoch %d: a revocation was withheld"
+                % (st["collector_epoch"], tip["epoch"]))
     owners = {e["key"]: e["alg"] for e in tip.get("owner_keys", [])}
     require(signed["key"] in owners, "the statement's key is not one of the tip manifest's owner_keys")
     membership.verify_revocation(owners[signed["key"]], signed["key"], raw, signed["sig"], "owner statement")
@@ -129,6 +181,33 @@ def witness_epoch(export, receipt, keys, identity, stream):
         if isinstance(value, dict) and value.get("outcome") == "ALLOW" and isinstance(value.get("epoch"), int) and not isinstance(value.get("epoch"), bool):
             top = max(top, value["epoch"])
     require(receipt.get("sequence") == len(export) and receipt.get("line_chain") == chain and receipt.get("line_sha256") == hashlib.sha256(line).hexdigest(),
+            "the collector's receipt is not for this export (its length, its line chain or its last line)")
+    require(trails._receipt_signed(receipt, keys, identity, stream), "the collector's receipt does not verify under the pinned receipt keys")
+    return top
+
+
+def witness_sequence(export, receipt, keys, identity, stream):
+    """The highest beat-propose ALLOW sequence in the collector's export of one node's sync stream, from the
+    same export and receipt as `witness_epoch`. Returns 0 if no beat-propose ALLOW event is present. Used for
+    the recount floor under single-node (docs/design/single-node.md 4.7)."""
+    from deploy.baremetal import trails
+    require(isinstance(export, list) and export, "the witness export holds no event")
+    chain, top, last = trails.LINE_CHAIN_START, 0, b""
+    for i, event in enumerate(export):
+        line = ((event.get("detail") or {}).get("line") or "").encode() + b"\n"
+        require((event.get("detail") or {}).get("line_sha256") == hashlib.sha256(line).hexdigest(),
+                "witness event %d does not hold the line it names" % (i + 1))
+        chain = trails.line_chain(chain, line)
+        last = line
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(value, dict) and value.get("event") == "beat-propose" and value.get("outcome") == "ALLOW"
+                and isinstance(value.get("sequence"), int) and not isinstance(value.get("sequence"), bool)):
+            top = max(top, value["sequence"])
+    require(receipt.get("sequence") == len(export) and receipt.get("line_chain") == chain
+            and receipt.get("line_sha256") == hashlib.sha256(last).hexdigest(),
             "the collector's receipt is not for this export (its length, its line chain or its last line)")
     require(trails._receipt_signed(receipt, keys, identity, stream), "the collector's receipt does not verify under the pinned receipt keys")
     return top
@@ -175,16 +254,19 @@ def owner_record(signed):
 def handed(node, given, trail):
     """_restore's half, as regalia-sync: `given` is what apply() hands over. A refusal apply() made as root comes as
     `refused` and is only recorded (the trail is regalia-sync's: one writer); anything else is a restore."""
-    event = {"event": "recover", "sources": sorted(given["sources"]), "minimum": given["minimum"]}
+    sources = given.get("sources", {})
+    event_sources = sorted(sources) if sources else (["owner-chain"] if given.get("owner_chain") is not None else [])
+    event = {"event": "recover", "sources": event_sources, "minimum": given["minimum"]}
     if given.get("one_source"):
         event["one_source"] = given["one_source"]
     if given.get("refused"):
         trail(dict(event, outcome="DENY", reason=str(given["refused"])[:240]))
         return {"recorded": True}
-    return {"epoch": restore(node, given["sources"], given["minimum"], trail, event)}
+    return {"epoch": restore(node, sources, given["minimum"], trail, event,
+                              owner_chain=given.get("owner_chain"))}
 
 
-def restore(node, sources, minimum, trail, event=None):
+def restore(node, sources, minimum, trail, event=None, owner_chain=None):
     """As regalia-sync: convergence.recover through the node's Store. Returns the epoch it is at.
     It checks NO owner statement and takes `minimum` as given: every check of --one-source is apply()'s, as root,
     before the hand-over. That is no weaker than regalia-sync already is (it can call convergence.recover with any
@@ -193,7 +275,7 @@ def restore(node, sources, minimum, trail, event=None):
     from deploy.baremetal import convergence, node as node_module
     event = event or {"event": "recover", "sources": sorted(sources), "minimum": minimum}
     try:
-        now = convergence.recover(node.store(), sources, minimum=minimum)
+        now = convergence.recover(node.store(), sources, minimum=minimum, owner_chain=owner_chain)
     except Refused as refusal:
         trail(dict(event, outcome="DENY", reason=str(refusal)[:240]))
         raise
@@ -225,8 +307,13 @@ def second_node_answers(node, tip, peer):
 def owner_check(node, signed, purpose, peer, now=None, boot_id=None):
     """The checks this node makes of the owner's statement for a one-source `purpose` from `peer`, as a callable given
     the peer's tip (refuses, or returns the statement): this boot's session, unexpired by authenticated time, the
-    statement over that tip by one of its owner_keys, and no second node that may authorize answering."""
-    def check(tip):
+    statement over that tip by one of its owner_keys, and no second node that may authorize answering.
+
+    Under a single-node tip (the owner-chain path, docs/design/single-node.md 4.7), `second_node_answers` is
+    not consulted (there are no other nodes) and the statement must be v2 (with collector_epoch)."""
+    def check(tip, single_node=None):
+        if single_node is None:
+            single_node = membership.profile(tip) == membership.SINGLE_NODE
         if boot_id is None:
             with open("/proc/sys/kernel/random/boot_id") as f:
                 booted = f.read().strip()
@@ -234,18 +321,25 @@ def owner_check(node, signed, purpose, peer, now=None, boot_id=None):
             booted = boot_id
         seconds = now() if now else _authenticated_now(node)          # one authenticated time for the session and the statement
         session = held_session(os.path.join(node.cfg["run_dir"], SESSION_FILE), booted, now=lambda: seconds)
-        st = verify_owner(tip, signed, purpose, node.node_id, session_id(session), seconds)
-        answered = second_node_answers(node, tip, peer)
-        require(not answered, "%s answers over the service tunnel: %s from two nodes, not with the owner" % (", ".join(answered), purpose))
+        st = verify_owner(tip, signed, purpose, node.node_id, session_id(session), seconds, single_node=single_node)
+        if not single_node:
+            # under multi-node, check that no second node answers (the owner is the second source)
+            answered = second_node_answers(node, tip, peer)
+            require(not answered, "%s answers over the service tunnel: %s from two nodes, not with the owner" % (", ".join(answered), purpose))
         return st
     return check
 
 
-def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, now=None):
+def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, now=None,
+          owner_chain=None, boot_id=None):
     """Root at the node's console: check everything, take the operator's typed phrase, then restore as regalia-sync.
     `peers` {node: chain}; `one_source` the owner's signed statement (or None); `typed(prompt)` reads the console.
     Every decision is a line in the sync trail: a refusal here is handed over to regalia-sync to record, as the
-    restore is (#387)."""
+    restore is (#387).
+
+    `owner_chain` (the owner's whole chain, as a list of envelopes) and `one_source` (the owner's signed
+    v2 statement) together form the single-node owner-chain recovery path (docs/design/single-node.md 4.7):
+    `--owner-chain CHAIN.json --owner-statement ST.json` with no `--peer`."""
     from deploy.baremetal import keyfd, node as node_module
     node = node_module.Node(node_module.load(config_path), run)
     owner = owner_record(one_source) if one_source is not None else None
@@ -257,17 +351,27 @@ def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, n
 
     minimum = None if one_source is None else 1         # None: convergence.recover's rule, 1 while the record pins, else 2
     try:
-        require(peers, "at least one --peer NODE=CHAIN.json")
+        require(peers or owner_chain, "at least one --peer NODE=CHAIN.json or --owner-chain CHAIN.json")
         root_key = node.cfg["root_key"]
         known = last_known(node.path("membership.json"), root_key)
         tips = {name: verify_chain(chain, root_key, known) for name, chain in peers.items()}
-        if one_source is not None:
+        if owner_chain is not None:
+            require(not peers, "--owner-chain does not take --peer: give the owner's chain alone (single-node, docs/design/single-node.md 4.7)")
+            tip = verify_chain(owner_chain, root_key, known)
+            # under single-node, the owner's statement must be v2 (with collector_epoch)
+            is_single = membership.profile(tip) == membership.SINGLE_NODE
+            owner_check(node, one_source, "recover", "owner-chain", now, boot_id=boot_id)(tip, single_node=is_single)
+        if one_source is not None and owner_chain is None:
             require(len(peers) == 1, "--one-source takes exactly one --peer: with two, recover from both")
             (peer, tip), = tips.items()
             owner_check(node, one_source, "recover", peer, now)(tip)
-        epoch_tip = max(tips.values(), key=lambda m: m["epoch"])
-        phrase = "recover %s to epoch %d %s from %s%s" % (node.node_id, epoch_tip["epoch"], membership.digest(epoch_tip)[:8],
-                                                         "+".join(sorted(peers)), " and the owner" if one_source is not None else "")
+        epoch_tip = max(list(tips.values()) + ([tip] if owner_chain is not None else []), key=lambda m: m["epoch"])
+        from_str = "+".join(sorted(peers)) if peers else "owner-chain"
+        phrase = "recover %s to epoch %d %s from %s collector at epoch %d" % (
+            node.node_id, epoch_tip["epoch"], membership.digest(epoch_tip)[:8], from_str,
+            one_source["statement"]["collector_epoch"]) if owner_chain is not None and one_source is not None \
+            else "recover %s to epoch %d %s from %s%s" % (node.node_id, epoch_tip["epoch"], membership.digest(epoch_tip)[:8],
+                                                          "+".join(sorted(peers)), " and the owner" if one_source is not None else "")
         said = (typed or keyfd.tty_line)("Type exactly: %s\n> " % phrase)
         require(said.strip() == phrase, "the phrase typed is not this recovery's: nothing was changed")
     except Refused as refusal:
@@ -276,7 +380,7 @@ def apply(config_path, peers, one_source=None, typed=None, run=subprocess.run, n
             raise Refused("%s; and the refusal could not be recorded in the sync trail: %s"
                           % (refusal, (done.stderr or done.stdout).strip()[-400:])) from refusal
         raise
-    done = hand_over({"minimum": minimum})
+    done = hand_over({"minimum": minimum, "owner_chain": owner_chain, "one_source": one_source})
     require(done.returncode == 0, "the restore, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     return json.loads(done.stdout.strip().splitlines()[-1])["epoch"]
 
@@ -297,6 +401,8 @@ def main(argv=None):
     a.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json")
     a.add_argument("--one-source", action="store_true", help="one peer, the owner the second source (needs --owner-statement)")
     a.add_argument("--owner-statement")
+    a.add_argument("--owner-chain", help="the owner's whole chain (single-node: docs/design/single-node.md 4.7; "
+                    "refused under a multi-node tip)")
     r = sub.add_parser("_restore")
     r.add_argument("--config", required=True)
     args = parser.parse_args(argv)
@@ -332,7 +438,12 @@ def main(argv=None):
             require(args.owner_statement, "--one-source needs --owner-statement")
             with open(args.owner_statement, "rb") as f:
                 statement_doc = membership.load(f.read(65536))
-        print("RECOVERED: this node is at epoch %d" % apply(args.config, peers, statement_doc))
+        owner_chain_doc = None
+        if args.owner_chain:
+            with open(args.owner_chain, "rb") as f:
+                owner_chain_doc = membership.load(f.read(MAX_CHAIN_BYTES + 1), MAX_CHAIN_BYTES)
+        print("RECOVERED: this node is at epoch %d" % apply(args.config, peers, statement_doc,
+                                                            owner_chain=owner_chain_doc))
     except (Refused, OSError, ValueError, KeyError) as refusal:
         print("REFUSED: %s" % refusal, file=sys.stderr)
         return 1

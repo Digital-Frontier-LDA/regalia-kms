@@ -951,6 +951,112 @@ class Command(Case):
                 self.assertEqual(self.state(), before)
 
 
+class OwnerChainReanchor(Case):
+    """The single-node re-anchor (--owner-chain, docs/design/single-node.md 4.7): the owner's whole chain is the
+    sole source, under a single-node tip only. It goes through the same floor, records and extends-disk checks
+    but skips the "may authorize" check (the owner is not a node)."""
+
+    def setUp(self):
+        import tests.test_baremetal_membership_v5 as v5
+        from deploy.baremetal import membership as mm
+        super().setUp()
+        self.v5 = v5
+        # a fresh signing key for the owner chain (distinct from the node's root key): the chain is root-signed,
+        # and the owner key in owner_keys is the statement signer, not the chain signer.
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.test_baremetal_membership_v4 import pub as _pub
+        self.owner_key = Ed25519PrivateKey.generate()
+        self.owner_pub = _pub(self.owner_key)
+        # the single-node chain is v5: a Store committing it would set hw._schema to v5 (a QUORUM schema) and
+        # refuse the owner-written anchor in the test fixture. Suppress _judge_by for the store's lifetime,
+        # as the convergence OwnerChain tests do.
+        self.store._judge_by = lambda manifests: None
+
+    def single_chain(self, upto):
+        """Epochs 1..upto of a single-node v5 chain, root-signed, with the owner key in owner_keys."""
+        self.v5 = None  # set in setUp
+        import tests.test_baremetal_membership_v5 as v5m
+        from tests.test_baremetal_membership import ROOT
+        envs, cur = [], None
+        for e in range(1, upto + 1):
+            man = v5m.single5(e, m.digest(cur) if cur else "")
+            man["owner_keys"] = [{"alg": "ed25519", "key": self.owner_pub}]
+            env = sign(man, ROOT)
+            cur = m.accept(cur, env, ROOT_PUB)
+            envs.append(env)
+        return envs
+
+    def multi_chain(self, upto):
+        """Epochs 1..upto of a multi-node v5 chain, root-signed, with the owner key in owner_keys."""
+        import tests.test_baremetal_membership_v5 as v5m
+        from tests.test_baremetal_membership import ROOT
+        envs, cur = [], None
+        for e in range(1, upto + 1):
+            man = v5m.manifest5(e, m.digest(cur) if cur else "", v5m.nodes4())
+            man["owner_keys"] = [{"alg": "ed25519", "key": self.owner_pub}]
+            env = sign(man, ROOT)
+            cur = m.accept(cur, env, ROOT_PUB)
+            envs.append(env)
+        return envs
+
+    def _store_for(self, chain, node_id="a"):
+        """A store whose disk holds the chain's first envelope, anchored at the chain's tip epoch (the record lost)."""
+        path = self.d + "/owner-membership.json"
+        with open(path, "wb") as f:
+            f.write(m.canonical(chain[:1]))
+        hw = m.HighWater("0x1500100", lock_path=self.d + "/owner-hw.lock", run=self.run_tpm)
+        hw.define()
+        hw.advance(chain[-1]["manifest"]["epoch"])
+        for index in hw.record_indices:
+            self.tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=GARBAGE)
+        store = m.Store(path, ROOT_PUB, hw)
+        store._judge_by = lambda manifests: None
+        return store, hw
+
+    def test_single_node_plan_with_owner_chain(self):
+        """Under a single-node tip the owner's chain alone is a valid source: plan succeeds with sources={}."""
+        chain = self.single_chain(3)
+        store, hw = self._store_for(chain, node_id="a")
+        planned = reanchor.plan(store, {}, "a", owner_chain=chain)
+        self.assertEqual(planned["epoch"], 3)
+        self.assertEqual(planned["sources"], ["owner-chain"])
+
+    def test_single_node_plan_refuses_node_sources_with_owner_chain(self):
+        """--owner-chain takes the owner's chain alone: a node source alongside it is refused."""
+        chain = self.single_chain(3)
+        store, _ = self._store_for(chain)
+        self.refused("--owner-chain takes the owner's chain alone", reanchor.plan, store, {"a": chain}, "a", owner_chain=chain)
+
+    def test_multi_node_refuses_owner_chain(self):
+        """Under a multi-node tip the owner chain is refused: only a single-node manifest accepts it as the sole source."""
+        chain = self.multi_chain(3)
+        store, _ = self._store_for(chain, node_id="a")
+        self.refused("owner_chain is refused under a multi-node tip", reanchor.plan, store, {}, "a", owner_chain=chain)
+
+    def test_single_node_reanchor_with_owner_chain(self):
+        """The full reanchor() call: the owner chain is the sole source, the anchor is written, and the event
+        names 'owner-chain' as the source."""
+        chain = self.single_chain(3)
+        store, hw = self._store_for(chain)
+        events = []
+        planned = reanchor.reanchor(store, {}, "a",
+                                    lambda p: reanchor.phrase("a", p),
+                                    events.append,
+                                    owner_chain=chain)
+        self.assertEqual(planned["epoch"], 3)
+        self.assertEqual((hw.value(), hw.record()), (3, (3, m.digest(chain[-1]["manifest"]))))
+        self.assertEqual([e.get("sources") for e in events], [["owner-chain"], ["owner-chain"]])
+        self.assertEqual([e.get("outcome") for e in events], [None, "ALLOW"])
+
+    def test_single_node_owner_chain_must_reach_anchored_epoch(self):
+        """The owner chain must reach the anchored epoch: a chain ending below the floor is refused."""
+        full = self.single_chain(3)
+        short = self.single_chain(2)
+        store, _ = self._store_for(full)
+        # anchored at epoch 3, chain ends at 2
+        self.refused("a fetched chain ends at epoch 2, below the TPM high-water 3", reanchor.plan, store, {}, "a", owner_chain=short)
+
+
 class OnlyAnOperator(unittest.TestCase):
     """Re-anchoring resets rollback protection. Nothing a service runs, and nothing that handles what a peer
     sent, may reach it."""

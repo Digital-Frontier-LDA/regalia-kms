@@ -113,10 +113,21 @@ def current(chain, root_key, anchor):
     return manifest
 
 
-def plan(counter, manifest, documents, prior=0):
+def plan(counter, manifest, documents, prior=0, owner_statement=None, signer=None):
     """What a recount would do, verified without changing anything: {"reason": why the counter is unusable,
     "old": what the old counter still reads or None, "held": [(sequence, epoch), ...] of the verified
-    heartbeats, "prior": the floor an earlier run planned, "floor": the new counter's value}."""
+    heartbeats, "prior": the floor an earlier run planned, "floor": the new counter's value}.
+
+    Under a single-node manifest (docs/design/single-node.md 4.7), where the node signs its own heartbeats
+    on the SAME TPM's beat signing counter (nv_signing):
+      * `owner_statement` (the owner's v2 statement of purpose recount, checked by the caller: over this
+        manifest, for this node, this session, with `collector_sequence`) is a FLOOR SOURCE, beside the
+        heartbeats: its `collector_sequence` (the collector's highest beat-propose ALLOW) raises the floor.
+        With neither a verified heartbeat nor the statement, the recount is refused (the floor cannot be known).
+      * LIVENESS: the node will sign its next heartbeat on its beat signing counter. The floor is the max of
+        everything named above AND the signing counter's current value: a floor below what the node has
+        already signed would make the next heartbeat a replay. No margin is added: the counter moves one
+        heartbeat at a time."""
     # A counter keeps no record, so HighWater.unusable() (which judges the record too) is not the test: the
     # counter's own read is. Unusable means the counter itself is wrong; any other refusal (a TPM that does
     # not answer) says nothing about it and is raised.
@@ -126,6 +137,16 @@ def plan(counter, manifest, documents, prior=0):
     except membership.Unusable as unusable:
         reason = str(unusable)
     require(reason is not None, "the counter is usable: it is not reset")
+    single = membership.profile(manifest) == membership.SINGLE_NODE
+    if owner_statement is not None:
+        require(single, "an owner statement of purpose recount is refused under a %s manifest: the owner is not a floor "
+                "source for a multi-node recount (the heartbeats are)" % membership.profile(manifest))
+        st = owner_statement["statement"] if isinstance(owner_statement, dict) and "statement" in owner_statement else owner_statement
+        require(st.get("purpose") == "recount", "the owner statement is for %r, not recount" % st.get("purpose"))
+        require(isinstance(st.get("collector_sequence"), int) and not isinstance(st["collector_sequence"], bool),
+                "the recount statement must name collector_sequence (an integer)")
+    else:
+        st = None
     old, _ = counter.remains()
     held = []
     for document in documents:
@@ -135,9 +156,21 @@ def plan(counter, manifest, documents, prior=0):
             except Refused:
                 continue                          # signed by nobody the manifest names: it raises nothing
             held.append((body["sequence"], body["epoch"]))
-    require(held, "no heartbeat given verifies against the current manifest: the floor cannot be known. Give the node's "
-            "freshness state, or another node's")
-    floor = max([old or 0, prior] + [sequence for sequence, _ in held])
+    if st is None:
+        require(held, "no heartbeat given verifies against the current manifest: the floor cannot be known. Give the node's "
+                "freshness state, or another node's")
+    floor = [old or 0, prior] + [sequence for sequence, _ in held]
+    if st is not None:
+        floor.append(st["collector_sequence"])
+    # liveness: under single-node the node signs its own heartbeats on its beat signing counter (nv_signing,
+    # the SAME TPM): the floor must not go below what it has already signed, else the next heartbeat is a
+    # replay. No margin: the counter moves one sequence per heartbeat.
+    if single:
+        signed = signer() if signer is not None else 0
+        require(isinstance(signed, int) and not isinstance(signed, bool) and signed >= 0,
+                "the beat signing counter's value must be a non-negative integer")
+        floor.append(signed)
+    floor = max(floor)
     return {"reason": reason, "old": old, "held": sorted(held), "prior": prior, "floor": floor}
 
 
@@ -145,15 +178,23 @@ def phrase(index, planned):
     return "recount %s at %d" % (index, planned["floor"])
 
 
-def recount(counter, manifest, documents, typed, sink, floor_path):
+def recount(counter, manifest, documents, typed, sink, floor_path, owner_statement=None, signer=None):
     """Plan, record the request, check what the operator typed, carry the floor, redefine the counter at the
-    floor, record the outcome. Returns the new counter's value."""
+    floor, record the outcome. Returns the new counter's value.
+
+    `owner_statement` (the owner's v2 recount statement, checked by the caller) and `signer` (a callable that
+    returns the beat signing counter's current value, under single-node) are passed to plan()."""
     def event(kind, planned, **more):
         return dict({"event": kind, "peer": "operator", "index": counter.index, "floor": planned.get("floor", 0),
-                     "old": planned.get("old"), "held": planned.get("held", []), "counter_was": planned.get("reason", "")}, **more)
+                     "old": planned.get("old"), "held": planned.get("held", []), "counter_was": planned.get("reason", ""),
+                     "owner_sequence": (owner_statement["statement"]["collector_sequence"]
+                                        if owner_statement is not None and isinstance(owner_statement, dict)
+                                        and "statement" in owner_statement and isinstance(owner_statement.get("statement"), dict)
+                                        and isinstance(owner_statement["statement"].get("collector_sequence"), int)
+                                        else None)}, **more)
 
     try:
-        planned = plan(counter, manifest, documents, carried(floor_path))
+        planned = plan(counter, manifest, documents, carried(floor_path), owner_statement=owner_statement, signer=signer)
     except BaseException as refusal:              # any failure to plan is recorded, an OSError on the floor file too
         sink(event("recount", {}, outcome="DENY", reason=str(refusal)[:240] or type(refusal).__name__))
         raise
@@ -194,11 +235,14 @@ def _read_json(path, limit):
 
 def main(argv=None, ask=None, run=None):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE: run it again."""
-    from deploy.baremetal import node
+    from deploy.baremetal import node as node_module
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.recount", description=__doc__.splitlines()[0])
     ap.add_argument("--config", required=True, help="this host's node.json")
     ap.add_argument("--heartbeat", action="append", default=[], metavar="FILE",
                     help="another heartbeat to take the floor from (e.g. another node's freshness state); repeatable")
+    ap.add_argument("--owner-statement",
+                    help="the owner's v2 statement of purpose recount (single-node: docs/design/single-node.md 4.7): "
+                         "a floor source beside the heartbeats (its collector_sequence)")
     ap.add_argument("--audit-log", default=trails.where("recount"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ownerauth.add_arguments(ap)
@@ -213,10 +257,10 @@ def main(argv=None, ask=None, run=None):
     try:
         require("TPM2TOOLS_TCTI" not in os.environ, "TPM2TOOLS_TCTI is set in the environment: the TPM is the configuration's; unset it")
         raw = _read_json(args.config, 64 * 1024)
-        require(isinstance(raw, dict) and raw.get("schema") == node.SCHEMA, "--config must be a node configuration")
+        require(isinstance(raw, dict) and raw.get("schema") == node_module.SCHEMA, "--config must be a node configuration")
         import subprocess
         run = run or subprocess.run
-        cfg = node.validate(raw)
+        cfg = node_module.validate(raw)
         index, defaults = cfg["nv_heartbeat"], [os.path.join(cfg["state_dir"], "freshness.json")]
         # the owner authorization the recount deletes and defines with (#242), from the node's envelope on standard
         # input, judged now; the phrase is then typed at the terminal itself
@@ -225,7 +269,7 @@ def main(argv=None, ask=None, run=None):
             ownerauth.measured_once()               # the value stays off the TPM bus only on measured tools (#414)
         if owner_auth is not None and ask is None:
             ask = ownerauth.console
-        counter = node.heartbeat_counter(cfg, run, owner_auth)    # the service's own construction and lock
+        counter = node_module.heartbeat_counter(cfg, run, owner_auth)    # the service's own construction and lock
         active = run(["systemctl", "is-active", "regalia-sync.service"], capture_output=True, timeout=10)
         status = active.stdout.decode(errors="replace").strip()
         # only a stopped service passes: "activating", "deactivating", "reloading" or a systemctl that failed
@@ -237,10 +281,32 @@ def main(argv=None, ask=None, run=None):
         require(not missing, "--heartbeat %s does not exist" % ", ".join(missing))
         # a node's anchor may be written by policy (#242): read it with the node's approved-image policy
         anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(state, "highwater.lock"),
-                                      policy=lambda: node.image_policy(cfg))
+                                      policy=lambda: node_module.image_policy(cfg))
         chain = _read_json(os.path.join(state, "membership.json"), membership.MAX_CHAIN_BYTES)
         require(isinstance(chain, list) and chain, "the host holds no membership chain")
         manifest = current(chain, cfg["root_key"], anchor)
+        owner_statement = None
+        if args.owner_statement:
+            owner_statement = _read_json(args.owner_statement, 65536)
+        node = None
+        if owner_statement is not None:
+            # the statement is checked like the heartbeats: by recover.verify_owner, over this node's manifest,
+            # for this node, this boot's session, by authenticated time, with purpose recount (its v2 keys carry
+            # collector_sequence). Under a multi-node tip it is refused by plan().
+            from deploy.baremetal import recover
+            node = node.Node(cfg, run)
+            with open("/proc/sys/kernel/random/boot_id") as f:
+                boot_id = f.read().strip()
+            seconds = heartbeat.authenticated_now(node.clock(), node.tpm_clock(), None)[0]
+            session = recover.held_session(os.path.join(cfg["run_dir"], recover.SESSION_FILE), boot_id, now=lambda: seconds)
+            recover.verify_owner(manifest, owner_statement, "recount", cfg["node_id"],
+                                 recover.session_id(session), seconds,
+                                 single_node=membership.profile(manifest) == membership.SINGLE_NODE)
+        signer = None
+        if membership.profile(manifest) == membership.SINGLE_NODE:
+            # liveness (docs/design/single-node.md 4.7): the node signs its own heartbeats on its beat signing
+            # counter (nv_signing, the same TPM): the floor must not go below what it has already signed.
+            signer = node.signing_counter(cfg, run).value if node is not None else node_module.signing_counter(cfg, run).value
         documents = [_read_json(path, heartbeat.MAX_BYTES * 2) for path in [p for p in defaults if os.path.exists(p)] + args.heartbeat]
         tpm = cfg["tcti"] or "the default TPM"
 
@@ -252,12 +318,15 @@ def main(argv=None, ask=None, run=None):
                 print("An earlier run planned a floor of %d." % planned["prior"])
             for sequence, epoch in planned["held"]:
                 print("A verified heartbeat: sequence %d, epoch %d." % (sequence, epoch))
+            if owner_statement is not None and isinstance(owner_statement, dict) and isinstance(owner_statement.get("statement"), dict):
+                print("The owner's statement (purpose recount) witnessed collector sequence %d." % owner_statement["statement"]["collector_sequence"])
             print("Recounting DELETES this counter and defines a new one reading %d: nothing at or below it is accepted again." % planned["floor"])
             try:
                 return (ask or input)("Type exactly: %s\n> " % phrase(index, planned))
             except EOFError:
                 return None
-        value = recount(counter, manifest, documents, typed, record, os.path.join(state, "recount-floor-%s.json" % index))
+        value = recount(counter, manifest, documents, typed, record, os.path.join(state, "recount-floor-%s.json" % index),
+                        owner_statement=owner_statement, signer=signer)
     except Incomplete as failure:
         print("INCOMPLETE: %s: run it again" % failure, file=sys.stderr)
         return 3

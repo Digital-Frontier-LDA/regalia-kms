@@ -4,6 +4,7 @@ Freshness under the owner's one-hour cap. Each node is beat's test node (a fake 
 owner's key is a software Ed25519 key standing in for the YubiKey (Pkcs11Signer's Ed25519 path is tested against
 SoftHSM in test_baremetal_p11sign)."""
 import unittest
+import unittest.mock
 
 from deploy.baremetal import heartbeat as hb
 from deploy.baremetal import membership as m
@@ -132,6 +133,119 @@ class Owner(Case):
         self.assertEqual(self.nodes["a"].signing.value(), 0)
         self.man = manifest5(1, "", nodes4(), MULTI)
         self.assertEqual(self.proposed()["heartbeat"]["sequence"], 1)
+
+
+class SingleNodeRecovery(unittest.TestCase):
+    """sign_recovery under a single-node tip (docs/design/single-node.md 4.7): the collector is mandatory,
+    the statement is v2 with collector_epoch, and for recount also collector_sequence."""
+
+    def setUp(self):
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership import ROOT, ROOT_PUB, sign
+        import deploy.baremetal.membership as mm
+        self.v5 = v5
+        self.ROOT = ROOT
+        self.ROOT_PUB = ROOT_PUB
+        self._sign_fn = sign
+        self.key = OwnerKey(OWNER_KEYS[0])
+        # a single-node chain at epoch 3, root-signed, with the owner key in owner_keys
+        self.chain = []
+        cur = None
+        for e in range(1, 4):
+            man = v5.single5(e, mm.digest(cur) if cur else "")
+            man["owner_keys"] = [{"alg": "ed25519", "key": pub(OWNER_KEYS[0])}]
+            env = self._sign_fn(man, ROOT)
+            cur = mm.accept(cur, env, ROOT_PUB)
+            self.chain.append(env)
+        self.record = [{"epoch": 1, "digest": mm.digest(self.chain[0]["manifest"]), "verified": True}]
+        self.now = 1000
+        self.issued = 1000
+        self.typed = None
+        self.said = []
+
+    def confirm(self, text):
+        self.said.append(text)
+        return self.typed
+
+    def do_sign(self, purpose="recover", witnesses=None, collector_sequence=None, counter_epoch=None):
+        self.typed = None
+        self.said = []
+        from deploy.baremetal import recover
+        tip = recover.verify_chain(self.chain, self.ROOT_PUB)
+        want = "%s a 3 %s" % (purpose, m.digest(tip)[:8])
+        # under single-node, the "no collector" suffix is absent
+        self.typed = want
+        if witnesses:
+            mock_ctx = unittest.mock.patch("deploy.baremetal.recover.witness_epoch", return_value=1)
+        else:
+            mock_ctx = unittest.mock.patch("deploy.baremetal.recover.witness_epoch", side_effect=AssertionError("should not be called"))
+        with mock_ctx:
+            return owner.sign_recovery(self.chain, self.ROOT_PUB, self.record, purpose, "a", "s-1",
+                                       lambda: self.key, self.confirm, self.now,
+                                       witnesses=witnesses, counter_epoch=counter_epoch,
+                                       say=self.said.append, issued=self.issued,
+                                       collector_sequence=collector_sequence)
+
+    def test_single_node_requires_witness(self):
+        """Under single-node the collector is mandatory: no witness, no statement."""
+        from deploy.baremetal import membership as mm
+        self.assertRaisesRegex(mm.Refused, "audit collector is mandatory",
+                               self.do_sign, "recover", witnesses=None)
+        self.assertEqual(self.key.signed, [])
+
+    def test_single_node_statement_has_collector_epoch(self):
+        """Under single-node with a witness, the statement is v2 and carries collector_epoch."""
+        from deploy.baremetal import recover
+        signed = self.do_sign("recover", witnesses=[(None, None, None, None, None)])
+        st = signed["statement"]
+        self.assertIn("collector_epoch", st)
+        self.assertEqual(st["collector_epoch"], 1)
+        # v2 prefix
+        msg = recover.message(st)
+        self.assertIn(b"v2", msg)
+
+    def test_single_node_recount_requires_collector_sequence(self):
+        """A recount statement under single-node needs collector_sequence."""
+        from deploy.baremetal import membership as mm
+        self.assertRaisesRegex(mm.Refused, "collector_sequence",
+                               self.do_sign, "recount", witnesses=[(None, None, None, None, None)], collector_sequence=None)
+        self.assertEqual(self.key.signed, [])
+
+    def test_single_node_recount_with_collector_sequence(self):
+        """A recount statement under single-node with a witness and collector_sequence is v2 with both fields."""
+        from deploy.baremetal import recover
+        signed = self.do_sign("recount", witnesses=[(None, None, None, None, None)], collector_sequence=42)
+        st = signed["statement"]
+        self.assertEqual(st["collector_epoch"], 1)
+        self.assertEqual(st["collector_sequence"], 42)
+        msg = recover.message(st)
+        self.assertIn(b"v2", msg)
+
+    def test_multi_node_keeps_v1_and_no_collector_escape(self):
+        """Under a multi-node tip, v1 statements are accepted and the 'no collector' escape works."""
+        from tests.test_baremetal_membership import sign, ROOT, ROOT_PUB
+        import deploy.baremetal.membership as mm
+        import tests.test_baremetal_membership_v5 as v5
+        # a multi-node chain at epoch 3
+        chain = []
+        cur = None
+        for e in range(1, 4):
+            man = v5.manifest5(e, mm.digest(cur) if cur else "", v5.nodes4())
+            man["owner_keys"] = [{"alg": "ed25519", "key": pub(OWNER_KEYS[0])}]
+            env = self._sign_fn(man, ROOT)
+            cur = mm.accept(cur, env, ROOT_PUB)
+            chain.append(env)
+        record = [{"epoch": 1, "digest": mm.digest(chain[0]["manifest"]), "verified": True}]
+        from deploy.baremetal import recover
+        tip = recover.verify_chain(chain, ROOT_PUB)
+        self.typed = "recover a 3 %s no collector" % m.digest(tip)[:8]
+        signed = owner.sign_recovery(chain, ROOT_PUB, record, "recover", "a", "s-1",
+                                     lambda: self.key, self.confirm, self.now,
+                                     witnesses=None, say=self.said.append, issued=self.issued)
+        st = signed["statement"]
+        self.assertNotIn("collector_epoch", st)
+        msg = recover.message(st)
+        self.assertIn(b"v1", msg)
 
 
 if __name__ == "__main__":

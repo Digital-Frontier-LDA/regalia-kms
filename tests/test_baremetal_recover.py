@@ -422,3 +422,68 @@ class Recovers(ct.Case):
         self.assertEqual(self.trail, [])
         self.assertFalse(c.pinned())                                             # nothing was restored
         self.assertFalse(os.path.exists(c.path))
+
+
+class SingleNodeStatement(Witness):
+    """The v2 owner statement under single-node (docs/design/single-node.md 4.7): the collector's witnessed
+    epoch is bound into the statement, and a collector above the tip is a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        self.collector = Ed25519PrivateKey.generate()
+        self.collector_pub = pub(self.collector)
+
+    def witness(self, epoch):
+        export, chain, last = self.export([1, epoch])
+        return (export, self.receipt(export, chain, last, self.collector), [self.collector_pub], "id" * 32, "site-a.sync")
+
+    def v2_statement(self, collector_epoch, purpose="recover", node="a", tip=None, session=None):
+        st = recover.statement(purpose, node, tip or self.m3, session or self.session, T0 + 300,
+                               collector_epoch=collector_epoch)
+        return {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+
+    def test_v2_statement_has_collector_epoch_in_its_message(self):
+        """A v2 statement's message includes collector_epoch and uses the v2 prefix."""
+        st = recover.statement("recover", "a", self.m3, self.session, T0 + 300, collector_epoch=3)
+        self.assertIn("collector_epoch", st)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recover/v2\0"))
+        # the v1 prefix is not used
+        self.assertFalse(raw.startswith(b"regalia-recover/v1\0"))
+
+    def test_v2_statement_for_recount_has_collector_sequence(self):
+        """A recount statement requires both collector_epoch and collector_sequence."""
+        st = recover.statement("recount", "a", self.m3, self.session, T0 + 300,
+                               collector_epoch=3, collector_sequence=41)
+        self.assertIn("collector_epoch", st)
+        self.assertIn("collector_sequence", st)
+        self.assertEqual(st["collector_sequence"], 41)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
+        # without collector_sequence, the recount statement is refused
+        self.refused("a recount statement needs collector_sequence", recover.statement,
+                     "recount", "a", self.m3, self.session, T0 + 300, collector_epoch=3)
+
+    def test_verify_owner_under_single_node_requires_v2(self):
+        """Under single_node=True, verify_owner requires collector_epoch in the statement."""
+        single_tip = self.m3  # m3 is a v4 manifest, but we pass single_node=True to simulate
+        # a v1 statement (no collector_epoch) is refused
+        v1 = self.signed()
+        self.refused("under single-node the statement must be v2",
+                     recover.verify_owner, single_tip, v1, "recover", "b", self.session, T0, single_node=True)
+        # a v2 statement with collector_epoch <= tip epoch is accepted
+        v2 = self.v2_statement(3, node="b")
+        self.assertEqual(recover.verify_owner(single_tip, v2, "recover", "b", self.session, T0,
+                                              single_node=True)["collector_epoch"], 3)
+
+    def test_verify_owner_under_single_node_refuses_collector_above_tip(self):
+        """A collector_epoch above the tip's epoch is a refusal: a revocation was withheld."""
+        v2 = self.v2_statement(99, node="b")
+        self.refused("the collector's witnessed epoch 99 is above the tip's epoch 3",
+                     recover.verify_owner, self.m3, v2, "recover", "b", self.session, T0, single_node=True)
+
+    def test_verify_owner_under_multi_node_accepts_v1(self):
+        """Under single_node=False (multi-node), v1 statements are accepted as before."""
+        v1 = self.signed()
+        self.assertEqual(recover.verify_owner(self.m3, v1, "recover", "b", self.session, T0,
+                                              single_node=False)["epoch"], 3)

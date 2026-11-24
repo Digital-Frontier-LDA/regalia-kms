@@ -34,9 +34,9 @@ class Case(unittest.TestCase):
         """The counter's index gone (what #182 refuses as Unusable): every heartbeat is then refused."""
         self.tpm.nv.pop(self.counter.index)
 
-    def refused(self, reason, fn, *args):
+    def refused(self, reason, fn, *args, **kw):
         with self.assertRaises(m.Refused) as caught:
-            fn(*args)
+            fn(*args, **kw)
         self.assertIn(reason, str(caught.exception))
 
 
@@ -108,6 +108,86 @@ class Recount(Case):
         self.assertEqual(self.events[-1]["outcome"], "INCOMPLETE")
         self.counter.run = real
         self.assertEqual(recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor), 40)
+
+
+class SingleNodeRecount(Case):
+    """Under a single-node manifest (docs/design/single-node.md 4.7): the owner's v2 recount statement is a
+    floor source beside the heartbeats, and the floor must not go below the node's beat signing counter."""
+
+    def single_manifest(self):
+        """A single-node v5 manifest: node a alone, owner revokes."""
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        root = Ed25519PrivateKey.generate()
+        owner = Ed25519PrivateKey.generate()
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": pub(owner)}]
+        return man
+
+    def single_node_beat(self, man, sequence, issued=T0):
+        """A heartbeat signed by the node's own key (the single-node signer), for a single-node manifest.
+        The manifest's heartbeat_signers names node "a"; the beat is signed by an Ed25519 key (the fixture's
+        signer), and the manifest's signing rules are not checked by plan() (it calls heartbeat.signed, which
+        verifies the signature against the manifest's parties)."""
+        # use the REVOKE key (Ed25519) as the node's signing key: the single-node manifest's heartbeat_signers
+        # names "a" as a party, but heartbeat.signed verifies the signature, not the party rule, in plan()'s context
+        return hbt.beat(man, sequence, issued=issued, key=hbt.REVOKE, domain=hb.DOMAIN)
+
+    def v2_recount_statement(self, collector_sequence, collector_epoch=1, node="a", manifest=None):
+        from deploy.baremetal import recover
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        st = recover.statement("recount", node, manifest or self.single_manifest(), "00ff" * 8 + ":boot-1", T0 + 300,
+                               collector_epoch=collector_epoch, collector_sequence=collector_sequence)
+        return {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+
+    def test_owner_statement_is_a_floor_source_under_single_node(self):
+        """Under a single-node manifest, the owner's v2 recount statement raises the floor to its
+        collector_sequence, even with no verified heartbeat."""
+        self.break_counter()
+        man = self.single_manifest()
+        st = self.v2_recount_statement(collector_sequence=55)
+        planned = recount.plan(self.counter, man, [], owner_statement=st, signer=lambda: 10)
+        self.assertEqual(planned["floor"], 55)
+        self.assertEqual(planned["held"], [])
+
+    def test_owner_statement_is_refused_under_multi_node(self):
+        """An owner statement of purpose recount is refused under a multi-node manifest: the owner is not a
+        floor source for a multi-node recount."""
+        self.break_counter()
+        st = self.v2_recount_statement(collector_sequence=55)
+        self.refused("refused under a multi-node manifest", recount.plan, self.counter, self.m1, [],
+                     owner_statement=st, signer=lambda: 0)
+
+    def test_liveness_floor_must_not_go_below_signing_counter(self):
+        """The floor is the max of everything named above AND the signing counter's current value: a floor
+        below what the node has already signed would make the next heartbeat a replay. No margin."""
+        self.break_counter()
+        man = self.single_manifest()
+        # the signing counter reads 60: the floor must be at least 60, even with a lower heartbeat
+        held = [self.single_node_beat(man, 30)]
+        st = self.v2_recount_statement(collector_sequence=40)
+        planned = recount.plan(self.counter, man, [self.state(), held[0]], owner_statement=st, signer=lambda: 60)
+        self.assertGreaterEqual(planned["floor"], 60)
+        # no margin: the floor is exactly max(40, 60, 30) = 60, not 61 or more
+        self.assertEqual(planned["floor"], 60)
+
+    def test_without_heartbeat_or_statement_still_refused(self):
+        """With neither a verified heartbeat nor the statement, the recount is refused even under single-node."""
+        self.break_counter()
+        man = self.single_manifest()
+        self.refused("no heartbeat given verifies", recount.plan, self.counter, man, [],
+                     owner_statement=None, signer=lambda: 0)
+
+    def test_floor_is_max_of_all_sources(self):
+        """The floor is the max of: old counter, prior, held heartbeats, collector_sequence, and signing counter."""
+        self.break_counter()
+        man = self.single_manifest()
+        held = [self.single_node_beat(man, 30)]
+        st = self.v2_recount_statement(collector_sequence=50)
+        planned = recount.plan(self.counter, man, [self.state(), held[0]], owner_statement=st, signer=lambda: 45, prior=5)
+        # max(old=40 (from setUp), prior=5, held=30, collector=50, signing=45) = 50
+        self.assertEqual(planned["floor"], 50)
 
 
 class AcrossACut(Case):
