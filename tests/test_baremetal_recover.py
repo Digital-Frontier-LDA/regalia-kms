@@ -762,8 +762,23 @@ class SingleNodeCommand(Recovers):
         #    (decision Q4) -- the check's single-node requirement refuses: a recorded DENY
         st = recover.statement("recover", "c", tip["manifest"], "aa" * 8 + ":boot-x", T0 + 300)
         v1 = {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
-        self.refused("under single-node the statement must be v2",
-                     apply_with, v1)
+        # A v1-shaped statement under single-node is a RECORDED DENY on the check's own line. The assertion asks
+        # for recover.Refused specifically: any other exception the path raises is a named FAIL (GA ruling
+        # 2026-11-24). This is the B1-args-single mutant's kill line: with the call's single_node flipped to
+        # False the check takes the multi-node path and accepts the v1 statement, so apply() reads
+        # one_source["statement"]["collector_epoch"] for the phrase (recover.py:386) and raises
+        # KeyError: 'collector_epoch', which the old self.refused let escape as an ERROR -- DEV1 diagnostic
+        # https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/45485928554 (HEAD 9e7e142e). The
+        # fail-closed note: that KeyError is built before apply() writes anything (the phrase, then the typed
+        # confirmation), so the abort is closed; it is reachable only with a wrong single_node (no real caller
+        # today). The product hardening (a require before :386) is regalia-kms-j1s, not this PR.
+        try:
+            self.refused("under single-node the statement must be v2",
+                         apply_with, v1)
+        except m.Refused:
+            raise
+        except Exception as e:
+            self.fail("v1 statement raised %r, expected Refused" % (e,))
         self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
         self.assertIn("must be v2", self.trail[-1]["reason"])
         # 5) a signature the tip's owner keys do not hold: recorded DENY
