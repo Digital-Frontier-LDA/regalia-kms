@@ -177,13 +177,15 @@ class SingleNodeRecovery(unittest.TestCase):
             fn(*args, **kw)
         self.assertIn(reason, str(caught.exception))
 
-    def beat_witness(self, collector, sequences, stream, identity="id" * 32, T0=1790000000):
+    def beat_witness(self, collector, sequences, stream, identity="id" * 32, T0=1790000000, epoch=None):
         """A verified collector receipt over a beat-propose export (no mocks): what witness_epoch and
-        witness_sequence run against in the derivation tests."""
+        witness_sequence run against in the derivation tests. The epoch the witness holds is `epoch`
+        (default: the highest sequence, as in the single-witness test)."""
         out, chain = [], trails.LINE_CHAIN_START
+        top = epoch if epoch is not None else max(sequences)
         for i, sequence in enumerate(sequences):
             line = json.dumps({"event": "beat-propose", "outcome": "ALLOW", "sequence": sequence,
-                               "epoch": sequences[-1], "at": T0 + i}, sort_keys=True)
+                               "epoch": top, "at": T0 + i}, sort_keys=True)
             raw = line.encode() + b"\n"
             out.append({"sequence": i + 1, "detail": {"line": line, "line_sha256": hashlib.sha256(raw).hexdigest()}})
             chain = trails.line_chain(chain, raw)
@@ -306,11 +308,13 @@ class SingleNodeRecovery(unittest.TestCase):
     def test_recount_sequence_is_the_max_over_every_witness(self):
         """Two witnesses: the collector's sequence is the MAX over ALL of them, as the epoch is (council
         2026-11-24 on PR #778, M2). The higher sequence is in the SECOND witness, and the statement must
-        carry it -- not what the first witness alone held."""
+        carry it -- not what the first witness alone held. Both witnesses hold the same epoch (3, the
+        chain's tip) so the epoch check does not refuse; only the sequence differs between them."""
         collector = Ed25519PrivateKey.generate()
-        # the first witness alone holds sequence 3; the second holds 7. Both run against real receipts.
-        w1 = self.beat_witness(collector, [1, 3], "site-a.sync")
-        w2 = self.beat_witness(collector, [4, 7], "site-a.sync")
+        # the first witness alone holds sequence 3; the second holds 7. Both run against real receipts,
+        # both at epoch 3 (the chain's tip, so witness_epoch <= tip and the collector does not refuse).
+        w1 = self.beat_witness(collector, [1, 3], "site-a.sync", epoch=3)
+        w2 = self.beat_witness(collector, [4, 7], "site-a.sync", epoch=3)
         # what a reader of the first witness alone would see:
         self.assertEqual(recover.witness_sequence(*w1), 3)
         self.assertEqual(recover.witness_sequence(*w2), 7)
@@ -322,7 +326,7 @@ class SingleNodeRecovery(unittest.TestCase):
                                      say=self.said.append, issued=self.issued,
                                      collector_sequence=None)
         st = signed["statement"]
-        self.assertEqual(st["collector_epoch"], 7)
+        self.assertEqual(st["collector_epoch"], 3)
         self.assertEqual(st["collector_sequence"], 7)
         # a passed value is held to the same max: what only the FIRST witness holds is refused
         self.refused("is not what the collector's witnessed exports hold",
