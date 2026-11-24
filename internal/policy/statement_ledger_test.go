@@ -417,7 +417,11 @@ func statementLedger() []statementFact {
 				"conversion copies, so the caller's buffer is unreachable from the result whether the " +
 				"copies are there or not. The row checks THAT property instead, because it is the one " +
 				"that makes the copies redundant: the day a []byte field is added to the returned " +
-				"type, the copies become load-bearing and this row fails.",
+				"type, the copies become load-bearing and this row fails. ONE []byte now escapes, " +
+				"on purpose: CosmosTransaction.SignerPublicKey.Key (regalia-kms-35b). It is copied " +
+				"again where it is lifted (parseSignerPublicKey), so these two copies stay redundant " +
+				"for it too, and the row checks that by overwriting the caller's buffer after the " +
+				"parse and requiring the key unchanged.",
 			run: func(t *testing.T) {
 				var walk func(reflect.Type, string, map[reflect.Type]bool)
 				var found []string
@@ -445,6 +449,30 @@ func statementLedger() []statementFact {
 					}
 				}
 				walk(reflect.TypeOf(&CosmosTransaction{}), "CosmosTransaction", map[reflect.Type]bool{})
+				const signerKey = "CosmosTransaction.SignerPublicKey.Key"
+				kept := found[:0]
+				for _, path := range found {
+					if path != signerKey {
+						kept = append(kept, path)
+					}
+				}
+				found = kept
+				// The signer key's own copy is the load-bearing one: the key must not alias the
+				// caller's buffer however the copies above it are arranged.
+				key := append([]byte{0x02}, make([]byte, 32)...)
+				input := withSignerPublicKeys(t, readReferenceHex(t, "signdoc-akashnet2-msgsend.hex"), [][]byte{
+					appendLengthDelimited(appendLengthDelimited(nil, 1, []byte("/cosmos.crypto.secp256k1.PubKey")), 2, appendLengthDelimited(nil, 1, key)),
+				})
+				parsed, err := ParseCosmosSignDoc(input)
+				if err != nil || parsed.SignerPublicKey == nil {
+					t.Fatalf("the signer-key document did not parse: %v", err)
+				}
+				for index := range input {
+					input[index] ^= 0xff
+				}
+				if string(parsed.SignerPublicKey.Key) != string(key) {
+					t.Fatalf("%s aliases the caller's buffer: overwriting the input changed it to %x", signerKey, parsed.SignerPublicKey.Key)
+				}
 				if len(found) != 0 {
 					t.Fatalf("the parsed transaction now reaches raw bytes at %v — those bytes alias "+
 						"the caller's buffer unless parseSignDoc and decodeAny copy, so the two "+

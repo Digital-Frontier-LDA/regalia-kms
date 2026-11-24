@@ -322,6 +322,14 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
 		}
 		policyRequest.Cosmos = parsed
+		// A SIGNATURE ONLY COUNTS IF IT CAN BE CHECKED AGAINST A KEY THE TOKEN DOES NOT CHOOSE
+		// (regalia-kms-35b AC4): the SignDoc's own signer key, or the binding's pin. With neither,
+		// refuse here -- before policy reserves a sequence and before the token is called -- rather
+		// than sign and then have nothing to check the answer against. See cosmosSignerBound.
+		if !cosmosSignerBound(route.Algorithm, route.Binding.PublicKeySHA256, parsed.SignerPublicKey) {
+			coordinator.recordOrCount(ctx, request, route, "deny", "cosmos-signer-key-unbound", started, false, policyRequest.VerifiedApprovers)
+			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+		}
 	}
 	decision := coordinator.policy.Evaluate(ctx, policyRequest)
 	if !decision.Allowed {
@@ -357,12 +365,28 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		}
 		var backendErr error
 		data := request.Data
-		if contentType == "application/vnd.cosmos.tx+protobuf" {
+		cosmos := contentType == "application/vnd.cosmos.tx+protobuf"
+		if cosmos {
+			// THE DIGEST A VERIFIER RECOMPUTES. ParseCosmosSignDoc refused every encoding but the
+			// canonical one, so request.Data is the canonical SignDoc and sha256 of it is what a
+			// chain checks the signature against. The token signs it with pre-hashed ECDSA
+			// (CKM_ECDSA), which hashes nothing further (regalia-kms-35b).
 			digest := sha256.Sum256(data)
 			data = digest[:]
 		}
 		output, outputType, backendErr = coordinator.hardware.Execute(operationCtx, route, request.Operation, request.Format, contentType, data, request.EnvelopeAAD)
-		return backendErr
+		if backendErr != nil || !cosmos {
+			return backendErr
+		}
+		// A COSMOS SIGNATURE IS VERIFIED BEFORE IT COUNTS (regalia-kms-35b): see verifyCosmosSignature.
+		// The key is read inside the same run, from the same route, so it is the key of the binding
+		// that just signed; it must match the pin and the SignDoc's signer key wherever they exist.
+		// A failed read is the token's outage, returned as such (retryable), not a bad signature.
+		publicKey, _, keyErr := coordinator.hardware.Execute(operationCtx, route, "public-key", "", "", nil, nil)
+		if keyErr != nil {
+			return keyErr
+		}
+		return verifyCosmosSignature(route.Algorithm, route.Binding.PublicKeySHA256, publicKey, policyRequest.Cosmos.SignerPublicKey, data, output)
 	})
 	if err != nil {
 		zero(output)
@@ -384,6 +408,16 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		if errors.Is(err, admission.ErrNotAdmitted) {
 			coordinator.recordOrCount(ctx, request, route, "deny", "not-admitted", started, true, policyRequest.VerifiedApprovers)
 			return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+		}
+		// THE TOKEN ANSWERED AND THE ANSWER DOES NOT VERIFY under the object's registered key: a
+		// wrong key, a corrupted or high-S signature, or a public key that is not the pinned one.
+		// Never success, and not retryable as an outage: it is a defect in the token or this daemon
+		// that an operator must look at. Policy's reservation stands (the sequence was spent on the
+		// attempt), and there is no supported re-initialisation yet: the account stays blocked at that
+		// sequence (regalia-kms-4t4). See COSMOS-SUPPORT.md for what an operator does meanwhile.
+		if errors.Is(err, errCosmosSignatureUnverified) {
+			coordinator.recordOrCount(ctx, request, route, "allow", "signature-unverified", started, true, policyRequest.VerifiedApprovers)
+			return api.Result{}, failure("INTERNAL", http.StatusInternalServerError, false)
 		}
 		coordinator.recordOrCount(ctx, request, route, "allow", "backend-failed", started, true, policyRequest.VerifiedApprovers)
 		return api.Result{}, classifyExecution(err)
@@ -454,7 +488,7 @@ func (coordinator *Coordinator) recordOrCount(ctx context.Context, request api.R
 // that was lost. Errors returned after the event became durable are excluded -- see audit.Durable.
 //
 // LABELLED BY OUTCOME, and the cardinality is bounded by construction rather than by hope: every
-// value is a compile-time literal. Seven are fixed strings at the call sites, four come from the
+// value is a compile-time literal. Nine are fixed strings at the call sites, four come from the
 // routing branch, and the policy reasons are `policy-<Code>:<Rule>` where Code is one of five
 // constants and Rule one of twelve, all of them literals in internal/policy. None derives from
 // request data, configuration, or anything a caller controls -- which is the property that makes an
