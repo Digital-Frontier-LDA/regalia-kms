@@ -61,10 +61,13 @@ that wrong key. The key must also be bound to something the token does not choos
 
 - when the binding pins `public_key_sha256`, the key read must hash to the pin;
 - when the SignDoc's single `SignerInfo` carries `public_key` (the key the chain verifies with),
-  the key read must be the same point. The SignDoc's key is compressed SEC1 and the token's an
-  uncompressed SPKI, so the two are compared as points, not bytes. Its type must be the one for the
-  object's curve: `/cosmos.crypto.secp256k1.PubKey` for `secp256k1`,
-  `/cosmos.crypto.secp256r1.PubKey` for `p256`.
+  the key read must be the same point. The SignDoc's key is compressed SEC1 -- exactly 33 bytes,
+  prefix `02` or `03`, a point on the curve -- and the token's an uncompressed SPKI, so the two are
+  compared as points, not bytes. The Cosmos SDK refuses an uncompressed (65-byte) `public_key` at
+  key decode, so a SignDoc that carries one would be spent here and refused by the chain; it is
+  refused the same way a key of the wrong type is (below), on the pinned and the unpinned route
+  alike. Its type must be the one for the object's curve: `/cosmos.crypto.secp256k1.PubKey` for
+  `secp256k1`, `/cosmos.crypto.secp256r1.PubKey` for `p256`.
 
 A binding with neither cannot sign. A DevAut-only binding (no `public_key_sha256`) signing a SignDoc
 that leaves `public_key` out, or that carries a key of another type or one that is not a point, is

@@ -62,9 +62,19 @@ func (key cosmosKey) equal(other cosmosKey) bool {
 }
 
 // signerKeyPoint parses the SignDoc's own signer key for algorithm: its type must be the one a
-// chain verifies that algorithm with, and its bytes a point on the curve, in either SEC1 form.
+// chain verifies that algorithm with, and its bytes a COMPRESSED SEC1 point -- 33 bytes, prefix 02
+// or 03, on the curve. The Cosmos SDK refuses a 65-byte (uncompressed) public_key at key decode
+// (crypto/keys/internal/ecdsa pubkeys require the compressed form), so an uncompressed SignDoc key
+// would be spent here and refused by the chain: the account's bug class, not the token's. It is
+// therefore refused before the reservation and before any token call (cosmosSignerBound runs
+// before policy.Evaluate), on the pinned and the unpinned route alike. The token side is
+// unchanged: its SPKI parses either SEC1 form and is compared as a POINT, so a compressed
+// SignDoc key still matches the same uncompressed token key.
 func signerKeyPoint(algorithm string, key *policy.CosmosPublicKey) (cosmosKey, bool) {
 	if key == nil || cosmosKeyTypeURL[algorithm] == "" || key.TypeURL != cosmosKeyTypeURL[algorithm] {
+		return cosmosKey{}, false
+	}
+	if len(key.Key) != 33 || (key.Key[0] != 0x02 && key.Key[0] != 0x03) {
 		return cosmosKey{}, false
 	}
 	switch algorithm {
@@ -75,18 +85,11 @@ func signerKeyPoint(algorithm string, key *policy.CosmosPublicKey) (cosmosKey, b
 		}
 		return cosmosKey{k1: parsed}, true
 	case "p256":
-		curve := elliptic.P256()
-		var x, y *big.Int
-		switch len(key.Key) {
-		case 33:
-			x, y = elliptic.UnmarshalCompressed(curve, key.Key)
-		case 65:
-			x, y = elliptic.Unmarshal(curve, key.Key) //nolint:staticcheck // a point parse, no ECDH
-		}
+		x, y := elliptic.UnmarshalCompressed(elliptic.P256(), key.Key)
 		if x == nil {
 			return cosmosKey{}, false
 		}
-		return cosmosKey{nist: &ecdsa.PublicKey{Curve: curve, X: x, Y: y}}, true
+		return cosmosKey{nist: &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}}, true
 	}
 	return cosmosKey{}, false
 }

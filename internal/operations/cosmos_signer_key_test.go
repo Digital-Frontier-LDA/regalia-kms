@@ -132,24 +132,19 @@ func compressed(key *secp256k1.PrivateKey) []byte { return key.PubKey().Serializ
 
 // TestCosmosUnpinnedBindingSignsUnderTheSignDocSignerKey (council A): a DevAut-only binding (no
 // public_key_sha256) signs when the SignDoc names the signer's key and the token's signature
-// verifies under it, in either SEC1 form -- the keys are compared as points, not bytes.
+// verifies under it. The SignDoc's key must be the compressed SEC1 form a chain decodes (33
+// bytes); the token's SPKI carries the same point uncompressed, so the two compare equal as
+// points, not bytes.
 func TestCosmosUnpinnedBindingSignsUnderTheSignDocSignerKey(t *testing.T) {
-	for name, encode := range map[string]func(*secp256k1.PrivateKey) []byte{
-		"compressed":   compressed,
-		"uncompressed": func(key *secp256k1.PrivateKey) []byte { return key.PubKey().SerializeUncompressed() },
-	} {
-		t.Run(name, func(t *testing.T) {
-			card := newCosmosCard(t)
-			signDoc := withSignerKey(t, cosmosFixture(t), secp256k1KeyType, encode(card.signer))
-			coordinator, recorder := allowingCoordinator(t, cosmosRoute(""), card)
-			result, err := coordinator.Execute(context.Background(), cosmosRequest(signDoc))
-			if err != nil {
-				t.Fatalf("the SignDoc's own signer key signed and was refused: %v (audit %v)", err, outcomes(recorder))
-			}
-			if !textbookVerify(t, secp256k1SPKI(card.signer.PubKey()), signDoc, result.Data) {
-				t.Fatal("the returned signature does not verify under the SignDoc's signer key")
-			}
-		})
+	card := newCosmosCard(t)
+	signDoc := withSignerKey(t, cosmosFixture(t), secp256k1KeyType, compressed(card.signer))
+	coordinator, recorder := allowingCoordinator(t, cosmosRoute(""), card)
+	result, err := coordinator.Execute(context.Background(), cosmosRequest(signDoc))
+	if err != nil {
+		t.Fatalf("the SignDoc's own signer key signed and was refused: %v (audit %v)", err, outcomes(recorder))
+	}
+	if !textbookVerify(t, secp256k1SPKI(card.signer.PubKey()), signDoc, result.Data) {
+		t.Fatal("the returned signature does not verify under the SignDoc's signer key")
 	}
 }
 
@@ -292,6 +287,111 @@ func TestCosmosVerifierRefusesUnreducedScalars(t *testing.T) {
 	if err := verifyCosmosSignature("secp256k1", spkiPin(registered), registered, nil, digest[:], signature(unreduced)); err == nil {
 		t.Fatal("DEFECT: s = N+1 verified: the verifier reduced s modulo N and accepted bytes a chain refuses")
 	}
+}
+
+// TestCosmosSignDocSignerKeyMustBeCompressed (council ruling 2026-11-24, R1-R5): the SignDoc's
+// signer key must be exactly the 33-byte compressed SEC1 form (prefix 02 or 03, a point on the
+// curve) on both curves, before the reservation and before any token call, on the pinned and the
+// unpinned route alike. The Cosmos SDK refuses an uncompressed (65-byte) public_key at key decode,
+// so accepting one here would spend the account's sequence on a transaction the chain refuses --
+// the account-blocked bug class this PR exists to stop. A bad prefix (04, 00) is refused too, as
+// is a prefix-02 key whose x coordinate is not on the curve. The control: a compressed key still
+// signs, both curves.
+func TestCosmosSignDocSignerKeyMustBeCompressed(t *testing.T) {
+	offCurve := make([]byte, 32)
+	for i := range offCurve {
+		offCurve[i] = 0x41
+	}
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, setup := range map[string]func() (pin string, typeURL string, key []byte){
+		// R3, secp256k1.
+		"secp256k1 65-byte uncompressed key": func() (string, string, []byte) {
+			card := newCosmosCard(t)
+			return "", secp256k1KeyType, card.signer.PubKey().SerializeUncompressed()
+		},
+		"secp256k1 33-byte key with prefix 04": func() (string, string, []byte) {
+			card := newCosmosCard(t)
+			key := compressed(card.signer)
+			key[0] = 0x04
+			return "", secp256k1KeyType, key
+		},
+		"secp256k1 33-byte key with prefix 00": func() (string, string, []byte) {
+			card := newCosmosCard(t)
+			key := compressed(card.signer)
+			key[0] = 0x00
+			return "", secp256k1KeyType, key
+		},
+		"secp256k1 33-byte prefix-02 key not on the curve": func() (string, string, []byte) {
+			return "", secp256k1KeyType, append([]byte{0x02}, offCurve...)
+		},
+		// R3, p256.
+		"p256 65-byte uncompressed key": func() (string, string, []byte) {
+			return "", secp256r1KeyType, elliptic.Marshal(elliptic.P256(), p256.X, p256.Y)
+		},
+		"p256 33-byte key with prefix 04": func() (string, string, []byte) {
+			key := elliptic.MarshalCompressed(elliptic.P256(), p256.X, p256.Y)
+			key[0] = 0x04
+			return "", secp256r1KeyType, key
+		},
+		"p256 33-byte key with prefix 00": func() (string, string, []byte) {
+			key := elliptic.MarshalCompressed(elliptic.P256(), p256.X, p256.Y)
+			key[0] = 0x00
+			return "", secp256r1KeyType, key
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			card := newCosmosCard(t)
+			pin, typeURL, key := setup()
+			transaction, err := policy.ParseCosmosSignDoc(cosmosFixture(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			coordinator, state, recorder, now := realEngineCoordinator(t, transaction, cosmosRoute(pin), card)
+			request := cosmosRequest(withSignerKey(t, cosmosFixture(t), typeURL, key))
+			request.Context.ExpiresAt = now.Add(30 * time.Second)
+			result, err := coordinator.Execute(context.Background(), request)
+			failure, ok := err.(*api.Failure)
+			if !ok || failure.Status != 400 || failure.Code != "INVALID_ARGUMENT" || len(result.Data) != 0 {
+				t.Fatalf("DEFECT: a SignDoc signer key a chain would refuse was not refused before the token: err=%v, %d bytes, token calls %v, audit %v", err, len(result.Data), card.calls, outcomes(recorder))
+			}
+			if len(card.calls) != 0 || len(state.reserved) != 0 {
+				t.Fatalf("DEFECT: a refused signer key reached the token (%v) or spent a reservation (%d)", card.calls, len(state.reserved))
+			}
+			if got := outcomes(recorder); len(got) != 1 || got[0] != "cosmos-signer-key-unbound" {
+				t.Fatalf("audit outcomes = %v, want cosmos-signer-key-unbound", got)
+			}
+		})
+	}
+	// The same refusals hold when the binding pins the token's key: the SignDoc's own key is
+	// still the key the chain verifies with, and the chain refuses an uncompressed one.
+	t.Run("pinned route, secp256k1 65-byte uncompressed key", func(t *testing.T) {
+		card := newCosmosCard(t)
+		transaction, err := policy.ParseCosmosSignDoc(cosmosFixture(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		coordinator, state, recorder, now := realEngineCoordinator(t, transaction, cosmosRoute(spkiPin(secp256k1SPKI(card.signer.PubKey()))), card)
+		request := cosmosRequest(withSignerKey(t, cosmosFixture(t), secp256k1KeyType, card.signer.PubKey().SerializeUncompressed()))
+		request.Context.ExpiresAt = now.Add(30 * time.Second)
+		if result, err := coordinator.Execute(context.Background(), request); err == nil || len(result.Data) != 0 {
+			t.Fatalf("DEFECT: a pinned route signed an uncompressed SignDoc key: err=%v, token calls %v", err, card.calls)
+		}
+		if len(card.calls) != 0 || len(state.reserved) != 0 {
+			t.Fatalf("DEFECT: a refused signer key reached the token (%v) or spent a reservation (%d)", card.calls, len(state.reserved))
+		}
+	})
+	// The control, both curves: a compressed key still signs, on the unpinned route.
+	t.Run("control, compressed secp256k1 key signs", func(t *testing.T) {
+		card := newCosmosCard(t)
+		coordinator, _ := allowingCoordinator(t, cosmosRoute(""), card)
+		signDoc := withSignerKey(t, cosmosFixture(t), secp256k1KeyType, compressed(card.signer))
+		if _, err := coordinator.Execute(context.Background(), cosmosRequest(signDoc)); err != nil {
+			t.Fatalf("a compressed SignDoc key was refused: %v", err)
+		}
+	})
 }
 
 // TestCosmosP256SignatureMustBeLowS (review finding 4): the Cosmos SDK's secp256r1 key refuses an s
