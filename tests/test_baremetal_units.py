@@ -193,7 +193,7 @@ class Units(unittest.TestCase):
         self.assertEqual(unit("regalia-wg-apply.service")["Unit"]["StartLimitIntervalSec"], "0")
         sync = self.service("regalia-sync")
         self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss regalia-audit-sync"))
-        self.assertEqual(sync["ReadWritePaths"], "-/run/regalia-metrics/sync")      # its metrics only (#305); the rest is StateDirectory
+        self.assertEqual(sync["ReadWritePaths"], "-/run/regalia-metrics/sync -/run/regalia-metrics/restore")   # its metrics only (#305), plus the restore-pending boot guard's gauge written at boot (regalia-kms-dx7.9); the rest is StateDirectory
         for name in SERVICES:
             service = self.service(name)
             with self.subTest(name):
