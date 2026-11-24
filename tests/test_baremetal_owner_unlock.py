@@ -565,6 +565,63 @@ class AttestBooted(Case):
             self.assertEqual(json.load(f)["nodes"]["a"]["measurement"],
                              {"label": "current", "epoch": 1, "phase": "system", "nonce": ev3["nonce"]})
 
+    def test_an_unlock_after_verification_before_attest_booted_returns_is_not_the_boot(self):
+        """regalia-kms-dx7.8 review (CodeRabbit, the MAJOR thread, comment 4687175119): the interleaving CodeRabbit
+        named. The regression test above seeds the unlock's record BEFORE verification; this one exercises an
+        unlock AFTER verification and before attest_booted returns: verify has written and saved its own record
+        (stamped, its nonce), the state lock is released, and a delayed initrd unlock of the SAME boot -- same
+        session, same key, same counters, its own nonce -- commits its record to the same state. check_counters
+        verifies a session any number of times in one boot, so it passes: the state now holds a stamped
+        measurement (this verification's nonce) AND the unlock's boot record (its nonce). The stamp's boot-record
+        binding and attest_booted's post-check both require the record to carry THIS verification's nonce in the
+        measurement AND the boot record; the unlock's boot record does not. attest_booted refuses, and the state
+        is left as the unlock committed it: the unlock's record stays unphased (an unlock's record is not a
+        boot's), and the retire evidence (a record that says system) does not name the unlock's verification.
+        A test that only seeds the record before verification cannot catch a mutant that reopens the gap
+        (stamping outside verify's lock, or without the boot-record binding): this one asserts the refusal and
+        the unphased state, and is the one the mutant (round 9's control) must fail."""
+        path = self.d + "/gap.json"
+        attester = self.enrolled_attester(path)
+        # the verification: the stamp runs inside its lock and the state is left stamped with its nonce
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the concurrent unlock of the SAME boot, committing to the state in the gap -- after verify's save,
+        # before attest_booted's post-check. Its record: the SAME epoch, the SAME label, NO phase (an unphased
+        # set records no phase), and its OWN nonce. Its boot record: the SAME counters, session and key, its own
+        # nonce (check_counters writes it). The hook commits it by re-taking the state lock (released: verify's
+        # own lock is released before the hook's return) and saving -- a concurrent process's verify would do
+        # exactly this, with its own quote.
+        unlock_nonce = attester.nonce("a")
+        committed = {"measurement": {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()},
+                     "boot": {"counters": [self.boots, 0],
+                              "session": hashlib.sha256(bytes.fromhex(lt.SESSION)).hexdigest(),
+                              "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest(),
+                              "nonce": unlock_nonce.hex()}}
+
+        def commit_unlock_record(state, record, old_measurement):
+            with attest.locked_state(path) as (s, save):
+                s["nodes"]["a"]["measurement"] = committed["measurement"]
+                s["nodes"]["a"]["boot"] = committed["boot"]
+                save()
+
+        real_stamp = ownerunlock.attest_booted_stamp
+
+        def stamp_then_commit(state, record, old_measurement, nonce_hex):
+            real_stamp(state, record, old_measurement, nonce_hex)
+            commit_unlock_record(state, record, old_measurement)
+
+        import deploy.baremetal.ownerunlock as ou
+        with unittest.mock.patch.object(ou, "attest_booted_stamp", side_effect=stamp_then_commit):
+            self.refused("attest-booted could not bind the record",
+                         ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        # the state holds the unlock's record: unphased (an unlock's record is not a boot's), its own nonce.
+        # The stamped record (this verification's nonce) is gone: the unlock overwrote the measurement too,
+        # and nothing says system, so retire-ready counts no boot.
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"],
+                         {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()})
+        self.assertNotEqual(state["nodes"]["a"]["measurement"]["nonce"], evidence["nonce"])
+        self.assertEqual(state["nodes"]["a"]["boot"], committed["boot"])
+
     def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
         """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted
         (system) both verify the quote against the document the tip commits to: the site the document lists is allowed,

@@ -234,16 +234,19 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
     is verified; a set with one value per PCR cannot tell the two phases apart by its values, so the record names
     the phase the quote was taken in, and an unlock (initrd) is never recorded as a boot. The stamp lands on the
     record THIS verification wrote, and on nothing else: the verifier records the nonce it consumed beside the
-    measurement and the boot as it verifies the quote, and the stamp runs INSIDE that same verify, under the
-    verifier's own state lock, requiring the record it is stamping to carry that nonce (the identity of the
-    verification -- consumed by this call, so no other call's record can carry it). Not the epoch: every record
-    under this tip carries the same epoch. Not the boot session either: check_counters verifies a session any
-    number of times in one boot, each with its own nonce -- a delayed initrd unlock of the same boot, or a record
-    from an earlier boot, would pass a session-only check and take the stamp. A record that carries no other
-    verification's nonce -- an unlock or a boot that committed to the state before, between or after -- would
-    otherwise be stamped "system" and become retire evidence, and is refused, the state left untouched (the
-    verification's own record stays as it was written, without the stamp: attest-booted is run again for a new
-    quote). The record ("label", "epoch", "phase") is written into the owner's attest state at `state_path`, and
+    measurement AND on the boot record as it verifies the quote (check_counters), and the stamp runs INSIDE that
+    same verify, under the verifier's own state lock, requiring the record it is stamping to carry that nonce in
+    both places (the identity of the verification -- consumed by this call, so no other call's record can carry
+    it). Not the epoch: every record under this tip carries the same epoch. Not the boot session either:
+    check_counters verifies a session any number of times in one boot, each with its own nonce -- a delayed initrd
+    unlock of the same boot, or a record from an earlier boot, would pass a session-only check and take the stamp.
+    An unlock that committed to the state before this call is overwritten by it (same boot, same session, same
+    key: its record is what verify writes over). One that commits after it, in the lock-free gap between the
+    state's last write and this function's read, cannot stand: its boot record names its own nonce, not this
+    verification's, and the post-check (the state still holds this verification's nonce) refuses it -- an unlock's
+    record is not a boot's, and retire-ready counts only a record that says system. The same refusal stands for
+    any record that is not this verification's: attest-booted is run again for a new quote. The record
+    ("label", "epoch", "phase") is written into the owner's attest state at `state_path`, and
     returned. That record is the retire evidence (rollout's owner witness); the node's own state never is, and an
     unlock never is. `attester` is the owner's verifier under `manifest`/`document` (the same one that issued
     the evidence's nonce)."""
@@ -278,12 +281,21 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
     # The verifier's record names the phase the request came from only when the set is given per phase. Where the
     # set has one value per PCR, the record then names no phase, and the stamp (attest_booted_stamp, run inside
     # verify's own lock before the measurement was written) named it: the record in the state now is the one this
-    # verification wrote, stamped.
+    # verification wrote, stamped. The post-check re-reads the state (defense in depth behind the stamp): a
+    # concurrent verify that committed to the same state after verify's save -- in the lock-free gap between that
+    # save and this read -- would leave a record whose boot record names ITS own nonce, not this verification's
+    # (check_counters), and the measurement nonce the stamp bound it to would no longer be the state's. The
+    # measurement nonce alone is the identity of THIS verification: it is consumed by this call, so no other
+    # call's record carries it.
     with attest.locked_state(state_path) as (state, _):
         measurement = state["nodes"].get(node_id, {}).get("measurement")
+        boot = state["nodes"].get(node_id, {}).get("boot")
     require(isinstance(measurement, dict) and measurement.get("nonce") == evidence["nonce"],
             "attest-booted could not bind the record: the state holds %s for %s, not the record this verification "
             "wrote: run attest-booted again" % (measurement, node_id))
+    require(isinstance(boot, dict) and boot.get("nonce") == evidence["nonce"],
+            "attest-booted could not bind the record: the state's boot record names a different verification "
+            "than the one that wrote the stamped measurement: run attest-booted again")
     return {"label": measurement["label"], "epoch": measurement["epoch"], "phase": measurement["phase"]}
 
 
@@ -305,18 +317,39 @@ def attest_booted_stamp(state, record, old_measurement, nonce_hex):
     stamp.
 
     `state` is the verifier's state under its lock; `record` the node's record in it (its measurement just
-    replaced by this verification); `old_measurement` the record's measurement BEFORE this verification wrote
-    its own (what a concurrent writer left, or None); `nonce_hex` the consumed nonce (recorded on the new
-    measurement, the identity of this verification).
+    replaced by this verification, its boot record just rewritten by it -- check_counters); `old_measurement`
+    the record's measurement BEFORE this verification wrote its own (an unlock that committed to the state
+    before this call, or None); `nonce_hex` the nonce this verification consumed (recorded by verify on the
+    new measurement AND on the boot record it wrote -- both, the identity of this verification).
 
-    The stamp lands on the record THIS verification wrote (record["measurement"], just set by verify), and on
-    nothing else: it runs inside verify's own lock, so a concurrent writer cannot commit between the stamp and
-    the save. An unlock's record (written by a previous verify, a different boot) is `old_measurement`, not
-    record["measurement] -- the stamp never sees it. A concurrent unlock in the gap is impossible: the gap is
-    gone (one lock, no re-take). The record this verification wrote carries the nonce it consumed, so the
-    retire evidence (rollout's owner witness) is bound to the verification that wrote it."""
-    # The stamp lands on the record this verification wrote (record["measurement"], just set): name the phase
-    # the request was made in, so an unlock (initrd) and a boot (system) are two records, not one.
+    The stamp lands on the record THIS verification wrote, and on nothing else, in two checks:
+    1. the record's measurement carries THIS verification's nonce -- record["measurement"] was just set by
+       verify, so an unlock that committed to the state before this call is old_measurement (overwritten),
+       and nothing else is reachable while verify holds the state lock;
+    2. the record's boot record carries it too -- check_counters writes the nonce on the boot record, so a
+       record holding a stamped measurement and another verification's boot record cannot stand: that is a
+       concurrent verify that committed AFTER this call's save, in the lock-free gap between the state's last
+       write and attest_booted's post-check, and the post-check (the state still holds this verification's
+       nonce) refuses it.
+    A stamp not so bound is no stamp: an unlock that took it would be retire evidence (rollout's owner
+    witness counts only a record that says system). If either check fails, the verification is refused
+    (Refused stands, as verify's docstring says) and attest_booted's post-check refuses as well: run
+    attest-booted again for a fresh quote."""
+    # The stamp lands on the record this verification wrote: name the phase the request was made in, so an unlock
+    # (initrd) and a boot (system) are two records, not one. record["measurement"] is the one THIS verification set,
+    # so naming the phase on it can never reach another verification's measurement.
+    require(record.get("measurement", {}).get("nonce") == nonce_hex,
+            "attest-booted could not bind the record: the state holds %s for the node, not the record this "
+            "verification wrote" % (record.get("measurement"),))
+    # The record's boot record is this verification's too: check_counters writes the consumed nonce on the boot
+    # record it writes, so a record that carries a measurement stamped by this call but a boot record written by
+    # another -- a concurrent verify that committed after this one's save, in the lock-free gap between the state's
+    # last write and attest_booted's read of it -- cannot hold a stamped measurement and an unlock's boot record
+    # together. (An unlock that commits BEFORE this call is overwritten by it: same boot, same session, same key;
+    # its record is old_measurement.)
+    require(record.get("boot", {}).get("nonce") == nonce_hex,
+            "attest-booted could not bind the record: the state's boot record names a different verification "
+            "than the one that wrote the stamped measurement: run attest-booted again")
     if record.get("measurement", {}).get("phase") is None:
         record["measurement"]["phase"] = "system"
 
