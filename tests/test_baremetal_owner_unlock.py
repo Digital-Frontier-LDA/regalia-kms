@@ -373,12 +373,12 @@ class AttestBooted(Case):
     owner witness); the node's own state never is, and an unlock (initrd) never is. (The quotes are the lease tests'
     fake ones: they cover the selection the policy names, whatever it is.)"""
 
-    def evidence(self, manifest, session, attester, phase=None):
-        """The node's quote for `attester`'s nonce: over the policy's selection, that manifest's epoch, that boot session.
-        With `phase`, the quote's boot phase (the owner's tool knows which phase the node is in: initrd at the unlock,
-        system after the volume opens)."""
+    def evidence(self, manifest, session, attester, phase=None, nonce=None):
+        """The node's quote for `attester`'s nonce (issued from the attester unless `nonce` is given): over the
+        policy's selection, that manifest's epoch, that boot session. With `phase`, the quote's boot phase (the
+        owner's tool knows which phase the node is in: initrd at the unlock, system after the volume opens)."""
         node = ownerunlock.single_node(manifest, "a")
-        nonce = attester.nonce("a")
+        nonce = nonce or attester.nonce("a")
         key = b"boot session key " + bytes.fromhex(session)[:16]
         signed = self.keys["a"].signer(ek_name=node["ek_name"], reset=self.boots)(
             attest.qualifying_data("a", manifest["epoch"], bytes.fromhex(session), key, nonce))
@@ -468,9 +468,10 @@ class AttestBooted(Case):
             state = json.load(open(path))
             self.assertNotIn("measurement", state["nodes"].get("a", {}))
 
-    def test_the_quote_is_judged_by_the_tip_s_measurements_an_unlisted_image_is_refused(self):
-        """The new image is approved in epoch 2's document, and the node says it runs it. The quote must be judged
-        under the tip (epoch 2): under the old document it matches nothing, and under the tip it is the record."""
+    def test_the_quote_is_judged_at_the_epoch_the_transcript_binds_it_to(self):
+        """The new image is approved in epoch 2's document, and the node says it runs it. The quote's transcript
+        binds the manifest's epoch, so a quote for epoch 2 presented to the epoch 1 attester is refused there
+        (transcript binding, not measurement) and is the record under the tip (epoch 2)."""
         # the new image's measurements: the fake quote's PCR 7 is "00"*32 (the lease tests' fake TPM), so the tip's
         # doc must list it; the image is "unlisted" in the OLD doc by LABEL, not by PCR values
         newer = measured(pcr7="00" * 32, label="next")
@@ -483,6 +484,58 @@ class AttestBooted(Case):
         # the first call consumed the nonce (verify pops it before the transcript check): a fresh one for the tip
         evidence = self.evidence(m2, lt.SESSION, attester)
         self.assertEqual(ownerunlock.attest_booted(m2, newer, path, "a", lt.SESSION, evidence, attester=attester)["label"], "next")
+
+    def test_a_quote_the_tip_s_document_does_not_list_by_measurement_is_refused(self):
+        """regalia-kms-dx7.8 review: a quote that is correctly signed and correctly bound to the tip's epoch and
+        session, but whose PCR 7 is not the one the tip's document lists, is refused by the MEASUREMENT (the image
+        the document approves), not by the transcript. The epoch case above covers only the transcript binding."""
+        newer = measured(pcr7="11" * 32, label="next")
+        m2 = self.single(2, m.digest(self.m1), document=newer)
+        path = self.d + "/unlisted.json"
+        attester = self.enrolled_attester(path, m2, newer)
+        # the quote is bound to the tip (epoch 2, the tip's nonce): the transcript check passes. It runs the old
+        # image (PCR 7 "00"*32, the lease tests' fake TPM), which the tip's document does not list: refused, with
+        # the measurement that differs named, and no record written (the retire evidence must not name an image
+        # the tip no longer approves).
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.refused("the quoted PCR digest is not the expected PCR values",
+                     ownerunlock.attest_booted, m2, newer, path, "a", lt.SESSION, evidence, attester=attester)
+        state = json.load(open(path))
+        self.assertNotIn("measurement", state["nodes"].get("a", {}))
+
+    def test_the_system_stamp_binds_to_the_record_this_verification_wrote(self):
+        """regalia-kms-dx7.8 review (the MAJOR finding): reattest leaves the state lock when it returns, and the
+        stamp runs under a re-taken lock. A concurrent owner unlock (initrd) that commits to the same state in
+        that gap writes a record the verification did not write; stamping it "system" would make an unlock the
+        retire evidence. The stamp goes only on the record THIS verification wrote: a record under another tip
+        (a different epoch) is refused, and the state is left untouched. The interleaving is simulated by letting
+        the verification run, then having the concurrent unlock overwrite its record before the stamp re-reads --
+        exactly the gap the finding names."""
+        path = self.d + "/stamp.json"
+        attester = self.enrolled_attester(path)
+        # first, the normal path: the verification's record is stamped (the record the retire reads)
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        with open(path) as f:
+            self.assertEqual(json.load(f)["nodes"]["a"]["measurement"], record)
+        # the concurrent unlock's record: a different epoch, an image under another tip, no phase
+        foreign = {"label": "next", "epoch": 2, "phase": None}
+        real_reattest = ownerunlock.lease.reattest
+
+        def reattest_then_unlock(*args, **kw):
+            real_reattest(*args, **kw)                      # the verification runs and writes its record
+            with attest.locked_state(path) as (state, save):  # then the concurrent unlock overwrites it
+                state["nodes"]["a"]["measurement"] = foreign
+                save()
+        # a fresh nonce for the re-quoted boot
+        nonce = attester.nonce("a")
+        with unittest.mock.patch.object(ownerunlock.lease, "reattest", reattest_then_unlock):
+            self.refused("attest-booted could not bind the record",
+                         ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION,
+                         self.evidence(self.m1, lt.SESSION, attester, nonce=nonce), attester=attester)
+        with open(path) as f:
+            self.assertEqual(json.load(f)["nodes"]["a"]["measurement"], foreign)  # untouched: no stamp, no save
 
     def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
         """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted

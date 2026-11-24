@@ -232,10 +232,14 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
     never came up on); a quote with no phase is taken to be the system phase, this function's purpose. The record
     then written is what a boot is: it names the SYSTEM phase. A set given per phase names it when its system quote
     is verified; a set with one value per PCR cannot tell the two phases apart by its values, so the record names
-    the phase the quote was taken in, and an unlock (initrd) is never recorded as a boot. The record ("label",
-    "epoch", "phase") is written into the owner's attest state at `state_path`, and returned. That record is the
-    retire evidence (rollout's owner witness); the node's own state never is, and an unlock never is. `attester` is
-    the owner's verifier under `manifest`/`document` (the same one that issued the evidence's nonce)."""
+    the phase the quote was taken in, and an unlock (initrd) is never recorded as a boot. The stamp lands on the
+    record THIS verification wrote: the one in the state is a record under this manifest's epoch (the verifier
+    recorded it as it verified the quote against this manifest), or it is refused -- an unlock that committed to
+    the state in the gap after the verification left its lock, or a record from another tip, would otherwise take
+    the stamp and become retire evidence. The record ("label", "epoch", "phase") is written into the owner's
+    attest state at `state_path`, and returned. That record is the retire evidence (rollout's owner witness); the
+    node's own state never is, and an unlock never is. `attester` is the owner's verifier under `manifest`/`document`
+    (the same one that issued the evidence's nonce)."""
     node = single_node(manifest, node_id)
     membership.hex_field(session_id, 64, "session_id")
     require(attester is not None, "attest-booted verifies under the owner's verifier: it must be given")
@@ -266,11 +270,20 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
     # The verifier's record names the phase the request came from only when the set is given per phase. Where the
     # set has one value per PCR, the record then names no phase, and the owner's tool -- the judge -- names the
     # phase the request was made in, so that an unlock (initrd) and a boot (system) are two records, not one.
+    # The stamp goes on the record THIS verification wrote, and on nothing else: reattest just recorded it under
+    # this manifest's epoch (the verifier records the epoch of the manifest it verified under, and this quote
+    # verified under `manifest`). A record that is not one -- an unlock that committed to the state in the gap
+    # after the verification left its lock, or a record from another tip -- is not this verification's, and the
+    # stamp is refused, leaving the state untouched (an unlock that took the stamp would be retire evidence).
     with attest.locked_state(state_path) as (state, save):
         record = state["nodes"].get(node_id, {})
         measurement = record.get("measurement")
         require(isinstance(measurement, dict), "attest-booted recorded nothing for %s: the verification wrote no "
                 "measurement" % node_id)
+        require(measurement.get("epoch") == manifest["epoch"],
+                "attest-booted could not bind the record: the state holds %s for %s, not a record under this "
+                "manifest's epoch %d (the verification just wrote one): run attest-booted again"
+                % (measurement, node_id, manifest["epoch"]))
         if measurement.get("phase") is None:
             measurement["phase"] = "system"
             record["measurement"] = measurement
