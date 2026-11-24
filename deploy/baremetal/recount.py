@@ -288,13 +288,11 @@ def main(argv=None, ask=None, run=None):
         owner_statement = None
         if args.owner_statement:
             owner_statement = _read_json(args.owner_statement, 65536)
-        node = None
-        if owner_statement is not None:
             # the statement is checked like the heartbeats: by recover.verify_owner, over this node's manifest,
             # for this node, this boot's session, by authenticated time, with purpose recount (its v2 keys carry
             # collector_sequence). Under a multi-node tip it is refused by plan().
             from deploy.baremetal import recover
-            node = node.Node(cfg, run)
+            node = node_module.Node(cfg, run)
             with open("/proc/sys/kernel/random/boot_id") as f:
                 boot_id = f.read().strip()
             seconds = heartbeat.authenticated_now(node.clock(), node.tpm_clock(), None)[0]
@@ -302,11 +300,9 @@ def main(argv=None, ask=None, run=None):
             recover.verify_owner(manifest, owner_statement, "recount", cfg["node_id"],
                                  recover.session_id(session), seconds,
                                  single_node=membership.profile(manifest) == membership.SINGLE_NODE)
-        signer = None
-        if membership.profile(manifest) == membership.SINGLE_NODE:
-            # liveness (docs/design/single-node.md 4.7): the node signs its own heartbeats on its beat signing
-            # counter (nv_signing, the same TPM): the floor must not go below what it has already signed.
-            signer = node.signing_counter(cfg, run).value if node is not None else node_module.signing_counter(cfg, run).value
+        # liveness (docs/design/single-node.md 4.7): the node signs its own heartbeats on its beat signing
+        # counter (nv_signing, the same TPM): the floor must not go below what it has already signed.
+        signer = node_module.signing_counter(cfg, run).value if membership.profile(manifest) == membership.SINGLE_NODE else None
         documents = [_read_json(path, heartbeat.MAX_BYTES * 2) for path in [p for p in defaults if os.path.exists(p)] + args.heartbeat]
         tpm = cfg["tcti"] or "the default TPM"
 

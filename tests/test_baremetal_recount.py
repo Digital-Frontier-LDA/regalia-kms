@@ -39,6 +39,10 @@ class Case(unittest.TestCase):
             fn(*args, **kw)
         self.assertIn(reason, str(caught.exception))
 
+    def signed(self, man, key=hbt.ROOT, signer="root"):
+        from tests.test_baremetal_membership import sign
+        return sign(man, key, signer)
+
 
 class Recount(Case):
     def test_an_unusable_counter_is_redefined_at_the_held_heartbeat_and_the_next_is_accepted(self):
@@ -393,6 +397,121 @@ class CommandLine(TheHostsTpmAndChain):
             json.dump({"schema": "regalia.authority/v1", "run_dir": "/run/regalia"}, f)
         argv = ["--config", self.d + "/other.json", "--audit-log", self.d + "/audit.jsonl"]
         self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=self.tpm), 1)
+        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
+
+    def owner_statement_host(self, collector_sequence=60):
+        """A single-node host (docs/design/single-node.md 4.7) whose heartbeat counter is unusable and whose
+        freshness state is gone: recount's only floor source is the owner's v2 recount statement. The chain is
+        a's single-node v5 tip (a, ACTIVE) over the fixture root, the counter broken, the signing counter the
+        node's own beat counter at 30. The anchor is judged by the tip's own schema, like node.store() (#242 B3)."""
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        from deploy.baremetal import node as node_module
+        from tests.test_baremetal_single_node_network import single_site
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": pub(OWNER_KEYS[0])}]   # the statement's owner key
+        chain = [self.signed(man)]
+        tpm = hbt.FakeTpm()
+        for index in ("0x01500018", "0x0150001c"):
+            hb.Counter(index, lock_path=self.d + "/%s.lock" % index, run=tpm).define()
+        hb.Counter("0x0150001c", lock_path=self.d + "/0x0150001c.lock", run=tpm).advance(30)
+        anchor = m.HighWater("0x01500016", lock_path=self.d + "/hw.lock", run=tpm)
+        anchor.define()
+        store = m.Store(self.d + "/membership.json", hbt.pub(hbt.ROOT), anchor)
+        # the chain is v5: a store committing it would set the anchor's schema to v5 (a QUORUM schema) and refuse
+        # the owner-written anchor, as the convergence and reanchor owner-chain fixtures do
+        store._judge_by = lambda manifests: None
+        store.commit(chain[0])
+        tpm.nv.pop("0x01500018")                                   # the heartbeat counter's index gone: unusable
+        import builtins
+        real_open = builtins.open
+        with real_open(os.path.join(self.d, "site.json"), "w") as f:
+            json.dump(single_site(), f)
+        with real_open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
+            cfg = json.load(f)
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti="device:/dev/tpmrm0", state_dir=self.d, node_id="a",
+                   site=os.path.join(self.d, "site.json"),
+                   nv_epoch="0x01500016", nv_heartbeat="0x01500018", nv_signing="0x0150001c")
+        with open(self.d + "/node.json", "w") as f:
+            json.dump(cfg, f)
+        # a single-node host whose approved images are unsigned: its anchor and counters are owner-written (no
+        # approved-image write policy), so the policy resolvers answer None, never the real PCR key or store
+        for name in ("image_policy", "image_key", "define_policy", "_tip_schema"):
+            patcher = unittest.mock.patch.object(node_module, name, return_value=None)
+            self.addCleanup(patcher.stop)
+            patcher.start()
+
+        def run(argv, **kw):
+            if argv[0] == "systemctl":
+                import subprocess
+                return subprocess.CompletedProcess(argv, 3, b"inactive\n", b"")
+            if argv[0] == "tpm2_readclock":
+                import subprocess
+                return subprocess.CompletedProcess(argv, 0, b"  clock: 5000\n", b"")
+            return tpm(argv, **kw)
+        with real_open(os.path.join(self.d, "recovery-session.json"), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "00ff00ff-0000-4000-8000-000000000000",
+                       "issued": T0 - 60}, f)
+        with real_open(os.path.join(self.d, "boot_id"), "w") as f:
+            f.write("00ff00ff-0000-4000-8000-000000000000\n")
+        from deploy.baremetal import recover
+        # the session file the node's run_dir would hold (/run/regalia, not writable on this host): point the
+        # module constant at this directory, which holds it
+        session_patcher = unittest.mock.patch.object(recover, "SESSION_FILE", os.path.join(self.d, "recovery-session.json"))
+        self.addCleanup(session_patcher.stop)
+        session_patcher.start()
+        tip = chain[0]["manifest"]
+        st = recover.statement("recount", "a", tip, "aa" * 8 + ":00ff00ff-0000-4000-8000-000000000000",
+                               T0 + 600, collector_epoch=1, collector_sequence=collector_sequence)
+        with real_open(self.d + "/statement.json", "w") as f:
+            json.dump({"statement": st, "key": pub(OWNER_KEYS[0]),
+                       "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}, f)
+
+        def ask(prompt):
+            return "recount 0x01500018 at %d" % max(collector_sequence, 30)
+        # the kernel's boot ID, on a host without /proc: the statement's session names this boot
+        def stub(*args, **kw):
+            if args and args[0] == "/proc/sys/kernel/random/boot_id":
+                return real_open(os.path.join(self.d, "boot_id"), *args[1:], **kw)
+            return real_open(*args, **kw)
+        open_patcher = unittest.mock.patch("builtins.open", side_effect=stub)
+        self.addCleanup(open_patcher.stop)
+        open_patcher.start()
+        # authenticated time: the host's clock reads inside the statement's validity window. The statement
+        # expires at T0+600; verify_owner needs `now < expires <= now + SESSION_TTL`, and the session (issued
+        # T0-60) needs `now - issued <= SESSION_TTL`. With now = T0+300: 0 < 600 <= 900 and 360 <= 900, so both
+        # verify. Patched (not a chrony status file: root-owned files and a boot clock are not this host's).
+        auth_patcher = unittest.mock.patch("deploy.baremetal.heartbeat.authenticated_now",
+                                           side_effect=lambda clock, tpm_clock, floor: (T0 + 300, floor))
+        self.addCleanup(auth_patcher.stop)
+        auth_patcher.start()
+        return run, ask
+
+    def test_owner_statement_at_the_command(self):
+        """--owner-statement is the single-node floor source at the command (docs/design/single-node.md 4.7):
+        the node's own beat signing counter (nv_signing) is read for the liveness floor, the statement's
+        collector_sequence raises the floor, and the new counter reads the max."""
+        run, ask = self.owner_statement_host()
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 0)
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.value(), 60)
+        with open(self.d + "/audit.jsonl") as f:
+            self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
+        self.assertEqual(json.loads(open(self.d + "/recount-floor-0x01500018.json").read())["floor"], 60)
+
+    def test_owner_statement_refused_under_a_multi_node_tip(self):
+        """A v2 recount statement given against a multi-node manifest is refused by the command, before
+        anything is changed: the owner is not a floor source for a multi-node recount."""
+        run, ask = self.owner_statement_host()
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        # swap the host's chain for the multi-node fixture's: the statement names the single-node tip, so the
+        # node's manifest (multi-node) and the statement disagree, and the statement is refused
+        with open(self.d + "/membership.json", "wb") as f:
+            f.write(m.canonical([signed(self.m1)]))
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
         self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
 
 

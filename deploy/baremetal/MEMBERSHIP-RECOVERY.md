@@ -293,6 +293,10 @@ it, and the statement is refused.
   and the v2 prefix; a recount statement has `collector_sequence` (refused without it);
   `verify_owner` under `single_node=True` requires v2 (v1 refused) and refuses a collector above the
   tip; a multi-node tip accepts v1 as before.
+  (`SingleNodeCommand`): at the command, `--owner-chain` loads its `--owner-statement` without
+  `--one-source`; `apply()` with the owner chain restores a crash-window store (minimum 1, the
+  source named `owner-chain` in the trail, the phrase names the collector's epoch) and is refused
+  under a multi-node tip.
 - `tests/test_baremetal_reanchor.py` (`OwnerChainReanchor`): `plan` with `sources={}` and
   `owner_chain` under a single-node tip; a node source alongside the owner chain is refused;
   the owner chain is refused under a multi-node tip; the full `reanchor()` call writes the anchor and
@@ -302,6 +306,10 @@ it, and the statement is refused.
   multi-node manifest; the liveness floor must not go below the signing counter (max of all sources,
   no margin); with neither heartbeat nor statement the recount is refused; the floor is the max of
   all sources (old counter, prior, held heartbeats, `collector_sequence`, signing counter).
+  (`CommandLine`): at the command, `--owner-statement` is a floor source on a single-node host whose
+  counter is unusable (the node's own beat signing counter is read for the liveness floor, the new
+  counter reads the max); a statement given against a multi-node manifest is refused before anything
+  is changed.
 - `tests/test_baremetal_owner.py` (`SingleNodeRecovery`): under a single-node tip the collector is
   mandatory (no witness, no statement); the v2 statement carries `collector_epoch`; a recount
   statement under single-node needs `collector_sequence`; a multi-node tip keeps v1 and the

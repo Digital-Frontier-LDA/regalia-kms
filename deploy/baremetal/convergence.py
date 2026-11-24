@@ -213,14 +213,6 @@ def recover(store, sources, minimum=None, owner_chain=None):
         else:
             minimum = 1 if store.pinned() else 2
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
-    if owner_chain is not None:
-        # the owner chain's tip determines the anchor's schema: in production a v5 node's anchor is
-        # policy-written (the node's approved-image policy), so the schema is irrelevant there. In a test
-        # fixture with an owner-written anchor and a v3 schema, setting hw._schema to the tip's schema (v5,
-        # a QUORUM schema) would refuse the owner-written index. The anchor's own schema (set at construction)
-        # is left alone: the store's _judge_by no-op (in tests) or the production policy (in real nodes)
-        # governs. Here we only need the anchored epoch, which the anchor reads by its own schema.
-        pass
     chain, _ = agreed(store.root_key, sources, minimum, store.hw.value(), owner_chain=owner_chain)
     store.restore(chain)
     return summary(store)

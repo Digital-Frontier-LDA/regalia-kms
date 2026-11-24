@@ -400,9 +400,11 @@ def main(argv=None):
     a.add_argument("--config", required=True)
     a.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json")
     a.add_argument("--one-source", action="store_true", help="one peer, the owner the second source (needs --owner-statement)")
-    a.add_argument("--owner-statement")
+    a.add_argument("--owner-statement",
+                   help="the owner's signed statement: the second source with --one-source, or the v2 statement over "
+                        "--owner-chain (single-node, docs/design/single-node.md 4.7: with collector_epoch)")
     a.add_argument("--owner-chain", help="the owner's whole chain (single-node: docs/design/single-node.md 4.7; "
-                    "refused under a multi-node tip)")
+                    "refused under a multi-node tip; needs --owner-statement)")
     r = sub.add_parser("_restore")
     r.add_argument("--config", required=True)
     args = parser.parse_args(argv)
@@ -434,8 +436,8 @@ def main(argv=None):
             with open(path, "rb") as f:
                 peers[name] = membership.load(f.read(MAX_CHAIN_BYTES + 1), MAX_CHAIN_BYTES)
         statement_doc = None
-        if args.one_source:
-            require(args.owner_statement, "--one-source needs --owner-statement")
+        if args.one_source or args.owner_chain:
+            require(args.owner_statement, "--one-source and --owner-chain need --owner-statement")
             with open(args.owner_statement, "rb") as f:
                 statement_doc = membership.load(f.read(65536))
         owner_chain_doc = None

@@ -487,3 +487,111 @@ class SingleNodeStatement(Witness):
         v1 = self.signed()
         self.assertEqual(recover.verify_owner(self.m3, v1, "recover", "b", self.session, T0,
                                               single_node=False)["epoch"], 3)
+
+
+class SingleNodeCommand(Recovers):
+    """The single-node owner-chain path at the COMMAND (docs/design/single-node.md 4.7):
+    `recover apply --owner-chain CHAIN.json --owner-statement ST.json`, no --peer: main() loads the statement
+    and hands the owner chain over, apply() verifies the chain and the v2 statement over the tip, and the restore
+    runs as regalia-sync. The owner chain is refused under a multi-node tip."""
+
+    def single_tip(self):
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O, pub as p
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": p(O[0])}]
+        return rt.sign(man)
+
+    def single_v2(self, tip, node="a", collector_epoch=1, session=None):
+        st = recover.statement("recover", node, tip["manifest"], session or "aa" * 8 + ":boot-x", T0 + 300,
+                               collector_epoch=collector_epoch)
+        return {"statement": st, "key": "11" * 32, "sig": "22" * 64}
+
+    def single_runner(self, store):
+        def run(cmd, cwd=None, capture_output=None, text=None, input=None):
+            self.assertEqual(cmd[:5], ["runuser", "-u", recover.SYNC_USER, "-g", recover.SYNC_USER])
+            self.assertIn("_restore", cmd)
+            given = json.loads(input)
+            self.handed.append(given)
+            try:
+                out = recover.handed(self.node(store), given, self.trail.append)
+            except m.Refused as refusal:
+                return subprocess.CompletedProcess(cmd, 1, "", "REFUSED: %s" % refusal)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(out) + "\n", "")
+        return run
+
+    def single_apply(self, store, owner_chain=None, one_source=None, phrase=None, peers=None):
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
+            return asked[-1] if phrase is None else phrase
+        node = self.node(store)
+        with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                unittest.mock.patch("deploy.baremetal.node.publish"), \
+                unittest.mock.patch.object(recover, "owner_check",
+                                           side_effect=lambda n, s, p, peer, now=None, boot_id=None:
+                                           (lambda tip, single_node=None: s["statement"])):
+            try:
+                return recover.apply("/etc/regalia/node.json", peers or {}, one_source, typed=typed,
+                                     run=self.single_runner(store), owner_chain=owner_chain)
+            finally:
+                self.asked = asked
+
+    def test_main_loads_the_owner_statement_with_owner_chain_no_peer(self):
+        """--owner-chain takes its --owner-statement without --one-source: the documented command
+        `recover apply --owner-chain CHAIN --owner-statement ST` must load both and hand them to apply()."""
+        tip = self.single_tip()
+        signed = self.single_v2(tip)
+        with open(self.d + "/owner-chain.json", "w") as f:
+            json.dump([tip], f)
+        with open(self.d + "/statement.json", "w") as f:
+            json.dump(signed, f)
+        cfg = {"schema": "regalia.node/v1", "node_id": "a", "root_key": "aa" * 32, "run_dir": self.d,
+               "state_dir": self.d, "site": "/nonexistent"}
+        with open(self.d + "/node.json", "w") as f:
+            json.dump(cfg, f)
+        with unittest.mock.patch("deploy.baremetal.node.load", return_value=cfg), \
+                unittest.mock.patch("deploy.baremetal.node.Node") as node_mock, \
+                unittest.mock.patch("deploy.baremetal.recover.apply") as apply_mock, \
+                unittest.mock.patch.object(recover.os, "geteuid", return_value=0):
+            node_mock.return_value = types.SimpleNamespace(node_id="a", cfg=cfg, path=lambda n: os.path.join(self.d, n))
+            self.assertEqual(recover.main(["apply", "--config", self.d + "/node.json",
+                                           "--owner-chain", self.d + "/owner-chain.json",
+                                           "--owner-statement", self.d + "/statement.json"]), 0)
+            self.assertEqual(apply_mock.call_count, 1)
+            args, kw = apply_mock.call_args
+            self.assertEqual(args[0], os.path.join(self.d, "node.json"))
+            self.assertEqual(args[1], {})                                          # no peer
+            self.assertEqual(args[2]["statement"], signed["statement"])             # the statement, loaded
+            self.assertEqual(kw["owner_chain"], [tip])                              # and the owner chain
+
+    def test_apply_owner_chain_recovers_a_gone_disk(self):
+        """apply() under the owner chain: the chain verifies from the root, the v2 statement is checked over the
+        tip (v2, collector_epoch <= tip), minimum 1 (while the record pins), and the store is restored from the
+        owner's chain alone."""
+        fresh = self.store("a2")
+        # the chain is v5: a store committing it would set the anchor's schema to v5 (a QUORUM schema) and refuse
+        # the owner-written anchor, as the convergence and reanchor owner-chain fixtures do
+        fresh._judge_by = lambda manifests: None
+        fresh.commit(self.single_tip())
+        os.unlink(fresh.path)                                                       # the disk: gone
+        self.assertTrue(fresh.pinned())
+        tip = self.single_tip()
+        self.assertEqual(self.single_apply(fresh, owner_chain=[tip], one_source=self.single_v2(tip)), 1)
+        self.assertEqual(fresh.load()["epoch"], 1)
+        self.assertEqual(self.asked, ["recover c to epoch 1 %s from owner-chain collector at epoch 1"
+                                      % m.digest(tip["manifest"])[:8]])
+        self.assertEqual(self.outcomes(), [("recover", "ALLOW")])
+        self.assertEqual(self.trail[0]["sources"], ["owner-chain"])
+        self.assertEqual(self.trail[0]["minimum"], 1)
+        self.assertTrue(fresh.pinned())
+
+    def test_apply_owner_chain_refused_under_multi_node_tip(self):
+        """The owner chain is refused under a multi-node tip: the path is single-node's alone."""
+        c = self.crash_window()
+        tip = self.single_tip()
+        self.refused("owner_chain is refused under a multi-node tip", self.single_apply, c,
+                     owner_chain=self.stores["b"].envelopes(), one_source=self.single_v2(tip, node="c"))
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
