@@ -55,6 +55,10 @@ type CosmosTransaction struct {
 	Fee           []Coin
 	GasLimit      uint64
 	Messages      []CosmosMessage
+	// SignerPublicKey is the single signer's SignerInfo.public_key, nil when the SignDoc leaves it
+	// out (the Cosmos SDK allows that once the key is on chain). The coordinator verifies the
+	// token's signature under it before success (regalia-kms-35b).
+	SignerPublicKey *CosmosPublicKey
 }
 
 type CosmosPolicy struct {
