@@ -68,6 +68,22 @@ func walkLengthDelimited(input []byte, visit func(tag uint64, value []byte) erro
 	})
 }
 
+// appendVarint appends value as a minimal base-128 varint, the only form a canonical encoder emits.
+func appendVarint(out []byte, value uint64) []byte {
+	for value >= 0x80 {
+		out = append(out, byte(value)|0x80)
+		value >>= 7
+	}
+	return append(out, byte(value))
+}
+
+// appendLengthDelimited appends field as a wire type 2 field: tag, minimal length, value.
+func appendLengthDelimited(out []byte, field uint64, value []byte) []byte {
+	out = appendVarint(out, field<<3|2)
+	out = appendVarint(out, uint64(len(value)))
+	return append(out, value...)
+}
+
 // decodeVarint reads a single base-128 varint from the front of input and
 // returns the decoded value plus the number of bytes consumed. Varints longer
 // than 10 bytes or with continuation bits beyond 64 bits are rejected so

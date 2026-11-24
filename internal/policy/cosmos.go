@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -145,7 +146,7 @@ func parseSignDoc(input []byte) (*CosmosTransaction, error) {
 	if !seenBody || !seenAuth || !seenChain {
 		return nil, fmt.Errorf("%w: missing required SignDoc field", ErrCosmosSignDoc)
 	}
-	sequence, fee, gasLimit, err := parseAuthInfo([]byte(authBytes))
+	sequence, fee, gasLimit, signerKey, err := parseAuthInfo([]byte(authBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -153,15 +154,55 @@ func parseSignDoc(input []byte) (*CosmosTransaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &CosmosTransaction{ChainID: chainID, AccountNumber: accountNumber, Sequence: sequence, Fee: fee, GasLimit: gasLimit, Messages: messages}, nil
+	// ONLY THE CANONICAL ENCODING IS SIGNED (regalia-kms-35b). The token signs sha256 of these exact
+	// bytes, and a verifier does not see them: a chain rebuilds the SignDoc from TxRaw and its own
+	// state, fields 1-4 in number order, minimal varints, zero and empty values left out, and checks
+	// the signature against sha256 of THAT. The checks above settle presence, uniqueness and wire
+	// type, never order or encoding, so a reordered document meaning the same transaction parsed and
+	// was signed, and the chain refused a signature it could never reproduce -- after this daemon
+	// had spent the account sequence on it.
+	//
+	// CHECKED LAST, so a document that is wrong in what it says (no messages, an unknown type) is
+	// refused with that diagnosis rather than with this one. Nothing is signed before this returns.
+	//
+	// REFUSED, NOT RE-ENCODED. Signing a re-encoding would sign bytes the caller did not send and
+	// cannot have checked; refusing makes the request bytes the canonical bytes by construction, so
+	// the coordinator's sha256 over request.Data is the digest a verifier computes. One comparison
+	// covers every non-canonical shape: field order, non-minimal tags, lengths and varints, an
+	// explicit account_number 0, and a present-but-empty field. body and auth_info are the chain's
+	// own bytes (TxRaw carries them verbatim), so only this outer layer decides verifiability.
+	if !bytes.Equal(input, canonicalSignDocBytes(bodyBytes, authBytes, chainID, accountNumber)) {
+		return nil, fmt.Errorf("%w: non-canonical SignDoc encoding", ErrCosmosSignDoc)
+	}
+	return &CosmosTransaction{ChainID: chainID, AccountNumber: accountNumber, Sequence: sequence, Fee: fee, GasLimit: gasLimit, Messages: messages, SignerPublicKey: signerKey}, nil
 }
 
-func parseAuthInfo(input []byte) (uint64, []Coin, uint64, error) {
+// canonicalSignDocBytes is the SignDoc encoding a Cosmos verifier recomputes: proto3 as a generated
+// encoder emits it, fields in number order, each length and varint minimal, and a field holding
+// its zero value (empty bytes or string, account_number 0) left out.
+func canonicalSignDocBytes(body, authInfo []byte, chainID string, accountNumber uint64) []byte {
+	out := make([]byte, 0, len(body)+len(authInfo)+len(chainID)+32)
+	if len(body) > 0 {
+		out = appendLengthDelimited(out, 1, body)
+	}
+	if len(authInfo) > 0 {
+		out = appendLengthDelimited(out, 2, authInfo)
+	}
+	if chainID != "" {
+		out = appendLengthDelimited(out, 3, []byte(chainID))
+	}
+	if accountNumber != 0 {
+		out = appendVarint(appendVarint(out, 4<<3), accountNumber)
+	}
+	return out
+}
+
+func parseAuthInfo(input []byte) (uint64, []Coin, uint64, *CosmosPublicKey, error) {
 	// Empty AuthInfo is wire-valid protobuf but not spendable. Keep parsing it so
 	// callers receive the canonical envelope's other diagnostics; policy rejects
 	// the zero sequence/gas shape before hardware use.
 	if len(input) == 0 {
-		return 0, nil, 0, nil
+		return 0, nil, 0, nil, nil
 	}
 	var signerInfo, feeBytes []byte
 	var seenSigner, seenFee bool
@@ -188,30 +229,86 @@ func parseAuthInfo(input []byte) (uint64, []Coin, uint64, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	if !seenSigner || !seenFee {
-		return 0, nil, 0, fmt.Errorf("%w: AuthInfo missing signer or fee", ErrCosmosSignDoc)
+		return 0, nil, 0, nil, fmt.Errorf("%w: AuthInfo missing signer or fee", ErrCosmosSignDoc)
 	}
-	sequence, err := parseSignerInfo(signerInfo)
+	sequence, signerKey, err := parseSignerInfo(signerInfo)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
 	fee, gasLimit, err := parseFee(feeBytes)
 	if err != nil {
-		return 0, nil, 0, err
+		return 0, nil, 0, nil, err
 	}
-	return sequence, fee, gasLimit, nil
+	return sequence, fee, gasLimit, signerKey, nil
 }
 
-func parseSignerInfo(input []byte) (uint64, error) {
+// CosmosPublicKey is a SignerInfo.public_key as the SignDoc carries it: the Any's type_url and, for
+// the single-key types a token can hold (cosmosKeyTypes), the key bytes of field 1 -- a SEC1 point,
+// compressed as the SDK writes it. Key is nil for any other type (a multisig, say); such a key
+// cannot be checked against one token's signature, and the coordinator refuses it.
+type CosmosPublicKey struct {
+	TypeURL string
+	Key     []byte
+}
+
+// cosmosKeyTypes are the Any type_urls of the single-key messages ({bytes key = 1;}) whose key this
+// parser lifts.
+var cosmosKeyTypes = map[string]bool{"/cosmos.crypto.secp256k1.PubKey": true, "/cosmos.crypto.secp256r1.PubKey": true}
+
+// THE SIGNER'S PUBLIC KEY IS KEPT, NOT DISCARDED (regalia-kms-35b; the authinfo-parser spec
+// amendment in regalia#606). It is the key a chain verifies this transaction's signature with, so
+// it is what the daemon checks the token's signature against before calling it success. Given
+// twice it is refused like every other repeated field: which of two keys counts would otherwise be
+// up to the reader.
+func parseSignerPublicKey(value []byte) (*CosmosPublicKey, error) {
+	typeURL, inner, err := decodeAny(value)
+	if err != nil {
+		return nil, fmt.Errorf("%w: SignerInfo.public_key: %v", ErrCosmosSignDoc, err)
+	}
+	key := &CosmosPublicKey{TypeURL: typeURL}
+	if !cosmosKeyTypes[typeURL] {
+		return key, nil
+	}
+	var seenKey bool
+	err = walkFields(inner, func(tag, wire uint64, field []byte) error {
+		if tag != 1 || wire != 2 {
+			return fmt.Errorf("%w: PubKey.field %d wire %d not allowed", ErrCosmosSignDoc, tag, wire)
+		}
+		if seenKey {
+			return fmt.Errorf("%w: PubKey.key appears twice", ErrCosmosSignDoc)
+		}
+		key.Key = append([]byte(nil), field...)
+		seenKey = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(key.Key) == 0 {
+		return nil, fmt.Errorf("%w: PubKey.key is empty", ErrCosmosSignDoc)
+	}
+	return key, nil
+}
+
+func parseSignerInfo(input []byte) (uint64, *CosmosPublicKey, error) {
 	var sequence uint64
+	var signerKey *CosmosPublicKey
 	var seenMode, seenSequence bool
 	err := walkFields(input, func(tag, wire uint64, value []byte) error {
 		switch tag {
 		case 1:
 			if wire != 2 {
 				return fmt.Errorf("%w: SignerInfo.public_key wire %d not allowed", ErrCosmosSignDoc, wire)
+			}
+			if signerKey != nil {
+				return fmt.Errorf("%w: SignerInfo.public_key appears twice", ErrCosmosSignDoc)
+			}
+			var err error
+			if signerKey, err = parseSignerPublicKey(value); err != nil {
+				return err
 			}
 		case 2:
 			if wire != 2 {
@@ -240,15 +337,15 @@ func parseSignerInfo(input []byte) (uint64, error) {
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	// sequence 0 — every account's FIRST transaction — is encoded by omitting the field (proto3), so
 	// its absence means 0, exactly as the chain reads it. mode_info is a message, not a scalar, and a
 	// signer with no mode is genuinely malformed, so it stays required.
 	if !seenMode {
-		return 0, fmt.Errorf("%w: SignerInfo missing mode_info", ErrCosmosSignDoc)
+		return 0, nil, fmt.Errorf("%w: SignerInfo missing mode_info", ErrCosmosSignDoc)
 	}
-	return sequence, nil
+	return sequence, signerKey, nil
 }
 
 func parseFee(input []byte) ([]Coin, uint64, error) {

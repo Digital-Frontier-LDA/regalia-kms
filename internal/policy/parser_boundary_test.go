@@ -81,9 +81,11 @@ func TestTheExportedParserCarriesTheBoundary(t *testing.T) {
 	coin := append(append([]byte(nil), encodeString(1, "uatom")...), encodeString(2, "100")...)
 	msgSend := append(append(append([]byte(nil), encodeString(1, "cosmos1from")...), encodeString(2, "cosmos1target")...), encodeLengthDelimited(3, coin)...)
 	body := encodeLengthDelimited(1, encodeAny("/cosmos.bank.v1beta1.MsgSend", msgSend))
+	// auth_info is a real one, not a present-but-empty field 2: an encoder leaves an empty field
+	// out, so that shape is non-canonical and refused before signing (regalia-kms-35b).
 	valid := append(append(append(append([]byte(nil),
 		encodeLengthDelimited(1, body)...),
-		encodeLengthDelimited(2, nil)...),
+		encodeLengthDelimited(2, encodeAuthInfo())...),
 		encodeString(3, "test-chain")...),
 		encodeTopVarint(4, 1)...)
 	if _, err := ParseCosmosSignDoc(valid); err != nil {
