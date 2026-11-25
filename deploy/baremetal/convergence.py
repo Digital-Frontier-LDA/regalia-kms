@@ -39,6 +39,8 @@ TPM anchor) and every heartbeat through Freshness.accept (signer, manifest, time
 audited(sink, ...) runs one decision and emits one event for it, allowed or denied, naming the epoch: the
 record #69 asks for. A reason is cut to printable ASCII; none of the decisions puts a secret in one.
 """
+import re
+
 from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
@@ -127,16 +129,35 @@ def catch_up(store, envelopes):
     return summary(store)
 
 
-def agreed(root_key, sources, minimum, anchored):
+def agreed(root_key, sources, minimum, anchored, owner_chain=None):
     """The chain that `sources` ({who: the whole chain they gave}) agree on, and its newest manifest: each
     chain verified from the pinned root at epoch 1 and reaching epoch `anchored`, at least `minimum` of
     them, no two differing at an epoch they share, and every source a node the newest manifest lets authorize.
-    The longest is returned. Nothing is installed here."""
+    The longest is returned. Nothing is installed here.
+
+    `owner_chain` (the owner's whole chain plus the checked owner statement, a separate argument so a node can
+    never be named "owner") counts as a source ONLY when the newest manifest's topology profile is SINGLE_NODE;
+    under a multi-node tip it is refused. It goes through the same accept/anchored checks but skips the
+    "may authorize" check, since the owner is not a node of any chain (docs/design/single-node.md 4.7)."""
     require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
             "sources must map each source (a node ID) to the non-empty chain it gave")
-    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
+    # every sources key must be a node ID: this keeps the caller's keys out of the name space of the
+    # owner chain, which the "may authorize" loop exempts by key (a caller-supplied "__owner__" key must not
+    # be able to opt out of the node check -- review defcc750, finding 1)
+    for key in sources:
+        require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", key),
+                "source %r is not a node ID: the owner chain is the owner_chain argument, not a key" % key)
+    # the owner chain, if given: it goes through the same checks but is not a node, so the "may authorize"
+    # check is skipped for it; it is refused under a multi-node tip
+    if owner_chain is not None:
+        require(isinstance(owner_chain, list) and owner_chain, "owner_chain must be a non-empty list of envelopes")
+    all_sources = dict(sources)
+    if owner_chain is not None:
+        all_sources["__owner__"] = owner_chain
+    require(len(all_sources) >= minimum,
+            "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(all_sources)))
     verified, last = {}, {}
-    for source, chain in sources.items():
+    for source, chain in all_sources.items():
         require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
         digests, current = [], None
         for envelope in chain:
@@ -147,18 +168,28 @@ def agreed(root_key, sources, minimum, anchored):
         require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
                 "and cannot vouch for the anchored epochs" % (len(digests), anchored))
         verified[source], last[source] = digests, current
-    longest = max(sources, key=lambda source: len(verified[source]))
+    longest = max(all_sources, key=lambda source: len(verified[source]))
     for digests in verified.values():
         for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
             require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
                     "nothing is restored; record an incident" % epoch)
-    for source in sources:
+    # read the profile BEFORE any may-require: it must not be a bare TypeError from a v5 topology this code does not
+    # know (membership.profile's require is a Refused, but profile() itself takes an arbitrary dict)
+    profile = None
+    if owner_chain is not None:
+        profile = membership.profile(last[longest])
+    require(owner_chain is None or profile == membership.SINGLE_NODE,
+            "owner_chain is refused under a %s tip: only a single-node manifest accepts it as the sole source" % profile)
+    # every source must be a node the chain lets authorize, except the owner (who is not a node)
+    for source in all_sources:
+        if source == "__owner__":
+            continue
         require(membership.may(last[longest], source, "authorize"),
                 "%r is not a source this chain trusts: not a node it lets authorize" % source)
-    return sources[longest], last[longest]
+    return all_sources[longest], last[longest]
 
 
-def recover(store, sources, minimum=None):
+def recover(store, sources, minimum=None, owner_chain=None):
     """A node whose store refuses with ROLLBACK or CONFLICT (its disk is older than its TPM anchor, lost, or
     not the chain the TPM recorded) installs a whole chain fetched from its peers, through Store.restore.
     Returns the summary.
@@ -175,13 +206,22 @@ def recover(store, sources, minimum=None):
     difference is a CONFLICT and nothing is installed. The longest is restored, and every node named as a
     source must be one that manifest lets authorize. An explicit `minimum` is an operator's decision.
 
+    `owner_chain` (the owner's whole chain plus the checked owner statement, as a separate argument so a
+    node can never be named "owner") counts as a source ONLY when the newest manifest's topology profile is
+    SINGLE_NODE; under a multi-node tip it is refused. It skips the "may authorize" check (the owner is not
+    a node) but goes through the same accept/anchored checks (docs/design/single-node.md 4.7).
+
     Being a mapping, one source cannot be counted twice. That the chain really came from the peer it is
     filed under is the transport's to establish (the peer's WireGuard and mTLS identities, pinned in the
     manifest: #80); this function cannot."""
     if minimum is None:
-        minimum = 1 if store.pinned() else 2
+        # under single-node, the owner chain is enough: minimum defaults to 1 in the crash window
+        if owner_chain is not None:
+            minimum = 1
+        else:
+            minimum = 1 if store.pinned() else 2
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
-    chain, _ = agreed(store.root_key, sources, minimum, store.hw.value())
+    chain, _ = agreed(store.root_key, sources, minimum, store.hw.value(), owner_chain=owner_chain)
     store.restore(chain)
     return summary(store)
 

@@ -14,12 +14,14 @@ enrolment, and owner.py's two commands.
 The owner cards' OpenPGP envelope is stood in for here (gpg is not run: a real card's decryption is dx7.13's hardware run)."""
 import base64
 import contextlib
+import hashlib
 import copy
 import io
 import json
 import os
 import shutil
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -361,6 +363,383 @@ class Exchange(Case):
         self.assertEqual(key.sign(unlock.owner_signed_message(vector["response"])).hex(), vector["signature"])
         unlock.verify_owner_signature({"response": vector["response"], "signature": {"alg": "ed25519", "key": vector["public"], "sig": vector["signature"]}},
                                       [{"alg": "ed25519", "key": vector["public"]}])
+
+
+class AttestBooted(Case):
+    """regalia-kms-dx7.8, docs/design/single-node.md 4.6: the owner's tool is the judge of the single-node host's
+    update. attest-booted takes the quote the node prints for its nonce in the BOOTED (system) phase, verifies it with
+    the owner's verifier -- under the tip's measurements, so an unlisted image and an unlisted site (PCR 12) are refused
+    as an unlock is -- and records the sighting in the owner's state. That record is the retire evidence (rollout's
+    owner witness); the node's own state never is, and an unlock (initrd) never is. (The quotes are the lease tests'
+    fake ones: they cover the selection the policy names, whatever it is.)"""
+
+    def evidence(self, manifest, session, attester, phase=None, nonce=None):
+        """The node's quote for `attester`'s nonce (issued from the attester unless `nonce` is given): over the
+        policy's selection, that manifest's epoch, that boot session. With `phase`, the quote's boot phase (the
+        owner's tool knows which phase the node is in: initrd at the unlock, system after the volume opens)."""
+        node = ownerunlock.single_node(manifest, "a")
+        nonce = nonce or attester.nonce("a")
+        key = b"boot session key " + bytes.fromhex(session)[:16]
+        signed = self.keys["a"].signer(ek_name=node["ek_name"], reset=self.boots)(
+            attest.qualifying_data("a", manifest["epoch"], bytes.fromhex(session), key, nonce))
+        ev = {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
+        if phase is not None:
+            ev["phase"] = phase
+        return ev
+
+    def attester(self, manifest=None, doc=None, path=None):
+        manifest, doc = manifest or self.m1, doc or self.doc
+        return ownerunlock.verifier(manifest, doc, path or (self.d + "/attest-booted.json"))
+
+    def test_a_system_phase_quote_of_the_running_node_is_the_record_the_retire_reads(self):
+        path = self.d + "/attest-booted.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        # the owner's state now holds the witness retire_ready reads: the record the verification wrote,
+        # stamped, and carrying the nonce it consumed (the identity of the verification, dx7.8's stamp binding)
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"], {"label": "current", "epoch": 1, "phase": "system", "nonce": evidence["nonce"]})
+
+    def test_the_node_s_quote_for_owner_evidence_is_accepted_and_is_the_retire_evidence(self):
+        """regalia-kms-dx7.8 review, finding 1: `update quote-for-owner` stamps the evidence with
+        `phase="system"` (a node claim), and `owner.py attest-booted` takes that exact evidence. The phase
+        is a claim, not part of the attestation the verifier checks, so it must be stripped before the
+        verifier's exact-keys check -- the runbook's step 3 (node quote, then attest-booted --evidence) is
+        the retire evidence path and must work. Feeding the phase-stamped quote through is what the old
+        code refused with 'unknown=[phase]'; now it is the record retire_ready reads."""
+        path = self.d + "/qfor.json"
+        attester = self.enrolled_attester(path)
+        # exactly the object update.quote_for_owner prints: the four evidence keys plus phase="system"
+        evidence = self.evidence(self.m1, lt.SESSION, attester, phase="system")
+        self.assertEqual(set(evidence), {"ephemeral_public", "nonce", "quote", "signature", "phase"})
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"], {"label": "current", "epoch": 1, "phase": "system", "nonce": evidence["nonce"]})
+
+    def test_the_attest_booted_cli_issues_the_nonce_and_verifies_under_the_unlock_s_verifier(self):
+        """regalia-kms-dx7.8, the runbook's hand-carry: owner.py attest-booted --nonce prints a nonce from the
+        owner's ONE verifier (attest.json, the same file contribute and unlock use, where the AK is enrolled), the
+        node quotes it (update quote-for-owner), and --evidence verifies it under that same verifier. A separate
+        state file would hold no AK and no nonce: the quote would refuse. The record lands in attest.json, the
+        witness retire_ready reads."""
+        import unittest.mock as mock
+        from deploy.baremetal import manifest as manifest_tool, measurements
+        state_dir = self.d + "/state"
+        os.makedirs(state_dir)
+        attester = self.enrolled_attester(os.path.join(state_dir, "attest.json"))
+        evidence = self.evidence(self.m1, lt.SESSION, attester)      # issues the nonce from the verifier and quotes it
+        with open(self.d + "/ev.json", "w") as f:
+            json.dump(evidence, f)
+        with open(self.d + "/meas.json", "wb") as f:
+            f.write(json.dumps(self.doc).encode())
+
+        def read_json(path, limit):
+            return evidence if path.endswith("ev.json") else self.m1
+
+        def run_main(extra):
+            with mock.patch.object(manifest_tool, "verify_chain", return_value=self.m1), \
+                 mock.patch.object(manifest_tool, "read_json", side_effect=read_json), \
+                 mock.patch.object(measurements, "load", return_value=self.doc):
+                return owner.main(["attest-booted", "--chain", "chain", "--root-key", "ab" * 32,
+                                   "--measurements", self.d + "/meas.json"] + extra)
+        # --nonce prints the owner's nonce (64 hex) from the shared verifier
+        self.assertEqual(run_main(["--state", state_dir, "--node", "a", "--nonce"]), 0)
+        # --evidence verifies the quote under that same verifier and records the retire evidence
+        self.assertEqual(run_main(["--state", state_dir, "--node", "a", "--session", lt.SESSION,
+                                   "--evidence", self.d + "/ev.json"]), 0)
+        # the record is in attest.json (the shared state), not a separate file
+        state = json.load(open(os.path.join(state_dir, "attest.json")))
+        self.assertEqual(state["nodes"]["a"]["measurement"], {"label": "current", "epoch": 1, "phase": "system", "nonce": evidence["nonce"]})
+        # --evidence without --session is refused; --nonce and --evidence together are refused
+        self.assertEqual(run_main(["--state", state_dir, "--node", "a", "--evidence", self.d + "/ev.json"]), 1)
+        self.assertEqual(run_main(["--state", state_dir, "--node", "a", "--nonce", "--evidence", self.d + "/ev.json"]), 1)
+
+    def test_an_initrd_quote_is_an_unlock_and_is_never_the_record_of_a_boot_that_came_up(self):
+        """The node's quote in the initrd phase proves it asked for its disk. A boot that then fails has asked for its
+        disk: retiring on it would lock the host into the image it never came up on. Refused, naming the phase."""
+        path = self.d + "/attest-booted.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester, phase="initrd")
+        self.refused("attest-booted takes the booted system's quote; that quote was given in the initrd",
+                     ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        # no measurement was recorded: the state (if it exists from the AK enrolment) holds no "measurement" for a
+        if os.path.exists(path):
+            state = json.load(open(path))
+            self.assertNotIn("measurement", state["nodes"].get("a", {}))
+
+    def test_the_quote_is_judged_at_the_epoch_the_transcript_binds_it_to(self):
+        """The new image is approved in epoch 2's document, and the node says it runs it. The quote's transcript
+        binds the manifest's epoch, so a quote for epoch 2 presented to the epoch 1 attester is refused there
+        (transcript binding, not measurement) and is the record under the tip (epoch 2)."""
+        # the new image's measurements: the fake quote's PCR 7 is "00"*32 (the lease tests' fake TPM), so the tip's
+        # doc must list it; the image is "unlisted" in the OLD doc by LABEL, not by PCR values
+        newer = measured(pcr7="00" * 32, label="next")
+        m2 = self.single(2, m.digest(self.m1), document=newer)
+        path = self.d + "/next.json"
+        attester = self.enrolled_attester(path, m2, newer)
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.refused("the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)",
+                     ownerunlock.attest_booted, self.m1, self.doc, self.d + "/attest-booted.json", "a", lt.SESSION, evidence, attester=attester)
+        # the first call consumed the nonce (verify pops it before the transcript check): a fresh one for the tip
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.assertEqual(ownerunlock.attest_booted(m2, newer, path, "a", lt.SESSION, evidence, attester=attester)["label"], "next")
+
+    def test_a_quote_the_tip_s_document_does_not_list_by_measurement_is_refused(self):
+        """regalia-kms-dx7.8 review: a quote that is correctly signed and correctly bound to the tip's epoch and
+        session, but whose PCR 7 is not the one the tip's document lists, is refused by the MEASUREMENT (the image
+        the document approves), not by the transcript. The epoch case above covers only the transcript binding."""
+        newer = measured(pcr7="11" * 32, label="next")
+        m2 = self.single(2, m.digest(self.m1), document=newer)
+        path = self.d + "/unlisted.json"
+        attester = self.enrolled_attester(path, m2, newer)
+        # the quote is bound to the tip (epoch 2, the tip's nonce): the transcript check passes. It runs the old
+        # image (PCR 7 "00"*32, the lease tests' fake TPM), which the tip's document does not list: refused, with
+        # the measurement that differs named, and no record written (the retire evidence must not name an image
+        # the tip no longer approves).
+        evidence = self.evidence(m2, lt.SESSION, attester)
+        self.refused("the quoted PCR digest is not the expected PCR values",
+                     ownerunlock.attest_booted, m2, newer, path, "a", lt.SESSION, evidence, attester=attester)
+        state = json.load(open(path))
+        self.assertNotIn("measurement", state["nodes"].get("a", {}))
+
+    def test_the_system_stamp_binds_to_the_verification_that_wrote_the_record(self):
+        """regalia-kms-dx7.8 review (the MAJOR finding): the stamp goes on the record THIS verification wrote, and
+        on nothing else. The binding is the nonce this verification consumed -- not the manifest's epoch (every
+        record under this tip carries the same epoch), and not the boot session either (check_counters verifies a
+        session any number of times in one boot, each with its own nonce: a delayed initrd unlock of the SAME boot
+        carries the same session and key, and a session-only check would stamp it). The stamp runs INSIDE the
+        verifier's own verify, under its own state lock, after the record's measurement is written and before it is
+        saved: no gap for a concurrent writer to commit into. A record that carries no other verification's nonce --
+        an unlock's, an earlier boot's, another tip's -- is refused (the verification itself, the state left
+        untouched)."""
+        path = self.d + "/stamp.json"
+        attester = self.enrolled_attester(path)
+        # the normal path: the verification's record is stamped, and carries the nonce it consumed
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        record = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        self.assertEqual(record, {"label": "current", "epoch": 1, "phase": "system"})
+        with open(path) as f:
+            self.assertEqual(json.load(f)["nodes"]["a"]["measurement"],
+                             {"label": "current", "epoch": 1, "phase": "system", "nonce": evidence["nonce"]})
+
+        # the finding's exact case: a delayed initrd unlock of the SAME boot -- same session, same key, same
+        # counters -- committed its record to the state. Its record has the SAME epoch and label and no phase, and
+        # its nonce is its own (not this verification's). With the stamp inside verify's own lock (no gap), the
+        # concurrent writer's record is old_measurement, not the record verify writes: the stamp lands on verify's
+        # own record, and the unlock's record is overwritten. The verification succeeds, and the state holds the
+        # stamped record (the retire evidence), not the unlock's.
+        unlock_nonce = attester.nonce("a")
+        unlock_record = {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()}
+        # the SAME boot: the fake quote's reset is self.boots (the lease tests' Key.signer uses reset for the
+        # TPM's resetCount), and the restart is 0 (the quote's TPMS_CLOCK_INFO). The unlock's boot record must
+        # match so check_counters passes (same counters, same session, same key).
+        unlock_boot = {"counters": [self.boots, 0],
+                       "session": hashlib.sha256(bytes.fromhex(lt.SESSION)).hexdigest(),
+                       "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest()}
+        with attest.locked_state(path) as (state, save):
+            state["nodes"]["a"]["measurement"] = unlock_record
+            state["nodes"]["a"]["boot"] = unlock_boot
+            save()
+        evidence2 = self.evidence(self.m1, lt.SESSION, attester)
+        # the verification succeeds: the stamp lands on verify's own record (not the unlock's), and the state
+        # holds the stamped record. The unlock's record (old_measurement) is overwritten.
+        record2 = ownerunlock.attest_booted(self.m1, self.doc, path, "a", lt.SESSION, evidence2, attester=attester)
+        self.assertEqual(record2, {"label": "current", "epoch": 1, "phase": "system"})
+        with open(path) as f:
+            final = json.load(f)
+        # the state holds THIS verification's stamped record, not the unlock's
+        self.assertEqual(final["nodes"]["a"]["measurement"],
+                         {"label": "current", "epoch": 1, "phase": "system", "nonce": evidence2["nonce"]})
+        self.assertNotEqual(final["nodes"]["a"]["measurement"]["nonce"], unlock_nonce.hex())
+
+        # a fresh boot with no prior record: the verification's own record is written and stamped
+        path2 = self.d + "/stamp-fresh.json"
+        attester2 = self.enrolled_attester(path2)
+        ev3 = self.evidence(self.m1, lt.SESSION, attester2)
+        rec3 = ownerunlock.attest_booted(self.m1, self.doc, path2, "a", lt.SESSION, ev3, attester=attester2)
+        self.assertEqual(rec3, {"label": "current", "epoch": 1, "phase": "system"})
+        with open(path2) as f:
+            self.assertEqual(json.load(f)["nodes"]["a"]["measurement"],
+                             {"label": "current", "epoch": 1, "phase": "system", "nonce": ev3["nonce"]})
+
+    def test_an_unlock_after_verification_before_attest_booted_returns_is_not_the_boot(self):
+        """regalia-kms-dx7.8 review (CodeRabbit, the MAJOR thread, comment 4687175119): the interleaving CodeRabbit
+        named. The regression test above seeds the unlock's record BEFORE verification; this one exercises an
+        unlock AFTER verification and before attest_booted returns: verify has written and saved its own record
+        (stamped, its nonce), the state lock is released, and a delayed initrd unlock of the SAME boot -- same
+        session, same key, same counters, its own nonce -- commits its record to the same state. check_counters
+        verifies a session any number of times in one boot, so it passes: the state now holds a stamped
+        measurement (this verification's nonce) AND the unlock's boot record (its nonce). The stamp's boot-record
+        binding and attest_booted's post-check both require the record to carry THIS verification's nonce in the
+        measurement AND the boot record; the unlock's boot record does not. attest_booted refuses, and the state
+        is left as the unlock committed it: the unlock's record stays unphased (an unlock's record is not a
+        boot's), and the retire evidence (a record that says system) does not name the unlock's verification.
+        A test that only seeds the record before verification cannot catch a mutant that reopens the gap
+        (stamping outside verify's lock, or without the boot-record binding): this one asserts the refusal and
+        the unphased state, and is the one the mutant (round 9's control) must fail."""
+        path = self.d + "/gap.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the concurrent unlock of the SAME boot, committing to the state in the gap -- after verify's save,
+        # before attest_booted's post-check. Its record: the SAME epoch, the SAME label, NO phase (an unphased
+        # set records no phase), and its OWN nonce. Its boot record: the SAME counters, session and key, its own
+        # nonce (check_counters writes it). It commits by re-taking the state lock AFTER verify releases it
+        # (verify's own lock is released when verify returns, before attest_booted's post-check re-reads the
+        # state) and saving -- a concurrent process's verify would do exactly this, with its own quote.
+        unlock_nonce = attester.nonce("a")
+        committed = {"measurement": {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()},
+                     "boot": {"counters": [self.boots, 0],
+                              "session": hashlib.sha256(bytes.fromhex(lt.SESSION)).hexdigest(),
+                              "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest(),
+                              "nonce": unlock_nonce.hex()}}
+
+        def commit_unlock_record():
+            # AFTER verify released its state lock: a concurrent process's verify, committing in the gap.
+            with attest.locked_state(path) as (s, save):
+                s["nodes"]["a"]["measurement"] = committed["measurement"]
+                s["nodes"]["a"]["boot"] = committed["boot"]
+                save()
+
+        real_verify = attester.verify
+
+        def verify_then_commit(*a, **k):
+            verdict = real_verify(*a, **k)
+            commit_unlock_record()   # the unlock commits in the gap, after the lock is released
+            return verdict
+
+        with unittest.mock.patch.object(attester, "verify", side_effect=verify_then_commit):
+            self.refused("attest-booted could not bind the record",
+                         ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+        # the state holds the unlock's record: unphased (an unlock's record is not a boot's), its own nonce.
+        # The stamped record (this verification's nonce) is gone: the unlock overwrote the measurement too,
+        # and nothing says system, so retire-ready counts no boot.
+        state = json.load(open(path))
+        self.assertEqual(state["nodes"]["a"]["measurement"],
+                         {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()})
+        self.assertNotEqual(state["nodes"]["a"]["measurement"]["nonce"], evidence["nonce"])
+        self.assertEqual(state["nodes"]["a"]["boot"], committed["boot"])
+
+    def test_the_post_check_refuses_a_stamp_whose_measurement_is_bound_but_boot_record_is_not(self):
+        """regalia-kms-dx7.8 review (CodeRabbit Minor, PRRT_kwDOUcLtQM67pdJo): the interleaving test above commits
+        the unlock's record with BOTH the measurement's nonce and the boot record's nonce changed, so the
+        measurement-nonce check alone already refuses it. This case isolates the BOOT-RECORD check: the state holds
+        this verification's stamped measurement (its nonce -- the measurement-nonce check passes) but a boot record
+        that names a DIFFERENT verification (the unlock's nonce). Only the boot-record check refuses that state. A
+        mutant that drops the boot-record binding (the measurement-only post-check) accepts it -- so this case is
+        the one that pins the boot-record check in particular, and is the complement to the interleaving test."""
+        path = self.d + "/bootonly.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the state must hold this verification's stamped measurement (its nonce -- the measurement-nonce check
+        # passes) but a boot record written by a DIFFERENT verification (the unlock's nonce) AT THE MOMENT of the
+        # post-check. Commit the foreign boot record in the gap (after verify's save, before the post-check),
+        # where the measurement still carries this verification's nonce.
+        other_nonce = attester.nonce("a")
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the foreign boot record: the SAME counters, session and key (the SAME boot, so check_counters passes)
+        # but the unlock's nonce (a DIFFERENT verification). The measurement keeps this verification's nonce;
+        # only the boot record is the unlock's.
+        foreign_boot = {"counters": [self.boots, 0],
+                        "session": hashlib.sha256(bytes.fromhex(lt.SESSION)).hexdigest(),
+                        "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest(),
+                        "nonce": other_nonce.hex()}
+
+        real_verify = attester.verify
+
+        def verify_then_commit_boot(*a, **k):
+            verdict = real_verify(*a, **k)
+            with attest.locked_state(path) as (s, save):
+                s["nodes"]["a"]["boot"] = foreign_boot   # the measurement keeps THIS verification's nonce
+                save()
+            return verdict
+
+        with unittest.mock.patch.object(attester, "verify", side_effect=verify_then_commit_boot):
+            self.refused("attest-booted could not bind the record",
+                         ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
+
+    def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
+        """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted
+        (system) both verify the quote against the document the tip commits to: the site the document lists is allowed,
+        and the one it no longer lists is refused by the PCR that moved. The refusal names PCR 12."""
+        pcr12 = "ab" * 32
+        at_site = measured(pcr7="00" * 32, **{"12": pcr12})
+        m2 = self.single(2, m.digest(self.m1), document=at_site)
+        path = self.d + "/site.json"
+        attester = self.enrolled_attester(path, m2, at_site)
+        # the unlock (initrd): the quote for the tip's nonce, under the document that lists the site -- covering the
+        # site's PCR 12, since the document selects [7, 12] -- is allowed ...
+        peer = ownerunlock.OwnerPeer(m2, attester, ownerunlock.read_plaintext(self.plain), self.signer, self.events.append)
+        self.assertEqual(unlock.ask(self.boot(), self.pins["owner"], self.epoch, self.transport(peer),
+                                    lambda node, epoch, sid, ep, nonce: self.raw_quote(attester, epoch, sid, ep, nonce, m2, pcr12),
+                                    run=run), self.secret)
+        # ... and the quote for a site whose PCR 12 is not the one the tip lists, under the same document, is refused,
+        # naming PCR 12: the owner's unlock tool is the judge of a site advance
+        other = "cd" * 32
+        self.refused("PCR 12 is", ownerunlock.may_unlock, m2, "a", lt.SESSION,
+                     self.raw_evidence(attester, m2, pcr12=other), attester)
+        # and the system phase the same way, on the boot that followed (a fresh boot: the node rebooted onto the new
+        # image, so its counters advance and the attest-booted quote is not the unlock's session): the listed site
+        # (its PCR 12) is the record, the other is refused. attest_booted reads the measurement the verifier wrote to
+        # its own state, so its state_path is the attester's path
+        self.boot()
+        record = ownerunlock.attest_booted(m2, at_site, path, "a", lt.SESSION,
+                                           self.raw_evidence(attester, m2, pcr12=pcr12), attester=attester)
+        self.assertEqual(record["label"], "current")
+        self.refused("PCR 12 is", ownerunlock.attest_booted, m2, at_site, path, "a", lt.SESSION,
+                     self.raw_evidence(attester, m2, pcr12=other), attester=attester)
+
+    def enrolled_attester(self, path, manifest=None, doc=None):
+        """The owner's verifier under `manifest`/`doc`, with the node's AK enrolled as contribute does at enrolment."""
+        attester = ownerunlock.verifier(manifest or self.m1, doc or self.doc, path)
+        node = ownerunlock.single_node(manifest or self.m1, "a")
+        attester.adopt("a", self.keys["a"].ak_public, node["ak_name"])
+        return attester
+
+    def raw_quote(self, attester, epoch, session, ephemeral_public, nonce, manifest=None, pcr12=None):
+        node = ownerunlock.single_node(manifest or self.m1, "a")
+        session = bytes.fromhex(session) if isinstance(session, str) else session
+        sign = self._signer_pcr12(node, pcr12) if pcr12 is not None else self.keys["a"].signer(ek_name=node["ek_name"], reset=self.boots)
+        signed = sign(attest.qualifying_data("a", epoch, session, ephemeral_public, nonce))
+        return bytes.fromhex(signed["quote"]), bytes.fromhex(signed["sig"])
+
+    def _signer_pcr12(self, node, pcr12):
+        """A signer like the lease tests' Key.signer, but whose quote covers [7, 12]: PCR 7 the image's "00"*32, PCR
+        12 the site's `pcr12`, the pcrDigest over both, signed over those exact bytes. The shared signer covers PCR 7
+        only (the image's selection), and a site advance moves PCR 12 -- so the site's quote must select [7, 12] from
+        the start, not be spliced after signing (a signature is over the quote's bytes, and a splice would break it)."""
+        key = self.keys["a"]
+        digest = attest.expected_pcr_digest({"7": "00" * 32, "12": pcr12})
+        selection = bytes([0x80, 0x10, 0x00])   # PCR 7 (bit 7) and PCR 12 (bit 12)
+        def sign(qualifying):
+            signer = attest.qualified_name(bytes.fromhex(node["ek_name"]), bytes.fromhex(key.ak_name))
+            quote = (struct.pack(">IH", attest.TPM_GENERATED, attest.ST_ATTEST_QUOTE)
+                     + struct.pack(">H", len(signer)) + signer + struct.pack(">H", len(qualifying)) + qualifying
+                     + struct.pack(">QIIB", 1000, self.boots, 0, 1) + bytes(8)
+                     + struct.pack(">IHB", 1, attest.ALG_SHA256, 3) + selection
+                     + struct.pack(">H", len(digest)) + digest)
+            with tempfile.NamedTemporaryFile() as f:
+                f.write(quote); f.flush()
+                sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key.pem, f.name],
+                                     check=True, capture_output=True).stdout
+            return {"ak_public": key.ak_public.hex(), "quote": quote.hex(), "sig": sig.hex()}
+        return sign
+
+    def raw_evidence(self, attester, manifest, nonce=None, pcr12=None):
+        """The node's evidence for `attester`'s nonce. With `pcr12` given, the quote covers [7, 12] and reports the
+        node's PCR values (protocol v2): PCR 7 is the image's, PCR 12 is the site's -- the value the document lists,
+        or `pcr12`, the site that no longer is. That is how an owner sees which PCR a refusal names."""
+        if nonce is None:
+            nonce = attester.nonce("a")
+        key = b"boot session key " + bytes.fromhex(lt.SESSION)[:16]
+        quote, sig = self.raw_quote(attester, manifest["epoch"], lt.SESSION, key, nonce, manifest, pcr12)
+        evidence = {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": quote.hex(), "signature": sig.hex()}
+        if pcr12 is not None:
+            # the reported values (protocol v2) are what makes a refusal name the PCR that moved
+            evidence["pcr_values"] = {"7": "00" * 32, "12": pcr12}
+        return evidence
 
 
 @unittest.skipUnless(CRYPTSETUP, "needs cryptsetup")

@@ -1,7 +1,9 @@
 """deploy/baremetal/update.py: the acting half of a rolling image update (#75, Phase 15). The decisions are the
 real ones (rollout.may_reboot on leases signed by the OpenSSL TPM fixtures, bootnext on PE images built as
 ukify lays them out); the host's TPM, sync client and firmware are fakes."""
+import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -48,7 +50,7 @@ class FakeHost:
         return self._document
 
     def pcrs(self, selection):
-        values = dict(self.running["pcrs"], **self.running["phases"]["system"])
+        values = dict(self.running["pcrs"], **self.running.get("phases", {}).get("system", {}))
         return {str(i): values[str(i)] for i in selection}
 
     def session(self):
@@ -69,7 +71,13 @@ class FakeHost:
             refusal = self.refusing[peer]
             raise refusal if isinstance(refusal, Exception) else m.Refused(refusal)
         body = dict(self.case.body(manifest), node_id="a", ak_name=self.case.keys["a"].ak_name, issuer=peer, session_id=session)
-        return lt.sign(body, self.case.keys[peer])
+        return lt.sign(body, self.case.keys[peer] if peer in self.case.keys else self.case.keys["a"])
+
+    def quote(self, nonce, manifest):
+        """A stand-in for Host.quote: this node's system-phase quote over `nonce`, in the shape node.quote gives
+        (ephemeral_public, nonce, quote, signature). The FakeHost's boot session is fixed (lt.SESSION / SESSION_KEY)."""
+        assert re.fullmatch(r"[0-9a-f]{64}", nonce), nonce
+        return {"ephemeral_public": lt.SESSION_KEY, "nonce": nonce, "quote": "aa" * 64, "signature": "bb" * 64}
 
     def boot(self):
         return bootnext.state(self.run)
@@ -135,6 +143,18 @@ class Apply(Case):
         self.refused("the TPM anchor is at epoch %d, the published chain at %d: regalia-esp-advance has not written"
                      % (self.host._anchored, self.host._anchored + 1), self.apply)
         self.assertEqual((self.bootnexts(), self.prompts, self.host.asked, [e["outcome"] for e in self.trail]), ([], [], [], ["DENY"]))
+
+    def test_a_manifest_that_fails_to_verify_leaves_a_deny_on_the_trail(self):
+        """regalia-kms-dx7.8 review, finding 3 (regression): the module text promises 'every exit is on the
+        update trail'. A chain that does not verify is the case an auditor most needs on the trail; reading the
+        topology for the event used to call host.manifest() before the try that records the DENY, so the
+        refusal escaped the trail. The topology is read inside the try, from the manifest already read there:
+        the DENY is back, and the chain is read once, not twice."""
+        import unittest.mock as mock
+        with mock.patch.object(type(self.host), "manifest", side_effect=m.Refused("the chain does not verify from the root key")):
+            self.refused("the chain does not verify from the root key", self.apply)
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])
+        self.assertEqual(self.trail[0]["reason"], "the chain does not verify from the root key")
 
     def test_a_next_boot_that_needs_the_recovery_key_is_refused(self):
         """regalia-kms-48: a manifest that leaves the initrd nothing to render turns a reboot into a recovery-key ceremony."""
@@ -283,6 +303,121 @@ class Promote(Case):
         self.refused("it is not that image", self.promote)
 
 
+class SingleNode(Case):
+    """regalia-kms-dx7.8 (docs/design/single-node.md 4.6): the single-node profile's update is a planned outage.
+    apply takes --planned-outage, asks nobody, and records the decision on the trail; promote asks for a lease of its
+    OWN for the boot it promotes (the self-issued one); and the flag under another profile is a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        # the single-node host's accepted images are its own UKI-measured sets: per-phase PCR 11, as the image on the ESP
+        self.sc1 = rt.document("s-current", a=[dict(SET1)])
+        self.scboth = rt.document("s-both", a=[dict(SET1), dict(SET2)])
+        self.s1 = dict(self.single(1, ""), policy_version=measurements.version(self.sc1))
+        self.s2 = dict(self.single(2, m.digest(self.s1)), policy_version=measurements.version(self.scboth))
+        self.host._manifest, self.host._document = self.s2, self.scboth
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][0]
+        # the self-issued lease this host holds for this boot: a's AK signs for a, as _issue allows under the profile
+        self.self_lease = lt.sign(dict(self.body(self.s2), node_id="a", issuer="a"), self.keys["a"])
+
+    def apply(self, answer="reboot a into image-2", entry="0002", planned_outage=False):
+        return update.apply(self.host, entry, self.esp, self.typed(answer), self.record,
+                            planned_outage=planned_outage, say=lambda line: None)
+
+    def test_apply_under_the_single_node_profile_is_a_planned_outage_and_asks_no_body(self):
+        done = self.apply(planned_outage=True)
+        self.assertEqual(done["state"]["next"], "0002")
+        self.assertEqual((self.host.rebooted, self.host.firmware.current), (1, "0002"))
+        self.assertEqual(self.host.asked, [], "no peer exists: nobody is asked for a lease")
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW"])
+        for event in self.trail:
+            self.assertEqual(event.get("planned_outage"), True)
+            self.assertEqual(event.get("topology"), "single-node")
+            self.assertEqual(event.get("lease_issuers"), [])
+            self.assertEqual(event.get("authorizers"), [])
+        # and the denial says the same on the trail
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.apply)
+        self.assertEqual(self.trail[-1]["planned_outage"], False)
+        self.assertEqual(self.trail[-1]["topology"], "single-node")
+        self.assertEqual(self.host.rebooted, 1)                     # only the one that was planned went down
+
+    def test_apply_refuses_the_planned_outage_flag_under_another_profile(self):
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, self.host.running
+        self.refused("--planned-outage is a single-node decision", self.apply, planned_outage=True)
+        self.assertEqual(self.host.rebooted, 0)
+        self.assertEqual(self.trail[-1]["planned_outage"], True)
+        self.assertEqual(self.trail[-1]["topology"], "multi-node")
+
+    def test_promote_under_the_single_node_profile_needs_the_node_s_own_lease_for_this_boot(self):
+        """promote on three nodes needs a peer's lease for the boot it promotes; with one node it needs its own:
+        the self-issued lease is the record that it booted, in this session, under this epoch."""
+        self.apply(planned_outage=True)
+        self.trail.clear()
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][-1]
+        after = update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record,
+                               say=lambda line: None, planned_outage=True)
+        self.assertEqual(after["order"][:2], ["0002", "0001"])
+        self.assertEqual(self.trail[-1]["lease_issuers"], ["a"])
+        self.assertEqual(self.trail[-1]["planned_outage"], True)
+        # and without the self-lease, refused: no evidence that this boot came up
+        self.host.firmware.order = ["0001", "0002"]
+        self.host.refusing = {"a": "no lease was issued for this boot"}
+        self.refused("no peer gave this boot a lease", update.promote, self.host, self.esp,
+                     self.typed("make 0002 the default on a"), self.record, say=lambda line: None,
+                     planned_outage=True)
+
+    def test_promote_under_the_single_node_profile_records_the_planned_outage_from_the_profile(self):
+        """regalia-kms-dx7.8 review, finding 5: the runbook's promote step names no --planned-outage (there is no
+        such flag; the operator's decision was the apply's). The promote's trail still records planned_outage
+        true, from the PROFILE: under single-node the update is a planned outage, and the trail says so on every
+        event, as the runbook's row promises. Called without the flag, as main() does, a single-node promote says
+        true; a multi-node promote (no flag) still says false."""
+        self.apply(planned_outage=True)
+        self.trail.clear()
+        self.host.running = self.scboth["nodes"]["a"]["accepted"][-1]
+        after = update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record,
+                               say=lambda line: None)
+        self.assertEqual(after["order"][:2], ["0002", "0001"])
+        self.assertEqual(self.trail[-1]["planned_outage"], True, "single-node promote records it from the profile")
+        self.assertEqual(self.trail[-1]["topology"], "single-node")
+        # the same call under another profile (no flag, no outage) records false: the profile is what decides
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, BOTH["nodes"]["a"]["accepted"][-1]
+        self.host.firmware.order = ["0001", "0002"]
+        self.trail.clear()
+        update.promote(self.host, self.esp, self.typed("make 0002 the default on a"), self.record, say=lambda line: None)
+        self.assertEqual(self.trail[-1]["planned_outage"], False, "multi-node promote with no flag records false")
+        self.assertEqual(self.trail[-1]["topology"], "multi-node")
+
+    def test_quote_for_owner_prints_the_system_phase_quote_over_the_owner_s_nonce(self):
+        """regalia-kms-dx7.8: after the planned-outage reboot the serving path is up (a self-lease for this boot),
+        and quote-for-owner prints the node's system-phase quote over the owner's nonce -- the evidence owner.py
+        attest-booted verifies, carried back to the owner by hand. Read-only: it records nothing on success (like
+        status), and a DENY on the trail only when the serving path is not up, the host is not single-node, or the
+        nonce is malformed."""
+        nonce = "11" * 32
+        out = []
+        self.trail.clear()
+        evidence = update.quote_for_owner(self.host, nonce, self.record, say=out.append)
+        self.assertEqual(evidence, {"ephemeral_public": lt.SESSION_KEY, "nonce": nonce, "quote": "aa" * 64,
+                                    "signature": "bb" * 64, "phase": "system"})
+        self.assertEqual(self.trail, [], "read-only: no change, nothing on the trail")
+        self.assertIn(json.dumps(evidence, sort_keys=True), out)
+        # the serving path not up (no self-lease) is a refusal: the quote would be of a boot that never came up
+        self.host.refusing = {"a": "no lease was issued for this boot"}
+        self.refused("the serving path has not come up", update.quote_for_owner, self.host, nonce, self.record,
+                     say=lambda line: None)
+        self.assertEqual((self.trail[-1]["event"], self.trail[-1]["outcome"]), ("update-quote-for-owner", "DENY"))
+        # under another profile it is refused: a peer, not the owner, is the source of the lease and the quote
+        self.host.refusing = {}
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, SET2
+        self.refused("quote-for-owner is the single-node profile's", update.quote_for_owner, self.host, nonce,
+                     self.record, say=lambda line: None)
+        # a nonce that is not the owner's (64 hex) is refused before anything is asked
+        self.host._manifest, self.host._document, self.host.running = self.s2, self.scboth, self.scboth["nodes"]["a"]["accepted"][0]
+        self.refused("the owner's nonce is 64 lowercase hex", update.quote_for_owner, self.host, "zz", self.record,
+                     say=lambda line: None)
+
+
 class Forget(Case):
     def test_only_an_image_the_manifest_no_longer_approves(self):
         self.apply()
@@ -342,6 +477,41 @@ class TheRealHost(unittest.TestCase):
             self.skipTest("run as root")
         rc = update.main(["promote", "--config", "/nonexistent/node.json"], typed=lambda prompt: "")
         self.assertEqual(rc, 1)
+
+    def test_lease_from_under_single_node_uses_the_node_s_own_sync(self):
+        """regalia-kms-dx7.8 review (CodeRabbit on #779): under the single-node profile the lease source is this
+        node's OWN regalia-sync (self_source), not sources() -- a single-node host has no service tunnel, and
+        sources() excludes the node itself, so asking its own node ID refused with 'not a peer this node can
+        reach'. The admission renew path (node.py) makes the same choice; lease_from now mirrors it. The flow is
+        stopped right after the source selection (node.quote raises a sentinel), so the test asserts which source
+        method was called and that the require passes, not the rest of the lease exchange."""
+        from tests.test_baremetal_membership_v5 import single5, manifest5, one
+        from tests.test_baremetal_membership_v4 import nodes4
+        class Sentinel(Exception):
+            pass
+        single = single5(1, "", [dict(one("a"), ek_name="00" * 32, ak_name="00" * 32)], policy_version="x")
+        multi = manifest5(1, "", nodes4())
+        for label, manifest, peer, want in (("single-node", single, "a", "self_source"),
+                                            ("multi-node", multi, "b", "sources")):
+            with self.subTest(label):
+                calls = []
+                def self_source(self, timeout=None):
+                    calls.append("self_source")
+                    return {"a": "local-transport"}
+                def sources(self, m, timeout=None):
+                    calls.append("sources")
+                    return {"a": "tunnel", "b": "tunnel"}
+                def quote(self, session_id, public):
+                    raise Sentinel("stopped after source selection")
+                node = type("N", (), {"node_id": "a", "clock": staticmethod(lambda: 0), "tpm_clock": staticmethod(lambda: 0),
+                                      "self_source": self_source, "sources": sources, "quote": quote})()
+                host = update.Host.__new__(update.Host)
+                host.node, host.node_id, host.run, host._session = node, "a", lambda *a, **k: None, ("ab" * 32, "cd" * 32)
+                d = tempfile.mkdtemp(); self.addCleanup(shutil.rmtree, d, True)
+                with self.assertRaises(Sentinel):
+                    host.lease_from(peer, manifest, "ab" * 32, os.path.join(d, "lease.json"))
+                self.assertEqual(calls, [want], "profile %s must pick %s()" % (label, want))
+
 
 if __name__ == "__main__":
     unittest.main()

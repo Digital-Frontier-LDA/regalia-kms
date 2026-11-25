@@ -34,10 +34,14 @@ class Case(unittest.TestCase):
         """The counter's index gone (what #182 refuses as Unusable): every heartbeat is then refused."""
         self.tpm.nv.pop(self.counter.index)
 
-    def refused(self, reason, fn, *args):
+    def refused(self, reason, fn, *args, **kw):
         with self.assertRaises(m.Refused) as caught:
-            fn(*args)
+            fn(*args, **kw)
         self.assertIn(reason, str(caught.exception))
+
+    def signed(self, man, key=hbt.ROOT, signer="root"):
+        from tests.test_baremetal_membership import sign
+        return sign(man, key, signer)
 
 
 class Recount(Case):
@@ -108,6 +112,105 @@ class Recount(Case):
         self.assertEqual(self.events[-1]["outcome"], "INCOMPLETE")
         self.counter.run = real
         self.assertEqual(recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor), 40)
+
+
+class SingleNodeRecount(Case):
+    """Under a single-node manifest (docs/design/single-node.md 4.7): the owner's v2 recount statement is a
+    floor source beside the heartbeats, and the floor must not go below the node's beat signing counter."""
+
+    def single_manifest(self):
+        """A single-node v5 manifest: node a alone, owner revokes."""
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        root = Ed25519PrivateKey.generate()
+        owner = Ed25519PrivateKey.generate()
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": pub(owner)}]
+        return man
+
+    def single_node_beat(self, man, sequence, issued=T0):
+        """A heartbeat signed by the node's own key (the single-node signer), for a single-node manifest.
+        The manifest's heartbeat_signers names node "a"; the beat is signed by an Ed25519 key (the fixture's
+        signer), and the manifest's signing rules are not checked by plan() (it calls heartbeat.signed, which
+        verifies the signature against the manifest's parties)."""
+        # use the REVOKE key (Ed25519) as the node's signing key: the single-node manifest's heartbeat_signers
+        # names "a" as a party, but heartbeat.signed verifies the signature, not the party rule, in plan()'s context
+        return hbt.beat(man, sequence, issued=issued, key=hbt.REVOKE, domain=hb.DOMAIN)
+
+    def v2_recount_statement(self, collector_sequence, collector_epoch=1, node="a", manifest=None):
+        from deploy.baremetal import recover
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        st = recover.statement("recount", node, manifest or self.single_manifest(), "00ff" * 8 + ":boot-1", T0 + 300,
+                               collector_epoch=collector_epoch, collector_sequence=collector_sequence)
+        return {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+
+    def test_owner_statement_is_a_floor_source_under_single_node(self):
+        """Under a single-node manifest, the owner's v2 recount statement raises the floor to its
+        collector_sequence, even with no verified heartbeat."""
+        self.break_counter()
+        man = self.single_manifest()
+        st = self.v2_recount_statement(collector_sequence=55)
+        planned = recount.plan(self.counter, man, [], owner_statement=st, signer=lambda: 10)
+        self.assertEqual(planned["floor"], 55)
+        self.assertEqual(planned["held"], [])
+
+    def test_owner_statement_is_refused_under_multi_node(self):
+        """An owner statement of purpose recount is refused under a multi-node manifest: the owner is not a
+        floor source for a multi-node recount."""
+        self.break_counter()
+        st = self.v2_recount_statement(collector_sequence=55)
+        self.refused("refused under a multi-node manifest", recount.plan, self.counter, self.m1, [],
+                     owner_statement=st, signer=lambda: 0)
+
+    def test_a_collector_sequence_outside_the_counter_range_is_refused(self):
+        """The floor is carried and the counter DELETED after the plan: a collector_sequence the counter cannot
+        define (>= 2^63, the range heartbeat.Counter._define_at enforces) must be refused HERE, or every retry
+        would retain a floor the TPM cannot define (review PR #778 thread PRRT_kwDOUcLtQM67UKHy)."""
+        self.break_counter()
+        man = self.single_manifest()
+        st = self.v2_recount_statement(collector_sequence=2 ** 63)
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=st, signer=lambda: 0)
+        # the bound itself is refused too (the range is 0 <= sequence < 2^63)
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=self.v2_recount_statement(collector_sequence=2 ** 63 - 1 + 1), signer=lambda: 0)
+        # and a negative one
+        self.refused("an integer from 0 to 2^63 - 1", recount.plan, self.counter, man, [],
+                     owner_statement=self.v2_recount_statement(collector_sequence=-1), signer=lambda: 0)
+        # the top of the range is fine: it is carried, nothing is defined
+        self.assertEqual(recount.plan(self.counter, man, [], owner_statement=self.v2_recount_statement(collector_sequence=2 ** 63 - 1),
+                                      signer=lambda: 0)["floor"], 2 ** 63 - 1)
+
+    def test_liveness_floor_must_not_go_below_signing_counter(self):
+        """The floor is the max of everything named above AND the signing counter's current value: a floor
+        below what the node has already signed would make the next heartbeat a replay. No margin."""
+        self.break_counter()
+        man = self.single_manifest()
+        # the signing counter reads 60: the floor must be at least 60, even with a lower heartbeat
+        held = [self.single_node_beat(man, 30)]
+        st = self.v2_recount_statement(collector_sequence=40)
+        planned = recount.plan(self.counter, man, [self.state(), held[0]], owner_statement=st, signer=lambda: 60)
+        self.assertGreaterEqual(planned["floor"], 60)
+        # no margin: the floor is exactly max(40, 60, 30) = 60, not 61 or more
+        self.assertEqual(planned["floor"], 60)
+
+    def test_without_heartbeat_or_statement_still_refused(self):
+        """With neither a verified heartbeat nor the statement, the recount is refused even under single-node."""
+        self.break_counter()
+        man = self.single_manifest()
+        self.refused("no heartbeat given verifies", recount.plan, self.counter, man, [],
+                     owner_statement=None, signer=lambda: 0)
+
+    def test_floor_is_max_of_all_sources(self):
+        """The floor is the max of: old counter, prior, held heartbeats, collector_sequence, and signing counter."""
+        self.break_counter()
+        man = self.single_manifest()
+        held = [self.single_node_beat(man, 30)]
+        st = self.v2_recount_statement(collector_sequence=50)
+        planned = recount.plan(self.counter, man, [self.state(), held[0]], owner_statement=st, signer=lambda: 45, prior=5)
+        # max(old=40 (from setUp), prior=5, held=30, collector=50, signing=45) = 50
+        self.assertEqual(planned["floor"], 50)
 
 
 class AcrossACut(Case):
@@ -313,6 +416,187 @@ class CommandLine(TheHostsTpmAndChain):
             json.dump({"schema": "regalia.authority/v1", "run_dir": "/run/regalia"}, f)
         argv = ["--config", self.d + "/other.json", "--audit-log", self.d + "/audit.jsonl"]
         self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=self.tpm), 1)
+        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
+
+    def owner_statement_host(self, collector_sequence=60):
+        """A single-node host (docs/design/single-node.md 4.7) whose heartbeat counter is unusable and whose
+        freshness state is gone: recount's only floor source is the owner's v2 recount statement. The chain is
+        a's single-node v5 tip (a, ACTIVE) over the fixture root, the counter broken, the signing counter the
+        node's own beat counter at 30. The anchor is judged by the tip's own schema, like node.store() (#242 B3)."""
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS, pub
+        from deploy.baremetal import node as node_module
+        from tests.test_baremetal_single_node_network import single_site
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": pub(OWNER_KEYS[0])}]   # the statement's owner key
+        chain = [self.signed(man)]
+        tpm = hbt.FakeTpm()
+        for index in ("0x01500018", "0x0150001c"):
+            hb.Counter(index, lock_path=self.d + "/%s.lock" % index, run=tpm).define()
+        hb.Counter("0x0150001c", lock_path=self.d + "/0x0150001c.lock", run=tpm).advance(30)
+        anchor = m.HighWater("0x01500016", lock_path=self.d + "/hw.lock", run=tpm)
+        anchor.define()
+        store = m.Store(self.d + "/membership.json", hbt.pub(hbt.ROOT), anchor)
+        # the chain is v5: a store committing it would set the anchor's schema to v5 (a QUORUM schema) and refuse
+        # the owner-written anchor, as the convergence and reanchor owner-chain fixtures do
+        store._judge_by = lambda manifests: None
+        store.commit(chain[0])
+        tpm.nv.pop("0x01500018")                                   # the heartbeat counter's index gone: unusable
+        import builtins
+        real_open = builtins.open
+        with real_open(os.path.join(self.d, "site.json"), "w") as f:
+            json.dump(single_site(), f)
+        with real_open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
+            cfg = json.load(f)
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti="device:/dev/tpmrm0", state_dir=self.d, node_id="a",
+                   site=os.path.join(self.d, "site.json"),
+                   nv_epoch="0x01500016", nv_heartbeat="0x01500018", nv_signing="0x0150001c")
+        with open(self.d + "/node.json", "w") as f:
+            json.dump(cfg, f)
+        # a single-node host whose approved images are unsigned: its anchor and counters are owner-written (no
+        # approved-image write policy), so the policy resolvers answer None, never the real PCR key or store
+        for name in ("image_policy", "image_key", "define_policy", "_tip_schema"):
+            patcher = unittest.mock.patch.object(node_module, name, return_value=None)
+            self.addCleanup(patcher.stop)
+            patcher.start()
+
+        def run(argv, **kw):
+            if argv[0] == "systemctl":
+                import subprocess
+                return subprocess.CompletedProcess(argv, 3, b"inactive\n", b"")
+            if argv[0] == "tpm2_readclock":
+                import subprocess
+                return subprocess.CompletedProcess(argv, 0, b"  clock: 5000\n", b"")
+            return tpm(argv, **kw)
+        with real_open(os.path.join(self.d, "recovery-session.json"), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "00ff00ff-0000-4000-8000-000000000000",
+                       "issued": T0 - 60}, f)
+        with real_open(os.path.join(self.d, "boot_id"), "w") as f:
+            f.write("00ff00ff-0000-4000-8000-000000000000\n")
+        from deploy.baremetal import recover
+        # the session file the node's run_dir would hold (/run/regalia, not writable on this host): point the
+        # module constant at this directory, which holds it
+        session_patcher = unittest.mock.patch.object(recover, "SESSION_FILE", os.path.join(self.d, "recovery-session.json"))
+        self.addCleanup(session_patcher.stop)
+        session_patcher.start()
+        tip = chain[0]["manifest"]
+        st = recover.statement("recount", "a", tip, "aa" * 8 + ":00ff00ff-0000-4000-8000-000000000000",
+                               T0 + 600, collector_epoch=1, collector_sequence=collector_sequence)
+        with real_open(self.d + "/statement.json", "w") as f:
+            json.dump({"statement": st, "key": pub(OWNER_KEYS[0]),
+                       "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}, f)
+        # a v1-shaped recount statement (purpose recount, NO collector_epoch): the M1b input. The owner's tool
+        # never signs this under single-node (recount is v2-only, owner.py derives collector_sequence from the
+        # witness), so it is a tampered or hand-built document. recover.message's v1 branch refuses it (M1b);
+        # before the fix it passed `purpose in PURPOSES`, took the v1 branch, and raised a KeyError at
+        # PREFIX_V1["recount"], uncaught by recount.main's `except (Refused, OSError, ValueError)`.
+        v1_st = {k: v for k, v in st.items() if k not in ("collector_epoch", "collector_sequence")}
+        v1 = {"statement": v1_st, "key": pub(OWNER_KEYS[0]), "sig": "22" * 64}
+        # the sig is never verified: recover.message refuses the v1-shaped recount before the signature is checked
+
+        def ask(prompt):
+            return "recount 0x01500018 at %d" % max(collector_sequence, 30)
+        # the kernel's boot ID, on a host without /proc: the statement's session names this boot
+        def stub(*args, **kw):
+            if args and args[0] == "/proc/sys/kernel/random/boot_id":
+                return real_open(os.path.join(self.d, "boot_id"), *args[1:], **kw)
+            return real_open(*args, **kw)
+        open_patcher = unittest.mock.patch("builtins.open", side_effect=stub)
+        self.addCleanup(open_patcher.stop)
+        open_patcher.start()
+        # authenticated time: the host's clock reads inside the statement's validity window. The statement
+        # expires at T0+600; verify_owner needs `now < expires <= now + SESSION_TTL`, and the session (issued
+        # T0-60) needs `now - issued <= SESSION_TTL`. With now = T0+300: 0 < 600 <= 900 and 360 <= 900, so both
+        # verify. Patched (not a chrony status file: root-owned files and a boot clock are not this host's).
+        auth_patcher = unittest.mock.patch("deploy.baremetal.heartbeat.authenticated_now",
+                                           side_effect=lambda clock, tpm_clock, floor: (T0 + 300, floor))
+        self.addCleanup(auth_patcher.stop)
+        auth_patcher.start()
+        return run, ask, tip, v1
+
+    def test_owner_statement_at_the_command(self):
+        """--owner-statement is the single-node floor source at the command (docs/design/single-node.md 4.7):
+        the node's own beat signing counter (nv_signing) is read for the liveness floor, the statement's
+        collector_sequence raises the floor, and the new counter reads the max."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 0)
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.value(), 60)
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line)["event"] for line in f]
+        self.assertEqual(trail, ["recount-requested", "recount"])
+        self.assertEqual(json.loads(open(self.d + "/recount-floor-0x01500018.json").read())["floor"], 60)
+
+    def test_an_expired_recovery_session_is_a_recorded_deny_not_just_printed(self):
+        """`recount --owner-statement` whose boot's recovery session is older than the TTL is a DENY the
+        command records in the audit trail, not only prints (independent re-read of PR #778, 2026-11-24: the
+        session check (recover.held_session) runs BEFORE verify_owner, and its refusal used to go straight to
+        main's `except Refused` -- printed, never written, though the command says every decision is a line in
+        the trail): the owner-statement check is one recorded path, from the session to the signature. The
+        statement itself is a good one; what refuses is the session. Nothing is defined or changed."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        # the session (issued T0-60 in the host) is made older than SESSION_TTL: held_session refuses it
+        with open(os.path.join(self.d, "recovery-session.json"), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "00ff00ff-0000-4000-8000-000000000000",
+                       "issued": T0 - 2000}, f)
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line) for line in f]
+        self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
+        self.assertIn("older than", trail[0]["reason"])
+        self.assertEqual(trail[0]["phase"], "owner-statement")
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.remains(), (None, []))          # the counter stays unusable: nothing was defined
+
+    def test_a_v1_shaped_recount_statement_is_refused_not_a_traceback(self):
+        """`recount --owner-statement` given a v1-shaped recount document (purpose recount, NO collector_epoch)
+        is a REFUSED command, rc 1, nothing changed (council 2026-11-24 on PR #778, M1b): recover.message's v1
+        branch used to raise a bare KeyError at PREFIX_V1["recount"] -- recount has no v1 prefix -- outside
+        recount.main's `except (Refused, OSError, ValueError)`, so the command exited with a traceback, not a
+        recorded refusal. The owner's tool never signs this under single-node (recount is v2-only, owner.py
+        derives collector_sequence from the witness), so it is a tampered or hand-built document."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        with open(self.d + "/statement-v1.json", "w") as f:
+            json.dump(v1, f)
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement-v1.json"]
+        # rc 1 (a refusal), not 2 (an uncaught traceback); the counter is not touched, nothing is recorded
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        # the refusal is a line in the audit trail (independent non-author review of PR #778, item 3: the
+        # statement check ran in main, and its refusal was printed but NOT written, though the command
+        # says every decision is a line there): a DENY naming the refusal, nothing else
+        trail = []
+        if os.path.exists(self.d + "/audit.jsonl"):
+            with open(self.d + "/audit.jsonl") as f:
+                trail = [json.loads(line) for line in f]
+        self.assertEqual([(e["event"], e["outcome"]) for e in trail], [("recount", "DENY")])
+        self.assertIn("a recount statement must be v2", trail[0]["reason"])
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/0x01500018.lock", run=run)
+        self.assertEqual(counter.remains(), (None, []))          # the counter stays unusable: nothing was defined
+
+    def test_owner_statement_refused_under_a_multi_node_tip(self):
+        """A v2 recount statement given against a multi-node manifest is refused by the command, before
+        anything is changed: the owner is not a floor source for a multi-node recount."""
+        run, ask, tip, v1 = self.owner_statement_host()
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl",
+                "--owner-statement", self.d + "/statement.json"]
+        # swap the host's chain for the multi-node fixture's: the statement names the single-node tip, so the
+        # node's manifest (multi-node) and the statement disagree, and the statement is refused
+        with open(self.d + "/membership.json", "wb") as f:
+            f.write(m.canonical([signed(self.m1)]))
+        self.assertEqual(recount.main(argv, ask=ask, run=run), 1)
+        # the statement check never ran: the chain's CONFLICT (current()) is refused before the owner-statement
+        # path, and that refusal is a CONFLICT the command prints, not a recorded DENY (the owner-statement
+        # refusal itself -- a DENY in the trail -- is tested by
+        # test_a_v1_shaped_recount_statement_is_refused_not_a_traceback)
         self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
 
 

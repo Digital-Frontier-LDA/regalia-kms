@@ -19,6 +19,7 @@ from deploy.baremetal import membership as m
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_lease as lt
 import tests.test_baremetal_replacement as rt
+import tests.test_baremetal_membership_v5 as v5
 
 ROOT = hbt.pub(hbt.ROOT)
 
@@ -411,6 +412,161 @@ class Exchange(Case):
         with self.assertRaises(ZeroDivisionError):
             convergence.audited(self.events.append, "unlock", self.m1, "a", "b", lambda: 1 / 0)
         self.assertEqual(len(self.events), 3)
+
+
+class OwnerChain(unittest.TestCase):
+    """The single-node owner chain (docs/design/single-node.md 4.7): `agreed()` and `recover()` take an optional
+    `owner_chain` that counts as a source ONLY when the newest manifest's topology profile is SINGLE_NODE.
+    It goes through the same accept/anchored checks but skips the "may authorize" check (the owner is not a node)."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.root = Ed25519PrivateKey.generate()
+        self.owner = Ed25519PrivateKey.generate()      # the tip's owner_keys (a quorum party, never the pinned root)
+        self.root_pub = hbt.pub(self.root)
+        self.owner_pub = hbt.pub(self.owner)
+
+    def sign(self, man, signer="root"):
+        return rt.sign(man, self.root, signer)
+
+    def single_chain(self, upto=1):
+        """A single-node v5 chain: node a alone, root-signed; the tip's owner_keys name this fixture's owner key."""
+        chain, prev = [], ""
+        for epoch in range(1, upto + 1):
+            state = "MAINTENANCE" if epoch == upto and upto > 1 else "ACTIVE"
+            man = v5.single5(epoch, prev, nodes=[v5.one("a", state, i=0)])
+            man["owner_keys"] = [{"alg": "ed25519", "key": self.owner_pub}]
+            chain.append(self.sign(man))
+            prev = m.digest(man)
+        return chain
+
+    def multi_case(self):
+        """The Case fixture (a, b, c ACTIVE at epoch 1) for the multi-node tests."""
+        Case.setUpClass()                    # initialize the class-level keys (idempotent)
+        case = Case("setUp")
+        case.setUp()
+        self.addCleanup(case.tearDown)
+        return case
+
+    def refused(self, reason, fn, *args, **kw):
+        with self.assertRaises(m.Refused) as caught:
+            fn(*args, **kw)
+        self.assertIn(reason, str(caught.exception))
+
+    # ---- agreed(): the owner chain as a source ----
+
+    def test_agreed_accepts_owner_chain_under_single_node(self):
+        """agreed() with owner_chain: the owner chain is verified from the root, reaches the anchored epoch,
+        and is accepted as a source under a single-node tip (skipping the "may authorize" check)."""
+        chain = self.single_chain(2)
+        # agreed() takes root_key, sources, minimum, anchored, owner_chain
+        longest, newest = convergence.agreed(self.root_pub, {}, 1, 1, owner_chain=chain)
+        self.assertEqual(newest["epoch"], 2)
+        self.assertEqual(len(longest), 2)
+
+    def test_agreed_refuses_owner_chain_under_multi_node(self):
+        """agreed() with owner_chain under a multi-node tip: refused."""
+        case = self.multi_case()
+        e2 = case.revoke(case.m1, "QUARANTINED")
+        b = case.stores["b"]
+        convergence.catch_up(b, [e2])
+        self.refused("owner_chain is refused under a multi-node tip", convergence.agreed,
+                     ROOT, {}, 1, 1, owner_chain=b.envelopes())
+
+    def test_agreed_owner_chain_must_reach_anchored_epoch(self):
+        """The owner chain must reach the anchored epoch, like any source."""
+        chain = self.single_chain(2)
+        self.refused("below the TPM high-water", convergence.agreed, self.root_pub, {}, 1, 2, owner_chain=chain[:1])
+
+    def test_agreed_owner_chain_forged_link_refused(self):
+        """A forged link in the owner chain is refused, like in any source's chain."""
+        chain = self.single_chain(2)
+        forged = [dict(e) for e in chain]
+        forged[1] = dict(forged[1], signature=dict(forged[1]["signature"], sig="00" * 64))
+        self.refused("signature does not verify", convergence.agreed, self.root_pub, {}, 1, 1, owner_chain=forged)
+
+    def test_agreed_owner_chain_empty_list_refused(self):
+        """An empty owner_chain is refused."""
+        self.refused("owner_chain must be a non-empty list", convergence.agreed, self.root_pub, {}, 1, 1, owner_chain=[])
+
+    def test_a_node_named_owner_gains_nothing(self):
+        """A node named "owner" in the sources dict under multi-node is treated as a node: it must be a node
+        the chain lets authorize. It is not a special name: it gains nothing over any other non-node name."""
+        case = self.multi_case()
+        e2 = case.revoke(case.m1, "QUARANTINED")
+        b = case.stores["b"]
+        convergence.catch_up(b, [e2])
+        # "owner" is not a node of the chain: it is refused as a source, exactly like "z"
+        self.refused("'owner' is not a source this chain trusts", convergence.agreed, ROOT, {"owner": b.envelopes()}, 1, 1)
+        self.refused("'z' is not a source this chain trusts", convergence.agreed, ROOT, {"z": b.envelopes()}, 1, 1)
+
+    def test_a_caller_supplied_owner_key_skips_nothing_under_multi_node(self):
+        """The owner's "may authorize" exemption is by IDENTITY (the owner_chain argument), not by name:
+        a caller-supplied "__owner__" key in the sources dict must not skip the node check under any tip.
+        Review defcc750, finding 1: before the fix it was exempt (ACCEPTED as a source under multi-node)."""
+        case = self.multi_case()
+        e2 = case.revoke(case.m1, "QUARANTINED")
+        b = case.stores["b"]
+        convergence.catch_up(b, [e2])
+        # the reserved key is refused as not a node ID, before it can count toward the minimum
+        self.refused("is not a node ID", convergence.agreed, ROOT, {"__owner__": b.envelopes()}, 1, 1)
+        # and it gains nothing beside a real node: the pair is still refused
+        self.refused("is not a node ID", convergence.agreed, ROOT,
+                     {"__owner__": b.envelopes(), "b": b.envelopes()}, 2, 1)
+
+    # ---- recover(): the owner chain as the sole source ----
+
+    def _single_store(self, chain, upto):
+        """A store for a single-node v5 chain: the anchor is judged by a v3 tip (not a QUORUM schema), so an
+        owner-written index reads. In production a v5 node's anchor is policy-written; this fixture has no signed
+        measurements, so it uses the owner-written layout and a v3 schema.
+
+        `_judge_by` is patched to a no-op: the Store's `_commit` and `_restore` both call it to set
+        `hw._schema` to the chain's tip (v5, a QUORUM schema), which would refuse the owner-written anchor.
+        With the no-op, the anchor keeps its v3 schema and reads throughout."""
+        anchor = m.HighWater("0x1500016", lock_path=os.path.join(self.d, "c-hw.lock"), run=hbt.FakeTpm(),
+                             schema=lambda: m.SCHEMA_V3)
+        anchor.define()
+        c = m.Store(os.path.join(self.d, "c-membership.json"), self.root_pub, anchor)
+        c._judge_by = lambda manifests: None      # keep the anchor's v3 schema (no-op for the store's lifetime)
+        for e in chain[:upto]:
+            c.commit(e)
+        return c
+
+    def test_recover_owner_chain_sole_source_under_single_node(self):
+        """recover() with owner_chain under a single-node tip: the owner chain alone is enough (minimum=1)."""
+        chain = self.single_chain(2)
+        c = self._single_store(chain, 2)
+        os.unlink(c.path)
+        self.assertEqual(convergence.recover(c, {}, owner_chain=chain)["epoch"], 2)
+        self.assertEqual(c.load()["epoch"], 2)
+
+    def test_recover_owner_chain_crash_window_minimum_one(self):
+        """In the crash window (record not written), the default minimum is 2. Under single-node with
+        owner_chain, the minimum is 1: the owner chain alone is enough."""
+        chain = self.single_chain(3)
+        c = self._single_store(chain, 2)
+        c.hw.advance(3)               # crash after counter moved to 3, before the record
+        os.unlink(c.path)
+        self.assertFalse(c.pinned())
+        # without owner_chain, the default minimum is 2: refused (no sources)
+        self.refused("recovery needs whole chains from 2 different sources that agree (0 given)", convergence.recover, c, {})
+        # with owner_chain, minimum=1: the owner chain alone is enough
+        self.assertEqual(convergence.recover(c, {}, owner_chain=chain)["epoch"], 3)
+        self.assertEqual(c.load()["epoch"], 3)
+
+    def test_recover_owner_chain_refused_under_multi_node(self):
+        """recover() with owner_chain under a multi-node tip: refused, nothing is installed."""
+        case = self.multi_case()
+        b, c = case.stores["b"], case.stores["c"]
+        e2 = case.revoke(case.m1, "QUARANTINED")
+        for store in (b, c):
+            convergence.catch_up(store, [e2])
+        os.unlink(c.path)
+        self.refused("owner_chain is refused under a multi-node tip", convergence.recover, c, {}, owner_chain=b.envelopes())
+        self.assertFalse(os.path.exists(c.path))
 
 
 class Theft(Case):

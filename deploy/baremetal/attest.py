@@ -564,7 +564,7 @@ class Verifier:
             save()
         return nonce
 
-    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None, pcr_values=None, binding=None):
+    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None, pcr_values=None, binding=None, on_verified=None):
         """A quote for one boot session. `node_id`, `epoch` and `nonce` are what THIS verifier holds (the
         node it is talking to, its manifest epoch, the nonce it issued); the session ID and the ephemeral
         key are what the node sent. `phase` is the boot phase the request must come from (PHASES): what
@@ -572,8 +572,13 @@ class Verifier:
         protocol v2) are the values the node read beside its quote: unauthenticated, so used only once they
         hash to the quoted digest under THIS verifier's selection, and then only to say which PCR differs
         when the quote matches no accepted set. Such a reason carries the expected PCR values in hex: it goes to
-        the caller's audit trail (the operator's), never to the node, which is answered only DENIED. Returns the
-        verdict, or raises Refused with the reason."""
+        the caller's audit trail (the operator's), never to the node, which is answered only DENIED.
+        `on_verified` (a callable taking (state, record, old_measurement), or None) runs once the quote has
+        verified, in THIS locked_state, AFTER the record's measurement is written (the new measurement is in
+        `record["measurement"]`; `old_measurement` is the measurement it replaced) and BEFORE it is saved: what
+        the owner's attest-booted stamp (the retire evidence) is bound to this verification by, with no gap for
+        a concurrent writer to commit in (regalia-kms-dx7.8). Its Refused stands -- the verification is refused.
+        Returns the verdict, or raises Refused with the reason."""
         expected = self.node(node_id)
         require(phase is None or (isinstance(phase, str) and phase in PHASES), "the phase must be one of %s" % ", ".join(PHASES))
         phased = [s["label"] for s in expected["accepted"] if "phases" in s]
@@ -618,12 +623,20 @@ class Verifier:
                     + differences(reported, sets, phase))
             require(matched, "the TPM firmware version %s is not the recorded %s" % (
                 q["firmware_version"], " or ".join(s["tpm_firmware_version"] for s in on_pcrs)))
-            self.check_counters(record, q, session_id, ephemeral_public)
+            self.check_counters(record, q, session_id, ephemeral_public, nonce.hex())
             # Which set, under which manifest epoch, and in which phase: what a rollout asks before the next
             # node reboots and before it retires CURRENT. A node verified in its initrd has asked for its disk;
             # it is not yet a node that came up (rollout.py counts only "system" where the set is per phase).
+            # "nonce" is the consumed nonce hex, written beside the measurement: the identity of THIS
+            # verification. A boot session is verified any number of times, each with its own nonce
+            # (check_counters), and the manifest epoch is the tip's for every record under it -- neither
+            # names a verification -- but the nonce is consumed by this call (popped above, whatever its
+            # outcome), so only the verification that spent it can find it in the record (regalia-kms-dx7.8).
             seen_phase = phase if "phases" in matched[0] else None
-            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch, "phase": seen_phase}
+            old_measurement = record.get("measurement")   # the record before this verification writes its own
+            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch, "phase": seen_phase, "nonce": nonce.hex()}
+            if on_verified is not None:
+                on_verified(state, record, old_measurement)   # the caller's annotation, under THIS lock
             save()
         # ak_name: the AK this quote was verified under, read inside the same lock as the verification, so
         # a caller that requires a particular AK (a runtime lease, lease.py) compares what was actually used
@@ -632,7 +645,7 @@ class Verifier:
                 "measurement": matched[0]["label"], "phase": seen_phase}
 
     @staticmethod
-    def check_counters(record, q, session_id, ephemeral_public):
+    def check_counters(record, q, session_id, ephemeral_public, nonce_hex=None):
         """TPMS_CLOCK_INFO against the node's last accepted quote. One boot (resetCount, restartCount)
         carries one boot session; a session, or its ephemeral key, never appears in a later boot.
 
@@ -640,7 +653,12 @@ class Verifier:
         initramfs retries its peers with the one session it holds. The clock (and its `safe` flag, which
         is NO after a power loss, exactly when a node needs its peers) is reported and decides nothing:
         two quotes of one boot can arrive in either order, and each already needs its own unused nonce.
-        resetCount and restartCount are what the decision rests on."""
+        resetCount and restartCount are what the decision rests on.
+
+        `nonce_hex` (the nonce this verification consumed): written beside the boot record so a caller
+        that stamps a state record can bind the stamp to THIS verification -- a session is verified any
+        number of times in one boot, and a later same-session quote (an unlock in another phase) overwrites
+        the boot record, so only the nonce names the call (regalia-kms-dx7.8, the owner's retire evidence)."""
         boot = [q["reset_count"], q["restart_count"]]
         session = hashlib.sha256(session_id).hexdigest()
         key = hashlib.sha256(ephemeral_public).hexdigest()
@@ -657,7 +675,7 @@ class Verifier:
                         "a boot session or ephemeral key from an earlier boot was presented after a reboot")
         if last is None or boot != last["counters"]:
             history.extend((session, key))   # never evicted: see STATE_MAX_BYTES
-        record["boot"] = {"counters": boot, "session": session, "key": key}
+        record["boot"] = {"counters": boot, "session": session, "key": key, **({"nonce": nonce_hex} if nonce_hex is not None else {})}
 
 
 # ---- the node (tpm2-tools against the TPM named by TPM2TOOLS_TCTI) ----
