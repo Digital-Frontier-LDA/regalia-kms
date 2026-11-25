@@ -1447,7 +1447,7 @@ def firewall(host):
     persisted = host.read(PERSISTED_FIREWALL)
     if persisted is None:
         return False, "the persisted ruleset %s cannot be read: the next boot's firewall is unknown" % PERSISTED_FIREWALL
-    stale = [line.strip() for line in persisted.splitlines() if _text_admits_ssh(line)]
+    stale = [rule for rule in _logical_rules(persisted) if _text_admits_ssh(rule)]
     if stale:
         return False, "the persisted ruleset %s still admits TCP :%d (%s): the next boot would load it back (q-20 rollout, README)" % (
             PERSISTED_FIREWALL, SSH_PORT, "; ".join(stale))
@@ -1458,46 +1458,92 @@ def firewall(host):
 # The per-host fragment every boot loads (README "Host firewall"; /etc/nftables.d/regalia-kms.nft links here on a verity host)
 PERSISTED_FIREWALL = "/var/lib/regalia-etc/nftables.d/regalia-kms.nft"
 SSH_PORT = 22
-TCP_DPORT = re.compile(r"tcp dport (\{[^}]*\}|\S+)")
+# a tcp dport match in nft's text form: its operator (none is ==) and its operand (a port, a set, a range, or a name)
+TCP_DPORT = re.compile(r"tcp dport\s+(?:(==|!=|<=|>=|<|>|eq|ne|le|ge|lt|gt)\s*)?(\{[^}]*\}|[^\s;]+)")
+TEXT_OPS = {"eq": "==", "ne": "!=", "le": "<=", "ge": ">=", "lt": "<", "gt": ">"}
 
 
-def _text_admits_ssh(line):
-    """A line of nft's text form that accepts TCP to port 22 (alone, in a set, in a range that holds it), or carries the
-    pre-q-20 rule's comment."""
-    if " accept" not in line:
-        return False
-    if 'comment "ssh' in line:
-        return True
-    for match in TCP_DPORT.finditer(line):
-        for item in match.group(1).strip("{} ").split(","):
-            low, _, high = item.strip().partition("-")
-            if low.isdigit() and (high or low).isdigit() and int(low) <= SSH_PORT <= int(high or low):
-                return True
-    return False
+def _logical_rules(text):
+    """nft's text form as whole rules: a backslash at the end of a line continues the rule on the next (nft(8))."""
+    out, pending = [], ""
+    for raw in text.splitlines():
+        line = pending + raw.strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1] + " "
+            continue
+        out.append(line)
+    if pending:
+        out.append(pending.strip())
+    return out
 
 
-def _port_holds(right, port):
+def _text_operand(text):
+    """A text operand as nft -j would give it: an int, {"range": [low, high]}, {"set": [...]}, or the text itself (a
+    named set, a service name, a variable: not a port this can compare)."""
+    def one(item):
+        item = item.strip()
+        low, dash, high = item.partition("-")
+        if low.isdigit() and not dash:
+            return int(low)
+        if low.isdigit() and high.isdigit():
+            return {"range": [int(low), int(high)]}
+        return item
+    if text.startswith("{"):
+        return {"set": [one(i) for i in text.strip("{} ").split(",") if i.strip()]}
+    return one(text)
+
+
+def _holds(right, port):
+    """Whether the operand holds port: True, False, or None when it names something this cannot read (fail closed)."""
+    if isinstance(right, bool):
+        return None
     if isinstance(right, int):
         return right == port
-    if isinstance(right, dict):
-        if "set" in right:
-            return any(_port_holds(item, port) for item in right["set"])
-        if "range" in right and len(right["range"]) == 2:
-            low, high = right["range"]
-            return isinstance(low, int) and isinstance(high, int) and low <= port <= high
-    if isinstance(right, list):
-        return any(_port_holds(item, port) for item in right)
-    return False
+    if isinstance(right, dict) and "range" in right:
+        low, high = (right["range"] + [None, None])[:2]
+        return low <= port <= high if isinstance(low, int) and isinstance(high, int) else None
+    items = right.get("set") if isinstance(right, dict) else right if isinstance(right, list) else None
+    if items is None:
+        return None
+    held = [_holds(item, port) for item in items]
+    return True if True in held else None if None in held else False
+
+
+def _match_admits(op, right, port):
+    """Whether a tcp dport match lets port through, by its operator (#791 CodeRabbit): == and in hold it, != leaves out
+    what it holds, < <= > >= compare. An operand or an operator this cannot read admits it: unknown is not closed."""
+    op = TEXT_OPS.get(op, op) or "=="
+    if op in ("==", "in"):
+        held = _holds(right, port)
+        return True if held is None else held
+    if op == "!=":
+        held = _holds(right, port)
+        return True if held is None else not held
+    if op in ("<", "<=", ">", ">=") and isinstance(right, int) and not isinstance(right, bool):
+        return {"<": port < right, "<=": port <= right, ">": port > right, ">=": port >= right}[op]
+    return True
+
+
+def _text_admits_ssh(rule):
+    """A whole rule of nft's text form that accepts TCP to port 22 (alone, in a set or a range, or past a != or a
+    comparison that does not exclude it), or carries the pre-q-20 rule's comment."""
+    if not re.search(r"(^|\s)accept(\s|;|$)", rule):
+        return False
+    if 'comment "ssh' in rule:
+        return True
+    return any(_match_admits(m.group(1), _text_operand(m.group(2)), SSH_PORT) for m in TCP_DPORT.finditer(rule))
 
 
 def _admits_ssh(rule):
-    """A rule of nft -j that accepts TCP to port 22 (alone, in a set or a range), or carries the old rule's comment."""
+    """A rule of nft -j that accepts TCP to port 22 (by its dport match's operator and operand), or carries the old
+    rule's comment."""
     exprs = rule.get("expr") or []
     accepts = any(isinstance(e, dict) and "accept" in e for e in exprs)
     port = any(isinstance(e, dict) and isinstance(e.get("match"), dict)
                and (e["match"].get("left") or {}).get("payload", {}).get("field") == "dport"
                and (e["match"].get("left") or {}).get("payload", {}).get("protocol") == "tcp"
-               and _port_holds(e["match"].get("right"), SSH_PORT) for e in exprs)
+               and _match_admits(e["match"].get("op"), e["match"].get("right"), SSH_PORT) for e in exprs)
     return accepts and (port or str(rule.get("comment", "")).lower().startswith("ssh"))
 
 

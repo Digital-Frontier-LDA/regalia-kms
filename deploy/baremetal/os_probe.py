@@ -900,16 +900,22 @@ SSH_SERVER_MARKERS = (b"OpenSSH_", b"dropbear_", b"Dropbear", b"tinysshd")
 # sshd-unix-local.socket (systemd 256+, made when an sshd is installed); the staging variant's
 # regalia-staging-sshd.service; Dropbear's. The KMS unit is listed with them, so an empty answer cannot pass.
 SSH_UNIT_PATTERNS = ("ssh.*", "ssh@*", "*sshd*", "dropbear*")
-# Every directory a unit file or a drop-in can come from (systemd.unit(5), system manager), generators included. Each
-# service and socket in them is read, masked or not and whatever its name: a masked unit's vendor file is still here.
-UNIT_DIRECTORIES = ("/etc/systemd/system", "/run/systemd/system", "/run/systemd/generator.early",
-                    "/run/systemd/generator", "/run/systemd/generator.late", "/usr/local/lib/systemd/system",
-                    "/usr/lib/systemd/system", "/lib/systemd/system")
+# Every directory a unit file or a drop-in can come from (systemd.unit(5), system manager, systemd 257): the control
+# and attached directories (systemctl set-property, portablectl), transient units (systemd-run), generators (#791,
+# CodeRabbit). Each service and socket in them is read, masked or not and whatever its name: a masked unit's vendor
+# file is still here.
+UNIT_DIRECTORIES = ("/etc/systemd/system.control", "/run/systemd/system.control", "/run/systemd/transient",
+                    "/run/systemd/generator.early", "/etc/systemd/system", "/etc/systemd/system.attached",
+                    "/run/systemd/system", "/run/systemd/system.attached", "/run/systemd/generator",
+                    "/usr/local/lib/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system",
+                    "/run/systemd/generator.late")
 UNIT_EXEC_KEYS = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload", "ExecCondition")
 SOCKET_LISTEN_KEYS = ("ListenStream", "ListenSequentialPacket")
 SSH_PORT = 22
 PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
-PROC_TCP_HEADER = ("sl", "local_address", "rem_address", "st")
+# each table's header: the kernel spells the remote column rem_address in tcp and remote_address in tcp6 (#791, CodeRabbit)
+PROC_TCP_HEADER = {"/proc/net/tcp": ("sl", "local_address", "rem_address", "st"),
+                   "/proc/net/tcp6": ("sl", "local_address", "remote_address", "st")}
 # one row of /proc/net/tcp (8 hex digits of address) or tcp6 (32): "sl: local:port remote:port st ..."
 PROC_TCP_ROW = re.compile(r"\s*\d+: ([0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):([0-9A-Fa-f]{4}) "
                           r"(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):[0-9A-Fa-f]{4} ([0-9A-Fa-f]{2}) ")
@@ -991,7 +997,8 @@ def _ssh_units(host):
             path = directory + "/" + name
             if name.endswith((".service", ".socket")):
                 files.append((name, path))
-            elif name.endswith((".service.d", ".socket.d")):
+            elif name.endswith((".service.d", ".socket.d")) or name in ("service.d", "socket.d"):
+                # a unit's own drop-ins, a prefix's (ssh-.service.d) and the type-wide ones (service.d: every service)
                 drop_ins = host.entries(path)
                 if drop_ins is None:
                     found.append("the drop-in directory %s cannot be listed" % path)
@@ -1021,7 +1028,7 @@ def _kernel_listeners(host, table):
     if text is None:
         return ["%s cannot be read" % table]
     lines = text.splitlines()
-    if not lines or tuple(lines[0].split()[:4]) != PROC_TCP_HEADER:
+    if not lines or tuple(lines[0].split()[:4]) != PROC_TCP_HEADER[table]:
         return ["%s is not a kernel TCP table (its header is %r)" % (table, lines[0][:60] if lines else "")]
     found = []
     for number, line in enumerate(lines[1:], 2):

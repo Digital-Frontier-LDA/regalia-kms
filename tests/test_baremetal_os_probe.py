@@ -122,7 +122,10 @@ PROC_TCP = (PROC_TCP_HEAD + "   0: 0A0200C0:20FB 00000000:0000 0A 00000000:00000
             "   1: 0A0200C0:238C 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 102 1\n"
             "   2: 0100007F:094B 00000000:0000 0A 00000000:00000000 00:00000000 00000000   990        0 103 1\n"
             "   3: 0A0200C0:20FB 0B0200C0:D431 01 00000000:00000000 00:00000000 00000000   995        0 104 1\n")
-PROC_TCP6 = PROC_TCP_HEAD
+# /proc/net/tcp6 names its remote column remote_address (net/ipv6/tcp_ipv6.c), not tcp's rem_address
+PROC_TCP6_HEAD = ("  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when "
+                  "retrnsmt   uid  timeout inode\n")
+PROC_TCP6 = PROC_TCP6_HEAD
 NO_SSH_LISTENING = ("LISTEN 0      4096   192.0.2.10:8443   0.0.0.0:*\n"
                     "LISTEN 0      4096   192.0.2.10:9100   0.0.0.0:*\n"
                     "LISTEN 0      4096   127.0.0.1:2379    0.0.0.0:*\n")
@@ -847,6 +850,44 @@ class SshdAbsent(unittest.TestCase):
         host = FakeHost()
         host.files["/proc/net/tcp"] = PROC_TCP_HEAD
         self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_the_ipv6_table_has_its_own_header(self):
+        """#791 CodeRabbit: the kernel spells tcp6's remote column remote_address, tcp's rem_address. Each table passes
+        with its own header and fails with the other's."""
+        host = FakeHost()
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])           # the fixture's tcp6 is the kernel's real header
+        self.assert_fails([lambda g: g.files.__setitem__("/proc/net/tcp6", PROC_TCP_HEAD),
+                           lambda g: g.files.__setitem__("/proc/net/tcp", PROC_TCP6_HEAD)], "is not a kernel TCP table")
+
+    def test_a_transient_control_or_attached_unit_fails_it(self):
+        """#791 CodeRabbit: systemd 257 also loads units from /run/systemd/transient (systemd-run), the system.control
+        directories (set-property) and the system.attached ones (portable services). A renamed SSH server there, outside
+        PATH and on another port, fails the control by its bytes."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        directories = ("/run/systemd/transient", "/etc/systemd/system.control", "/run/systemd/system.control",
+                       "/etc/systemd/system.attached", "/run/systemd/system.attached")
+        self.assertTrue(set(directories) <= set(os_probe.UNIT_DIRECTORIES))
+        self.assert_fails([unit_file(d, "remote-admin.service", "[Service]\nExecStart=/opt/remote-shell -D -p 2222\n",
+                                     "/opt/remote-shell", openssh) for d in directories], "the unit remote-admin.service")
+
+    def test_a_type_wide_drop_in_fails_it(self):
+        """#791 CodeRabbit: service.d/*.conf applies to every service (socket.d to every socket), so an ExecStartPost
+        there runs on the KMS unit too; a prefix drop-in (regalia-.service.d) applies to every regalia- unit."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        def drop_in(directory, name, text):
+            def breaker(g):
+                g.dirs.setdefault(directory, []).append(name)
+                g.dirs[directory + "/" + name] = ["50-admin.conf"]
+                g.files[directory + "/" + name + "/50-admin.conf"] = text
+                g.files["/opt/remote-shell"] = openssh
+            return breaker
+        post = "[Service]\nExecStartPost=/opt/remote-shell -D -p 2222\n"
+        self.assert_fails([drop_in("/etc/systemd/system", "service.d", post), drop_in("/usr/lib/systemd/system", "service.d", post),
+                           drop_in("/run/systemd/system", "regalia-.service.d", post),
+                           drop_in("/etc/systemd/system", "socket.d", "[Socket]\nListenStream=22\n")], "the ")
+        host = FakeHost()
+        drop_in("/etc/systemd/system", "service.d", post)(host)
+        self.assertIn("the unit service (/etc/systemd/system/service.d/50-admin.conf)", self.judged(host)[1])
 
     def test_a_lookup_that_fails_other_than_missing_fails_it(self):
         """#791 independent review (MUST 2): only "no such file" (ENOENT) is absence. One binary path whose lookup fails

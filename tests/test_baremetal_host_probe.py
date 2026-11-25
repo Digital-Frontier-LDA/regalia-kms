@@ -2309,8 +2309,8 @@ class FirewallAfterQ20(unittest.TestCase):
         return 0, json.dumps(d)
 
     @staticmethod
-    def dport(right, comment=None):
-        rule = {"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": right}},
+    def dport(right, comment=None, op="=="):
+        rule = {"expr": [{"match": {"op": op, "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": right}},
                          {"accept": None}]}
         if comment:
             rule["comment"] = comment
@@ -2351,6 +2351,42 @@ class FirewallAfterQ20(unittest.TestCase):
         h = FakeHost()
         h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    tcp dport 2222 accept\n    tcp dport 22 drop\n  }\n}\n")
         self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_loaded_rule_is_judged_by_its_operator(self):
+        """#791 CodeRabbit: != and the comparisons decide what a tcp dport match lets through; an operand this cannot
+        compare (a named set, a variable) admits 22, so it fails closed."""
+        for label, (op, right, admits) in {
+                "!= 8443 lets 22 in": ("!=", 8443, True), "< 1024 lets 22 in": ("<", 1024, True),
+                "<= 22 lets 22 in": ("<=", 22, True), ">= 22 lets 22 in": (">=", 22, True),
+                "a named set is not known not to hold 22": ("==", "@admin_ports", True),
+                "!= over a named set is not known to leave 22 out": ("!=", "@admin_ports", True),
+                "an operator it does not know": ("~", 8443, True),
+                "!= 22 keeps 22 out": ("!=", 22, False), "!= a set holding 22 keeps 22 out": ("!=", {"set": [22, 2222]}, False),
+                "> 1024 keeps 22 out": (">", 1024, False), "< 22 keeps 22 out": ("<", 22, False)}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(self.dport(right, op=op))
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, not admits, why)
+
+    def test_a_persisted_rule_is_read_whole_and_by_its_operator(self):
+        """#791 CodeRabbit: a backslash continues a rule on the next line, and != and the comparisons decide what it lets
+        through. A name in place of a port (a service, a set, a variable) admits 22: unknown is not closed."""
+        admits = {"continued over two lines": "tcp dport 22 \\\n      accept",
+                  "the comment on the next line": "tcp dport 2222 \\\n      accept comment \"ssh: admin only\"",
+                  "!= 8443": "tcp dport != 8443 accept", "ne 8443": "tcp dport ne 8443 accept", "< 1024": "tcp dport < 1024 accept",
+                  "the service name": "tcp dport ssh accept", "a named set": "tcp dport @admin_ports accept",
+                  "a variable": "tcp dport $ADMIN accept", "a set with a name in it": "tcp dport { 8443, ssh } accept"}
+        keeps_out = {"!= 22": "tcp dport != 22 accept", "> 1024": "tcp dport > 1024 accept",
+                     "!= a set holding 22": "tcp dport != { 22, 2222 } accept", "a continued drop": "tcp dport 22 \\\n      drop"}
+        for label, line in list(admits.items()) + list(keeps_out.items()):
+            with self.subTest(label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in keeps_out, why)
+                if label in admits:
+                    self.assertIn("would load it back", why)
 
     def test_a_persisted_fragment_that_cannot_be_read_fails_it(self):
         h = FakeHost()
