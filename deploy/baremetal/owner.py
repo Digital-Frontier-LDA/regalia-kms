@@ -130,7 +130,8 @@ def sign_manifest(current, proposal, open_signer, confirm, say=print):
 # ---- the owner as the second source of a recovery (#387; recover.py): off the nodes ----
 
 def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session, open_signer, confirm, now,
-                  witnesses=None, counter_epoch=None, say=print, issued=None):
+                  witnesses=None, counter_epoch=None, say=print, issued=None,
+                  collector_sequence=None):
     """The owner's statement over ONE peer's chain, for recover.py --one-source (or reanchor's), after the owner has judged
     its tip (regalia-kms-d9's conditions, adopted on #387). The counter does not protect a re-anchor, so this does:
       * the tip is not below the highest epoch this machine's manifest signing record (`record_lines`, manifest.py's
@@ -142,12 +143,19 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         witness the operator must type "no collector" as part of the line, and the statement says so to the record;
       * the operator types the line naming the purpose, node, epoch and digest (and "no collector"), after reading
         that the record is a lower bound and being asked for any later revocation they know of.
+
+    Under a single-node tip (the owner-chain path, docs/design/single-node.md 4.7): the collector is MANDATORY
+    (decision Q4): a witness is required (no "no collector" escape), the statement is v2 with
+    `collector_epoch` bound into it, and `collector_sequence` is also bound (for the recount floor).
+    The statement is v2 only under single-node; multi-node keeps v1 and its "no collector" escape.
+
     The statement expires SESSION_TTL - 60 s after the session was `issued` (the node's authenticated time, which
     `recover session` prints), not by this machine's clock, which an offline laptop may have wrong (d9's read).
     Returns {"statement", "key", "sig"} for the node."""
     from deploy.baremetal import manifest as manifest_tool, recover
     require(purpose in recover.PURPOSES, "the purpose is one of %s" % ", ".join(recover.PURPOSES))
     tip = recover.verify_chain(peer_chain, root_key)
+    is_single = membership.profile(tip) == membership.SINGLE_NODE
     signed = [line for line in record_lines if isinstance(line, dict) and line.get("verified") is True and isinstance(line.get("epoch"), int)]
     require(signed, "this machine's signing record holds no verified signature: there is no floor to judge the tip by")
     floor = max(signed, key=lambda line: line["epoch"])
@@ -162,7 +170,24 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
     if witnesses:
         seen = max(recover.witness_epoch(*w) for w in witnesses)
         require(seen <= tip["epoch"], "the audit collector saw epoch %d, above the peer's tip (epoch %d): a revocation withheld" % (seen, tip["epoch"]))
-    lines = ["A %s of node %s from ONE peer, the owner the second source:" % (purpose.upper(), node_id),
+    if is_single and seen is None:
+        # under single-node the collector is MANDATORY (decision Q4): no "no collector" escape
+        require(False, "under single-node the audit collector is mandatory (docs/design/single-node.md 4.7, decision Q4): "
+                "give a --witness (the collector's export and receipt) for this node's sync stream")
+    if is_single and purpose == "recount":
+        # for recount, the collector's sequence (the highest beat-propose ALLOW) is ALSO witnessed, over ALL of
+        # the verified --witness exports the epoch came from -- never taken from the operator (review defcc750,
+        # finding 2). It is the MAX over every witness, as `seen` is: a higher sequence in a later witness
+        # must raise the floor (council 2026-11-24 on PR #778, M2). An explicit collector_sequence (its caller
+        # already derived it) must equal what the witnesses hold.
+        witnessed = max(recover.witness_sequence(*w) for w in witnesses)
+        if collector_sequence is not None:
+            require(collector_sequence == witnessed,
+                    "collector_sequence %d is not what the collector's witnessed exports hold (%d)" % (collector_sequence, witnessed))
+        else:
+            collector_sequence = witnessed
+    lines = ["A %s of node %s%s:" % (purpose.upper(), node_id,
+             ", the owner the second source" if not is_single else " from the owner's chain (single-node)"),
              "  the peer's tip       epoch %d, %s" % (tip["epoch"], membership.digest(tip)),
              "  this machine signed  up to epoch %d (%s), a LOWER BOUND: the nodes may have made restrictive changes since" % (floor["epoch"], floor["digest"]),
              "  the audit collector  %s" % ("saw at most epoch %d" % seen if seen is not None else "NOT CONSULTED: type 'no collector' below to go on"),
@@ -171,18 +196,21 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         lines.append("    epoch %d: %s" % (i + 1, "; ".join(manifest_tool.diff(by_epoch[i], by_epoch[i + 1]))))
     if tip["epoch"] == floor["epoch"]:
         lines.append("    none")
-    if seen is None:
+    if seen is None and not is_single:
         lines.append("  WITHOUT THE COLLECTOR, a revocation two nodes signed after epoch %d is invisible here: the root never signs it,"
                      % floor["epoch"])
         lines.append("  so it is in no record this machine holds; the peer's tip may be from before it")
     lines.append("  Do you know of any later revocation? If so, stop here.")
-    want = "%s %s %d %s%s" % (purpose, node_id, tip["epoch"], membership.digest(tip)[:8], "" if seen is not None else " no collector")
+    want = "%s %s %d %s%s" % (purpose, node_id, tip["epoch"], membership.digest(tip)[:8],
+                              "" if (seen is not None or is_single) else " no collector")
     require((confirm("\n".join(lines) + "\nType exactly: %s\n> " % want) or "").strip() == want,
             "the line typed is not this %s's: nothing is signed" % purpose)
     owners = [e["key"] for e in tip.get("owner_keys", []) if e["alg"] == "ed25519"]
     signer = open_signer()
     require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
-    st = recover.statement(purpose, node_id, tip, session, (now if issued is None else issued) + recover.SESSION_TTL - 60)
+    st = recover.statement(purpose, node_id, tip, session, (now if issued is None else issued) + recover.SESSION_TTL - 60,
+                            collector_epoch=seen if is_single else None,
+                            collector_sequence=collector_sequence if (is_single and purpose == "recount") else None)
     say("Touch the key now (it signs when touched).")
     return {"statement": st, "key": signer.public(), "sig": signer.sign(recover.message(st)).hex()}
 
@@ -385,11 +413,12 @@ def main(argv=None):
     for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
                      ("--opensc-conf", {}), ("--pin-env", {})):
         k.add_argument(flag, **kw)                  # the same token options as `beat`
-    v = sub.add_parser("sign-recovery", help="(off the nodes) the owner as the second source of a one-peer recovery or re-anchor (#387)")
-    v.add_argument("--chain", required=True, help="the ONE peer's signed chain, as the node exported it")
+    v = sub.add_parser("sign-recovery", help="(off the nodes) the owner as the second source of a one-peer recovery, re-anchor, "
+                                             "or the single-node recount floor (docs/design/single-node.md 4.7; #387)")
+    v.add_argument("--chain", required=True, help="the ONE peer's signed chain, as the node exported it (for recount: this node's own chain)")
     v.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
     v.add_argument("--record", required=True, help="this machine's manifest signing record (manifest.py's signing-record.jsonl)")
-    v.add_argument("--purpose", required=True, choices=("recover", "reanchor"))
+    v.add_argument("--purpose", required=True, choices=("recover", "reanchor", "recount"))
     v.add_argument("--node-id", required=True, help="the node being recovered")
     v.add_argument("--session", required=True, help="the session the node printed (`recover session`)")
     v.add_argument("--session-issued", type=int, required=True, help="the ISSUED time `recover session` printed (the node's authenticated time)")
@@ -631,8 +660,15 @@ def main(argv=None):
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             with os.fdopen(fd, "w") as f:
                 json.dump(signed, f, sort_keys=True)
-            print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
-                  % (args.out, signed["statement"]["expires"]))
+            if args.purpose == "recount":
+                print("WRITTEN: %s, valid until %d; give it to the node (recount --owner-statement, single-node: "
+                      "docs/design/single-node.md 4.7)" % (args.out, signed["statement"]["expires"]))
+            elif signed["statement"].get("collector_epoch") is not None:
+                print("WRITTEN: %s, valid until %d; give it to the node (recover apply --owner-chain --owner-statement, "
+                      "single-node: docs/design/single-node.md 4.7)" % (args.out, signed["statement"]["expires"]))
+            else:
+                print("WRITTEN: %s, valid until %d; give it to the node (recover apply --one-source --owner-statement)"
+                      % (args.out, signed["statement"]["expires"]))
             return 0
         if args.op in ("sign-survivor", "sign-directive"):
             off_the_nodes()

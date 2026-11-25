@@ -80,6 +80,31 @@ class Statement(Case):
         # either owner key of the tip will do (ADR-0002 D30)
         recover.verify_owner(self.m3, self.signed(key=OWNER_KEYS[1]), "recover", "b", self.session, T0)
 
+    def test_a_malformed_statement_is_a_refusal_not_a_traceback(self):
+        """message() on a statement that is not a mapping is a REFUSAL (council 2026-11-24 on PR #778, M1):
+        it used to raise a bare AttributeError ('str' object has no attribute 'get'), outside the Refused
+        handler, before exact() could say what is wrong."""
+        self.refused("the recovery statement is not a mapping", recover.message, "a statement, not a mapping")
+        self.refused("the recovery statement is not a mapping", recover.message, None)
+        self.refused("the recovery statement is not a mapping", recover.message, ["purpose"])
+        # the outer shape is exact()'s; the inner shape is message's: a mapping without a purpose still refuses
+        self.refused("the purpose is one of", recover.message, {})
+
+    def test_a_recount_statement_without_collector_epoch_is_a_refusal_not_a_traceback(self):
+        """message() of a mapping with purpose recount and NO collector_epoch is a REFUSAL (council 2026-11-24
+        on PR #778, M1b): it used to pass `purpose in PURPOSES`, take the v1 branch, and raise a bare KeyError
+        at PREFIX_V1[purpose] (recount has no v1 prefix) -- uncaught by recount.main's `except (Refused,
+        OSError, ValueError)`, so `recount --owner-statement` with a v1-shaped recount statement exited with a
+        traceback, not a recorded refusal. Now the v1 branch refuses: a recount statement is v2-only (its
+        collector's witnessed sequence is the point)."""
+        self.refused("a recount statement must be v2 (with collector_epoch)",
+                     recover.message, {"purpose": "recount", "node_id": "a", "epoch": 3})
+        # the v1 purposes still pass the v1 branch (the refusal names recount specifically, not every purpose):
+        # a recover mapping without collector_epoch goes on to exact() and is refused for its missing keys,
+        # NOT for being v1-shaped
+        self.refused("the recovery statement", recover.message,
+                     {"purpose": "recover", "node_id": "a", "epoch": 3})
+
     def test_the_chain_extends_what_the_node_last_knew_and_owner_keys_may_rotate(self):
         self.assertEqual(recover.verify_chain(self.chain, ROOT_PUB, self.m2)["epoch"], 3)
         fork2 = manifest4(2, m.digest(self.m1), nodes4(b="QUARANTINED"), issued_at="2026-10-04T10:00:00Z")
@@ -117,6 +142,57 @@ class Witness(Case):
         self.refused("not for this export", recover.witness_epoch, export[:-1], self.receipt(export, chain, last, collector), keys, "id" * 32, "site-b.sync")
         self.refused("does not verify under the pinned", recover.witness_epoch, export, self.receipt(export, chain, last, Ed25519PrivateKey.generate()),
                      keys, "id" * 32, "site-b.sync")
+
+    def beat_export(self, sequences, epochs=None):
+        """The collector's export of the node's beat-propose events (beat.py:225 writes the sequence to the trail
+        line), with the same line/receipt mechanics as `export`."""
+        out, chain = [], trails.LINE_CHAIN_START
+        for i, sequence in enumerate(sequences):
+            line = json.dumps({"event": "beat-propose", "outcome": "ALLOW", "sequence": sequence,
+                               "epoch": (epochs[i] if epochs else sequence), "at": T0 + i}, sort_keys=True)
+            raw = line.encode() + b"\n"
+            out.append({"sequence": i + 1, "detail": {"line": line, "line_sha256": hashlib.sha256(raw).hexdigest()}})
+            chain = trails.line_chain(chain, raw)
+        return out, chain, hashlib.sha256(raw).hexdigest()
+
+    def test_witness_sequence_is_the_highest_beat_propose_allow(self):
+        """witness_sequence: the highest beat-propose ALLOW sequence in the witnessed stream; a stream with no
+        beat-propose ALLOW returns 0 (review defcc750, finding 2: it had no test)."""
+        collector = Ed25519PrivateKey.generate()
+        keys = [pub(collector)]
+        export, chain, last = self.beat_export([3, 1, 7])
+        self.assertEqual(recover.witness_sequence(export, self.receipt(export, chain, last, collector), keys, "id" * 32, "site-b.sync"), 7)
+        # no beat-propose ALLOW event at all (the sync-apply export): 0
+        sync_export, sync_chain, sync_last = self.export([1, 2])
+        self.assertEqual(recover.witness_sequence(sync_export, self.receipt(sync_export, sync_chain, sync_last, collector), keys, "id" * 32, "site-b.sync"), 0)
+        # a DENIED beat-propose does not count: rebuild the export with the tampered line and its correct receipt
+        denied_line = json.dumps({"event": "beat-propose", "outcome": "DENY", "sequence": 9,
+                                  "epoch": 9, "at": T0}, sort_keys=True)
+        denied_raw = denied_line.encode() + b"\n"
+        denied_export = [{"sequence": 1, "detail": {"line": denied_line,
+                                                    "line_sha256": hashlib.sha256(denied_raw).hexdigest()}}]
+        denied_chain = trails.line_chain(trails.LINE_CHAIN_START, denied_raw)
+        denied_last = hashlib.sha256(denied_raw).hexdigest()
+        self.assertEqual(recover.witness_sequence(denied_export, self.receipt(denied_export, denied_chain, denied_last, collector), keys, "id" * 32, "site-b.sync"), 0)
+
+    def test_witness_sequence_refuses_an_export_its_receipt_does_not_hold_for(self):
+        """A receipt that does not hold for the export (a different last line, a wrong key) is refused: the
+        sequence is witnessed, never free."""
+        collector = Ed25519PrivateKey.generate()
+        keys = [pub(collector)]
+        export, chain, last = self.beat_export([3, 5])
+        # the receipt signs a different export (its last line is not the export's)
+        other, _, other_last = self.beat_export([9])
+        self.refused("not for this export", recover.witness_sequence, export,
+                     self.receipt(other, other, other_last, collector), keys, "id" * 32, "site-b.sync")
+        # the receipt does not verify under the pinned keys
+        self.refused("does not verify under the pinned", recover.witness_sequence, export,
+                     self.receipt(export, chain, last, Ed25519PrivateKey.generate()), keys, "id" * 32, "site-b.sync")
+        # a tampered line breaks the named hash
+        tampered = [dict(e) for e in export]
+        tampered[1] = dict(tampered[1], detail=dict(tampered[1]["detail"], line=tampered[1]["detail"]["line"].replace('"sequence": 5', '"sequence": 99')))
+        self.refused("does not hold the line it names", recover.witness_sequence, tampered,
+                     self.receipt(export, chain, last, collector), keys, "id" * 32, "site-b.sync")
 
 
 class OwnerSide(Witness):
@@ -422,3 +498,302 @@ class Recovers(ct.Case):
         self.assertEqual(self.trail, [])
         self.assertFalse(c.pinned())                                             # nothing was restored
         self.assertFalse(os.path.exists(c.path))
+
+
+class SingleNodeStatement(Witness):
+    """The v2 owner statement under single-node (docs/design/single-node.md 4.7): the collector's witnessed
+    epoch is bound into the statement, and a collector above the tip is a refusal."""
+
+    def setUp(self):
+        super().setUp()
+        self.collector = Ed25519PrivateKey.generate()
+        self.collector_pub = pub(self.collector)
+
+    def witness(self, epoch):
+        export, chain, last = self.export([1, epoch])
+        return (export, self.receipt(export, chain, last, self.collector), [self.collector_pub], "id" * 32, "site-a.sync")
+
+    def v2_statement(self, collector_epoch, purpose="recover", node="a", tip=None, session=None):
+        st = recover.statement(purpose, node, tip or self.m3, session or self.session, T0 + 300,
+                               collector_epoch=collector_epoch)
+        return {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+
+    def test_v2_statement_has_collector_epoch_in_its_message(self):
+        """A v2 statement's message includes collector_epoch and uses the v2 prefix."""
+        st = recover.statement("recover", "a", self.m3, self.session, T0 + 300, collector_epoch=3)
+        self.assertIn("collector_epoch", st)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recover/v2\0"))
+        # the v1 prefix is not used
+        self.assertFalse(raw.startswith(b"regalia-recover/v1\0"))
+
+    def test_v2_statement_for_recount_has_collector_sequence(self):
+        """A recount statement requires both collector_epoch and collector_sequence."""
+        st = recover.statement("recount", "a", self.m3, self.session, T0 + 300,
+                               collector_epoch=3, collector_sequence=41)
+        self.assertIn("collector_epoch", st)
+        self.assertIn("collector_sequence", st)
+        self.assertEqual(st["collector_sequence"], 41)
+        raw = recover.message(st)
+        self.assertTrue(raw.startswith(b"regalia-recount/v2\0"))
+        # without collector_sequence, the recount statement is refused
+        self.refused("a recount statement needs collector_sequence", recover.statement,
+                     "recount", "a", self.m3, self.session, T0 + 300, collector_epoch=3)
+
+    def test_verify_owner_under_single_node_requires_v2(self):
+        """Under single_node=True, verify_owner requires collector_epoch in the statement."""
+        single_tip = self.m3  # m3 is a v4 manifest, but we pass single_node=True to simulate
+        # a v1 statement (no collector_epoch) is refused
+        v1 = self.signed()
+        self.refused("under single-node the statement must be v2",
+                     recover.verify_owner, single_tip, v1, "recover", "b", self.session, T0, single_node=True)
+        # a v2 statement with collector_epoch <= tip epoch is accepted
+        v2 = self.v2_statement(3, node="b")
+        self.assertEqual(recover.verify_owner(single_tip, v2, "recover", "b", self.session, T0,
+                                              single_node=True)["collector_epoch"], 3)
+
+    def test_verify_owner_under_single_node_refuses_collector_above_tip(self):
+        """A collector_epoch above the tip's epoch is a refusal: a revocation was withheld."""
+        v2 = self.v2_statement(99, node="b")
+        self.refused("the collector's witnessed epoch 99 is above the tip's epoch 3",
+                     recover.verify_owner, self.m3, v2, "recover", "b", self.session, T0, single_node=True)
+
+    def test_verify_owner_under_multi_node_accepts_v1(self):
+        """Under single_node=False (multi-node), v1 statements are accepted as before."""
+        v1 = self.signed()
+        self.assertEqual(recover.verify_owner(self.m3, v1, "recover", "b", self.session, T0,
+                                              single_node=False)["epoch"], 3)
+
+
+class SingleNodeCommand(Recovers):
+    """The single-node owner-chain path at the COMMAND (docs/design/single-node.md 4.7):
+    `recover apply --owner-chain CHAIN.json --owner-statement ST.json`, no --peer: main() loads the statement
+    and hands the owner chain over, apply() verifies the chain and the v2 statement over the tip, and the restore
+    runs as regalia-sync. The owner chain is refused under a multi-node tip."""
+
+    def single_tip(self):
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O, pub as p
+        man = v5.single5(1, "", nodes=[v5.one("a", "ACTIVE", i=0)])
+        man["owner_keys"] = [{"alg": "ed25519", "key": p(O[0])}]
+        return rt.sign(man)
+
+    def single_v2(self, tip, node="c", collector_epoch=1, session=None, purpose="recover", key=None):
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O, pub as p
+        st = recover.statement(purpose, node, tip["manifest"], session or "aa" * 8 + ":boot-x", T0 + 300,
+                               collector_epoch=collector_epoch)
+        signer = key or O[0]
+        return {"statement": st, "key": p(signer), "sig": signer.sign(recover.message(st)).hex()}
+
+    def single_runner(self, store):
+        def run(cmd, cwd=None, capture_output=None, text=None, input=None):
+            self.assertEqual(cmd[:5], ["runuser", "-u", recover.SYNC_USER, "-g", recover.SYNC_USER])
+            self.assertIn("_restore", cmd)
+            given = json.loads(input)
+            self.handed.append(given)
+            try:
+                out = recover.handed(self.node(store), given, self.trail.append)
+            except m.Refused as refusal:
+                return subprocess.CompletedProcess(cmd, 1, "", "REFUSED: %s" % refusal)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(out) + "\n", "")
+        return run
+
+    def single_apply(self, store, owner_chain=None, one_source=None, phrase=None, peers=None):
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
+            return asked[-1] if phrase is None else phrase
+        node = self.node(store)
+        with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                unittest.mock.patch("deploy.baremetal.node.publish"), \
+                unittest.mock.patch.object(recover, "owner_check",
+                                           side_effect=lambda n, s, p, peer, now=None, boot_id=None:
+                                           (lambda tip, single_node=None: s["statement"])):
+            try:
+                return recover.apply("/etc/regalia/node.json", peers or {}, one_source, typed=typed,
+                                     run=self.single_runner(store), owner_chain=owner_chain)
+            finally:
+                self.asked = asked
+
+    def test_main_loads_the_owner_statement_with_owner_chain_no_peer(self):
+        """--owner-chain takes its --owner-statement without --one-source: the documented command
+        `recover apply --owner-chain CHAIN --owner-statement ST` must load both and hand them to apply()."""
+        tip = self.single_tip()
+        signed = self.single_v2(tip)
+        with open(self.d + "/owner-chain.json", "w") as f:
+            json.dump([tip], f)
+        with open(self.d + "/statement.json", "w") as f:
+            json.dump(signed, f)
+        cfg = {"schema": "regalia.node/v1", "node_id": "a", "root_key": "aa" * 32, "run_dir": self.d,
+               "state_dir": self.d, "site": "/nonexistent"}
+        with open(self.d + "/node.json", "w") as f:
+            json.dump(cfg, f)
+        with unittest.mock.patch("deploy.baremetal.node.load", return_value=cfg), \
+                unittest.mock.patch("deploy.baremetal.node.Node") as node_mock, \
+                unittest.mock.patch("deploy.baremetal.recover.apply") as apply_mock, \
+                unittest.mock.patch.object(recover.os, "geteuid", return_value=0):
+            node_mock.return_value = types.SimpleNamespace(node_id="a", cfg=cfg, path=lambda n: os.path.join(self.d, n))
+            self.assertEqual(recover.main(["apply", "--config", self.d + "/node.json",
+                                           "--owner-chain", self.d + "/owner-chain.json",
+                                           "--owner-statement", self.d + "/statement.json"]), 0)
+            self.assertEqual(apply_mock.call_count, 1)
+            args, kw = apply_mock.call_args
+            self.assertEqual(args[0], os.path.join(self.d, "node.json"))
+            self.assertEqual(args[1], {})                                          # no peer
+            self.assertEqual(args[2]["statement"], signed["statement"])             # the statement, loaded
+            self.assertEqual(kw["owner_chain"], [tip])                              # and the owner chain
+
+    def test_apply_owner_chain_recovers_a_gone_disk(self):
+        """apply() under the owner chain: the chain verifies from the root, the v2 statement is checked over the
+        tip (v2, collector_epoch <= tip), minimum 1 (while the record pins), and the store is restored from the
+        owner's chain alone."""
+        fresh = self.store("a2")
+        # the chain is v5: a store committing it would set the anchor's schema to v5 (a QUORUM schema) and refuse
+        # the owner-written anchor, as the convergence and reanchor owner-chain fixtures do
+        fresh._judge_by = lambda manifests: None
+        fresh.commit(self.single_tip())
+        os.unlink(fresh.path)                                                       # the disk: gone
+        self.assertTrue(fresh.pinned())
+        tip = self.single_tip()
+        self.assertEqual(self.single_apply(fresh, owner_chain=[tip], one_source=self.single_v2(tip)), 1)
+        self.assertEqual(fresh.load()["epoch"], 1)
+        self.assertEqual(self.asked, ["recover c to epoch 1 %s from owner-chain collector at epoch 1"
+                                      % m.digest(tip["manifest"])[:8]])
+        self.assertEqual(self.outcomes(), [("recover", "ALLOW")])
+        self.assertEqual(self.trail[0]["sources"], ["owner-chain"])
+        self.assertEqual(self.trail[0]["minimum"], 1)
+        self.assertTrue(fresh.pinned())
+
+    def test_apply_owner_chain_refused_under_multi_node_tip(self):
+        """The owner chain is refused under a multi-node tip: the path is single-node's alone."""
+        c = self.crash_window()
+        tip = self.single_tip()
+        self.refused("owner_chain is refused under a multi-node tip", self.single_apply, c,
+                     owner_chain=self.stores["b"].envelopes(), one_source=self.single_v2(tip, node="c"))
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+
+    def test_apply_owner_chain_refused_under_multi_node_tip_with_a_v1_statement(self):
+        """Under a multi-node tip the owner chain is refused BEFORE the statement is read: with a v1 statement
+        (no collector_epoch) the old code read one_source['statement']['collector_epoch'] for the phrase and
+        raised a KeyError outside the Refused handler, so the refusal was never recorded (review defcc750,
+        finding 3; the review's PROBE3 showed the KeyError and an empty trail). Now it is a Refused, in the trail."""
+        c = self.crash_window()
+        # a v1 statement (no collector_epoch), as the owner's tool signs it under a multi-node tip
+        st = recover.statement("recover", "c", self.e3["manifest"], "bb" * 8 + ":boot-x", T0 + 300)
+        v1 = {"statement": st, "key": "11" * 32, "sig": "22" * 64}
+        # the refusal is a Refused: apply() raises it and the runner records it
+        self.refused("owner_chain is refused under a multi-node tip", self.single_apply, c,
+                     owner_chain=self.stores["b"].envelopes(), one_source=v1)
+        self.assertEqual(self.outcomes(), [("recover", "DENY")])
+        # the denial says why, and names the owner chain, not a KeyError
+        self.assertIn("owner_chain is refused", self.trail[-1]["reason"])
+
+    def test_apply_owner_chain_with_the_real_owner_check_allows_a_good_statement_and_refuses_the_rest(self):
+        """recover apply --owner-chain runs the module's OWN owner check on the chain's tip, with the arguments
+        the path gives (purpose recover, single_node judged from the tip) -- an OWNER_KEYS-signed v2 statement
+        with this boot's session (independent non-author review of PR #778, item 1, and the council's B1
+        recover half): a good statement is ALLOWed; a statement of another purpose, over another epoch, a
+        v1-shaped statement under single-node (the collector is mandatory, decision Q4), or a signature the
+        tip's owner keys do not hold is a DENY the recovery records, with nothing changed. Deleting the
+        owner_check call at the --owner-chain path (recover.apply) makes every refusal an un-checked recovery
+        recorded ALLOW -> red. A mutant that flips the call's `purpose` or `single_node` is caught by the
+        good-statement case (the check's purpose line / the single-node collector requirement) -> red."""
+        fresh = self.store("a2")
+        fresh._judge_by = lambda manifests: None
+        fresh.commit(self.single_tip())
+        os.unlink(fresh.path)                                     # the disk: gone (the crash window)
+        self.assertTrue(fresh.pinned())
+        tip = self.single_tip()
+        asked = []
+
+        def typed(prompt):
+            asked.append(prompt.split("Type exactly: ", 1)[1].split("\n", 1)[0])
+            return asked[-1]
+
+        def apply_with(one_source):
+            node = self.node(fresh)
+            with unittest.mock.patch("deploy.baremetal.node.Node", return_value=node), \
+                    unittest.mock.patch("deploy.baremetal.node.load", return_value={}), \
+                    unittest.mock.patch("deploy.baremetal.node.publish"):
+                try:
+                    return recover.apply("/etc/regalia/node.json", {}, one_source, typed=typed,
+                                         run=self.single_runner(fresh), owner_chain=[tip],
+                                         boot_id="boot-x", now=lambda: T0)
+                finally:
+                    self.asked = asked
+        # the boot's session file, where the node's run_dir holds it
+        with open(os.path.join(self.d, recover.SESSION_FILE), "w") as f:
+            json.dump({"nonce": "aa" * 8, "boot_id": "boot-x", "issued": T0 - 60}, f)
+        # 1) the good statement: v2, purpose recover, this tip, this boot's session -- ALLOW, the disk restored.
+        #    The check that runs is the module's own owner_check (real_owner_check): apply() calls it with the
+        #    statement and the tip's purpose and single-node profile, and it reads the session from the node's
+        #    run_dir, so nothing about the call's arguments is stood in.
+        try:
+            self.assertEqual(apply_with(self.single_v2(tip, key=OWNER_KEYS[0])), 1)
+        except recover.Refused as e:
+            self.fail("good statement refused: %s" % e)
+        self.assertEqual(fresh.load()["epoch"], 1)
+        self.assertEqual(self.asked[-1], "recover c to epoch 1 %s from owner-chain collector at epoch 1"
+                         % m.digest(tip["manifest"])[:8])
+        self.assertEqual(self.outcomes()[-1], ("recover", "ALLOW"))
+        self.assertEqual(self.trail[-1]["sources"], ["owner-chain"])
+        # 2) a statement of ANOTHER purpose (reanchor): the module's own check -- with purpose "recover" as the
+        #    path gives it -- refuses the reanchor statement's own purpose line: a recorded DENY. A mutant that
+        #    flips the call's purpose survives no line of the path: the good statement above would then refuse
+        #    ("the statement is for recover, not reanchor") and ALLOW nothing.
+        self.refused("the statement is for reanchor, not recover",
+                     apply_with, self.single_v2(tip, purpose="reanchor"))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("is for reanchor, not recover", self.trail[-1]["reason"])
+        # 3) a statement over ANOTHER epoch (a different tip, not the node's current one): recorded DENY.
+        #    Build a second tip (epoch 2) and a statement over it; the node's store is at epoch 1.
+        import tests.test_baremetal_membership_v5 as v5
+        from tests.test_baremetal_membership_v4 import OWNER_KEYS as O2, pub as p2
+        tip2_manifest = v5.single5(2, m.digest(tip["manifest"]))
+        tip2_manifest["owner_keys"] = [{"alg": "ed25519", "key": p2(O2[0])}]
+        tip2 = rt.sign(tip2_manifest)
+        self.refused("not the peer's tip",
+                     apply_with, self.single_v2(tip2, key=OWNER_KEYS[0]))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("not the peer's tip", self.trail[-1]["reason"])
+        # 4) a v1-shaped statement under single-node (no collector_epoch): the collector is mandatory
+        #    (decision Q4) -- the check's single-node requirement refuses: a recorded DENY
+        st = recover.statement("recover", "c", tip["manifest"], "aa" * 8 + ":boot-x", T0 + 300)
+        v1 = {"statement": st, "key": pub(OWNER_KEYS[0]), "sig": OWNER_KEYS[0].sign(recover.message(st)).hex()}
+        # A v1-shaped statement under single-node is a RECORDED DENY on the check's own line. The assertion asks
+        # for recover.Refused specifically: any other exception the path raises is a named FAIL (GA ruling
+        # 2026-11-24). This is the B1-args-single mutant's kill line: with the call's single_node flipped to
+        # False the check takes the multi-node path and accepts the v1 statement, so apply() reads
+        # one_source["statement"]["collector_epoch"] for the phrase (recover.py:386) and raises
+        # KeyError: 'collector_epoch', which the old self.refused let escape as an ERROR -- DEV1 diagnostic
+        # https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/45485928554 (HEAD 9e7e142e). The
+        # fail-closed note: that KeyError is built before apply() writes anything (the phrase, then the typed
+        # confirmation), so the abort is closed; it is reachable only with a wrong single_node (no real caller
+        # today). The product hardening (a require before :386) is regalia-kms-j1s, not this PR.
+        try:
+            self.refused("under single-node the statement must be v2",
+                         apply_with, v1)
+        except m.Refused:
+            raise
+        except Exception as e:
+            self.fail("v1 statement raised %r, expected Refused" % (e,))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("must be v2", self.trail[-1]["reason"])
+        # 5) a signature the tip's owner keys do not hold: recorded DENY
+        self.refused("not one of the tip manifest's owner_keys",
+                     apply_with, self.single_v2(tip, key=STRANGER))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("not one of the tip manifest's owner_keys", self.trail[-1]["reason"])
+        # 6) the collector above the tip (the apply-level case): the check's own line --
+        #    "the collector's witnessed epoch %d is above the tip's epoch %d: a revocation was withheld" --
+        #    refuses, and the refusal lands as a recorded DENY with the collector's number in it (the
+        #    independent re-read's recommended case: the B1-args-single mutant dies on this assertion, not on
+        #    the KeyError the old path would have raised for a statement with no collector_epoch at all).
+        self.refused("the collector's witnessed epoch 99 is above the tip's epoch 1",
+                     apply_with, self.single_v2(tip, key=OWNER_KEYS[0], collector_epoch=99))
+        self.assertEqual(self.outcomes()[-1], ("recover", "DENY"))
+        self.assertIn("the collector's witnessed epoch 99 is above the tip's epoch 1", self.trail[-1]["reason"])
+        # nothing but case 1 was ever restored: the trail names it alone as the ALLOW
+        self.assertEqual([o for o in self.outcomes() if o == ("recover", "ALLOW")], [("recover", "ALLOW")])
