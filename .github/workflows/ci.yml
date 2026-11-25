@@ -56,13 +56,16 @@ jobs:
       # WITHOUT promtool THE ALERT-RULE FIRING TESTS SKIP, and a skip is a pass. They did, on every
       # run after regalia#487 moved this code out of the monorepo whose workflow installed it.
       - name: Install checksum-pinned promtool for alert-rule fault injection
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
+          GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           PROMETHEUS_SHA256: 0e8c4d46101bd025ea8265e377d2caabc57f488fc1be1c367f37db69ea41be6f
         run: |
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$RUNNER_TEMP/prometheus.tar.gz" \
-            https://github.com/prometheus/prometheus/releases/download/v3.13.2/prometheus-3.13.2.linux-amd64.tar.gz
-          echo "$PROMETHEUS_SHA256  $RUNNER_TEMP/prometheus.tar.gz" | sha256sum --check --strict
+          # regalia-kms-dq7: the release URL, then the pinned REST asset id on a release-host outage.
+          .github/scripts/fetch-pinned-asset.sh \
+            https://github.com/prometheus/prometheus/releases/download/v3.13.2/prometheus-3.13.2.linux-amd64.tar.gz \
+            https://api.github.com/repos/prometheus/prometheus/releases/assets/495312468 \
+            "$PROMETHEUS_SHA256" "$RUNNER_TEMP/prometheus.tar.gz"
           tar --extract --gzip --file "$RUNNER_TEMP/prometheus.tar.gz" \
             --directory "$RUNNER_TEMP" --strip-components=1 prometheus-3.13.2.linux-amd64/promtool
           chmod 0755 "$RUNNER_TEMP/promtool"
@@ -124,13 +127,16 @@ jobs:
           python3 -Es -m unittest discover -v -s tests -p 'test_*.py'
 
       - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
+          GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           ETCD_SHA256: b51d86e6bff2168de5ba8cd631c0fe6c785c7a1b32b083079f5677d6b7e2772c
         run: |
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$RUNNER_TEMP/etcd.tar.gz" \
-            https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz
-          echo "$ETCD_SHA256  $RUNNER_TEMP/etcd.tar.gz" | sha256sum --check --strict
+          # regalia-kms-dq7: the release URL, then the pinned REST asset id on a release-host outage.
+          .github/scripts/fetch-pinned-asset.sh \
+            https://github.com/etcd-io/etcd/releases/download/v3.6.15/etcd-v3.6.15-linux-amd64.tar.gz \
+            https://api.github.com/repos/etcd-io/etcd/releases/assets/582243404 \
+            "$ETCD_SHA256" "$RUNNER_TEMP/etcd.tar.gz"
           tar --extract --gzip --file "$RUNNER_TEMP/etcd.tar.gz" \
             --directory "$RUNNER_TEMP" --strip-components=1 etcd-v3.6.15-linux-amd64/etcd \
             etcd-v3.6.15-linux-amd64/etcdctl etcd-v3.6.15-linux-amd64/etcdutl
@@ -756,13 +762,16 @@ jobs:
           echo "REGALIA_EXPECT_GPG=1" >> "$GITHUB_ENV"
 
       - name: Install checksum-pinned SOPS 3.13.3
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
+          GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
         run: |
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$RUNNER_TEMP/sops" \
-            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
-          echo "$SOPS_SHA256  $RUNNER_TEMP/sops" | sha256sum --check --strict
+          # regalia-kms-dq7: the release URL, then the pinned REST asset id on a release-host outage.
+          .github/scripts/fetch-pinned-asset.sh \
+            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64 \
+            https://api.github.com/repos/getsops/sops/releases/assets/486808201 \
+            "$SOPS_SHA256" "$RUNNER_TEMP/sops"
           chmod 0755 "$RUNNER_TEMP/sops"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.
