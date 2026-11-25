@@ -340,6 +340,13 @@ class Directory(Case):
         self.refused("not a directory of this user's", self.generate)
         self.assertEqual(os.listdir(target), [])
 
+    def test_a_failure_after_writing_says_the_directory_is_incomplete(self):
+        def failing(*_):
+            raise membership.Refused("a verifier refused")
+        with mock.patch.object(testgenesis, "verify_outputs", failing):
+            self.refused(r"a verifier refused; .* is INCOMPLETE and holds TEST secrets: delete it", self.generate)
+        self.assertNotIn("TEST-SHA256SUMS", os.listdir(self.out))
+
     def test_names_never_leave_the_directory(self):
         os.mkdir(self.out)
         output = testgenesis.Output(self.out)

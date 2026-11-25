@@ -373,6 +373,8 @@ def generate(root, root_pk8, out, node_id, site, build_record, pcrs, tpm_firmwar
     try:
         return _write_all(output, root, root_key, node_id, site, cfg, site_cred, entry, record, recipients, say,
                           serialization, ec, ed25519, x25519, hashes)
+    except (Refused, OSError) as failure:
+        raise Refused("%s; %s is INCOMPLETE and holds TEST secrets: delete it, nothing in it is to be used" % (failure, output.path)) from None
     finally:
         output.close()
 
