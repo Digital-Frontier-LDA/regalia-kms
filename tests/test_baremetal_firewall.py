@@ -123,7 +123,27 @@ class Render(unittest.TestCase):
 
     def test_each_port_only_from_its_zones(self):
         self.assertIn("tcp dport 8443 ip saddr { 198.51.100.0/24, 203.0.113.128/32 } accept", self.text)
-        self.assertIn("tcp dport 22 ip saddr { 203.0.113.0/28 } accept", self.text)
+        self.assertIn('ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment "ping: admin only"', self.text)
+
+    def test_no_zone_is_admitted_to_ssh(self):
+        """q-20: ABSENT, GA ruling under owner delegation 2026-11-25 (regalia-kms-r1s.12): a production KMS host runs no
+        sshd, and its firewall admits SSH from no zone, admin_cidrs included. The admin zone keeps ping and nothing else."""
+        input_chain = re.search(r"chain input \{\n(.*?)\n  \}", self.text, re.S).group(1)
+        self.assertNotIn("dport %d" % self.cfg["ssh_port"], self.text)
+        self.assertNotIn("dport 22", self.text)
+        self.assertNotIn("ssh", self.text.lower())
+        admin_rules = [line.strip() for line in input_chain.splitlines() if "203.0.113.0/28" in line]
+        self.assertEqual(admin_rules, ['ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment "ping: admin only"'])
+        # and whatever the site's ssh_port is, it is not opened
+        doc = json.loads(EXAMPLE.read_text())
+        doc["ssh_port"] = 2222
+        self.assertNotIn("dport 2222", firewall.render(sitecfg.validate(doc)))
+
+    def test_network_probe_expects_ssh_closed_from_every_zone(self):
+        from deploy.baremetal import network_probe
+        for role in network_probe.ROLES:
+            with self.subTest(role=role):
+                self.assertIs(network_probe.expected_ports(self.cfg, role)[self.cfg["ssh_port"]], False)
 
     def test_outbound_only_to_declared_sinks(self):
         self.assertIn('ip daddr 203.0.113.192/32 tcp dport 6514 accept comment "audit"', self.text)
@@ -132,7 +152,7 @@ class Render(unittest.TestCase):
         for name, net in (("nts.netnod.se", "194.58.200.0/24"), ("ptbtime1.ptb.de", "192.53.103.0/24"), ("time.cloudflare.com", "162.159.200.0/24")):
             self.assertIn('ip daddr { %s } tcp dport 4460 accept comment "time: %s, NTS-KE"' % (net, name), self.text)
             self.assertIn('ip daddr { %s } udp dport 123 accept comment "time: %s, NTP"' % (net, name), self.text)
-        self.assertEqual(self.text.count(" dport "), 11)   # kms, node metrics, ssh, audit, dns, and 2 per NTS server: nothing else opens
+        self.assertEqual(self.text.count(" dport "), 10)   # kms, node metrics, audit, dns, and 2 per NTS server: nothing else opens (no ssh, q-20)
         # #305: node_exporter from the monitoring zone only, to this host's address only
         self.assertIn('ip daddr 192.0.2.10 tcp dport 9100 ip saddr { 203.0.113.128/32 } accept comment "node metrics: monitoring only (#305)"', self.text)
         self.assertEqual(self.text.count("dport 9100"), 1)

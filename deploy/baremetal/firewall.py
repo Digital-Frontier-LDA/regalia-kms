@@ -8,8 +8,11 @@
 
 One table, `inet regalia_kms`, default-deny in BOTH directions:
   input   loopback; established/related; kms_port from client and monitoring CIDRs; node_exporter (TCP
-          9100, mutual TLS) from monitoring CIDRs only (#305); ssh_port and ping from admin CIDRs; the ICMP
-          errors path MTU discovery needs; nothing else (IPv6 dropped)
+          9100, mutual TLS) from monitoring CIDRs only (#305); ping from admin CIDRs; the ICMP
+          errors path MTU discovery needs; nothing else (IPv6 dropped). NO SSH, from any zone: a production
+          KMS host runs no sshd (q-20: ABSENT, GA ruling under owner delegation 2026-11-25; SSH.md), and
+          os_probe.py's sshd_absent measures that. ssh_port stays in the site config as the port
+          network_probe.py checks is closed from every zone
   output  loopback; established/related; each `outbound` destination on its one port and protocol;
           each NTS server of `time.nts` on NTS-KE (TCP 4460) and NTP (UDP 123), to its declared networks
           only (#303: no plain-NTP fallback, no other time source reachable);
@@ -56,7 +59,7 @@ def _set(nets):
 
 
 def render(cfg):
-    kms, ssh = cfg["kms_port"], cfg["ssh_port"]
+    kms = cfg["kms_port"]
     callers = cfg["client_cidrs"] + [n for n in cfg["monitoring_cidrs"] if n not in cfg["client_cidrs"]]
     mesh, mesh_rules = cfg["boot_mesh"], ""
     if mesh and mesh["peers"]:          # dx7.6: a single-node host (peers [], the owner) is no unlock peer: no opening
@@ -109,7 +112,6 @@ table inet %(table)s {
     ct state established,related accept
 %(mesh_rules)s%(service_udp_in)s    ip daddr %(host)s tcp dport %(kms)d ip saddr %(callers)s accept comment "kms: clients and monitoring"
     ip daddr %(host)s tcp dport %(metrics)d ip saddr %(monitors)s accept comment "node metrics: monitoring only (#305)"
-    ip daddr %(host)s tcp dport %(ssh)d ip saddr %(admins)s accept comment "ssh: admin only"
     ip saddr %(admins)s icmp type echo-request accept comment "ping: admin only"
     icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
   }
@@ -126,7 +128,7 @@ table inet %(table)s {
     icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
   }
 }
-""" % {"site": cfg["site"], "table": TABLE, "host": cfg["host_ipv4"], "kms": kms, "ssh": ssh,
+""" % {"site": cfg["site"], "table": TABLE, "host": cfg["host_ipv4"], "kms": kms,
        "callers": _set(callers), "admins": _set(cfg["admin_cidrs"]),
        "metrics": sitecfg.NODE_EXPORTER_PORT, "monitors": _set(cfg["monitoring_cidrs"]), "out_rules": out_rules, "mesh_rules": mesh_rules,
        "service_in": service_in, "service_out": service_out, "service_udp_in": service_udp_in, "service_udp_out": service_udp_out}

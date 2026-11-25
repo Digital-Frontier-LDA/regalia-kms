@@ -7,10 +7,10 @@ network_probe.py checks the result from each zone, so the two can never describe
       "schema": "regalia.baremetal-site/v1",
       "site": "site-a",
       "host_ipv4": "192.0.2.10",
-      "kms_port": 8443, "ssh_port": 22,
+      "kms_port": 8443, "ssh_port": 22,             # ssh_port: closed from every zone (q-20: no sshd; network_probe checks it)
       "client_cidrs": ["198.51.100.0/24"],          # may reach kms_port
       "monitoring_cidrs": ["203.0.113.128/32"],     # may reach kms_port (health, metrics)
-      "admin_cidrs": ["203.0.113.0/28"],            # may reach ssh_port, and ping
+      "admin_cidrs": ["203.0.113.0/28"],            # may ping; no SSH (q-20: ABSENT, GA ruling under owner delegation 2026-11-25)
       "outbound": [                                  # the ONLY destinations the host may reach
         {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
         {"name": "dns", "cidr": "203.0.113.194/32", "proto": "udp", "port": 53}
@@ -136,8 +136,8 @@ def validate(doc):
            "client_cidrs": _networks(doc["client_cidrs"], "client_cidrs"),
            "monitoring_cidrs": _networks(doc["monitoring_cidrs"], "monitoring_cidrs"),
            "admin_cidrs": _networks(doc["admin_cidrs"], "admin_cidrs"), "outbound": []}
-    # The zones carry different permissions (admin: SSH only; client and monitoring: the KMS port only),
-    # so an address in both would be allowed both and fail the probe matrix: admin must not overlap them.
+    # The zones carry different permissions (admin: ping only, no SSH since q-20; client and monitoring: the KMS port
+    # only), so an address in both would be allowed both and fail the probe matrix: admin must not overlap them.
     for a in cfg["admin_cidrs"]:
         for c in cfg["client_cidrs"] + cfg["monitoring_cidrs"]:
             require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
@@ -260,8 +260,8 @@ def _boot_mesh(mesh, cfg):
                 "boot_mesh.peers[%d]: no two nodes share an address, inside or outside the tunnel, and no address is both" % i)
         nodes.add(entry["node_id"]), inside.add(entry["address"]), outside.add(entry["underlay"])
         out["peers"].append(entry)
-    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port or
-    # SSH, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
+    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port, or
+    # the admin zone's ping, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
     # everything else that arrives on the mesh interface; this refuses the configuration that needs it.)
     zones = [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]
     for address in sorted(inside):
@@ -311,7 +311,7 @@ def require_profile(cfg, manifest_profile):
 
 def _unique(pairs):
     """json object_pairs_hook: a repeated key is refused at every level. json.load would keep only the
-    last value, so a second admin_cidrs could silently replace the SSH allowlist."""
+    last value, so a second admin_cidrs could silently replace the admin zone."""
     out = {}
     for k, v in pairs:
         require(k not in out, "duplicate field %r in the site config" % k)

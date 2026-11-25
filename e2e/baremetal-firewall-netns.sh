@@ -7,7 +7,8 @@
 # inside its namespace, never on the machine running the test), a client, a monitoring host, an admin
 # host, an unauthorized host, and the audit and NTP sinks. Then:
 #   1  network_probe.py from each zone: KMS port and SSH port exactly as the site config says
-#   2  a listener on an undeclared port of the KMS host is reachable from nowhere; node_exporter's port
+#   2  a listener on an undeclared port of the KMS host is reachable from nowhere; a listener on SSH's port
+#      (22) from no zone, the admin zone included (q-20: ABSENT, regalia-kms-r1s.12); node_exporter's port
 #      (9100, #305) from the monitoring zone only
 #   3  outbound: the KMS host reaches the audit sink (TCP) and the NTS server (NTS-KE TCP 4460, NTP UDP 123,
 #      rendered from time.nts, #303), and nothing else
@@ -124,6 +125,7 @@ tcpok kms "${IP[unauth]}" 443 && P "the KMS host reaches an undeclared host befo
 # otherwise make "not reachable" pass whatever the firewall does.
 tcpok kms "${IP[audit]}" 7000 && P "control: audit:7000 answers before the ruleset" || F "control: audit:7000 not listening"
 tcpok client "${IP[kms]}" 9100 && P "control: kms:9100 answers before the ruleset" || F "control: kms:9100 not listening"
+tcpok admin "${IP[kms]}" 22 && P "control: kms:22 answers the admin zone before the ruleset" || F "control: kms:22 not listening"
 tcpok kms "${IP[unauth]}" 6514 && P "control: unauth:6514 answers before the ruleset" || F "control: unauth:6514 not listening"
 udpok 124 && P "control: ntp:124/udp answers before the ruleset" || F "control: ntp:124/udp not listening"
 tcpok kms "${IP[ntp]}" 4461 && P "control: ntp:4461 answers before the ruleset" || F "control: ntp:4461 not listening"
@@ -150,6 +152,11 @@ out="$(x client python3 -Es "$BM/network_probe.py" "$T/site.json" --role admin -
 hdr "2  an undeclared port on the KMS host is reachable from nowhere"
 for h in client mon admin unauth; do
   tcpok "$h" "${IP[kms]}" 9999 && F "$h reached port 9999" || P "$h cannot reach port 9999"
+done
+
+hdr "2-ssh  SSH (TCP 22) is reachable from no zone, the admin zone included (q-20: ABSENT, regalia-kms-r1s.12)"
+for h in client mon admin unauth; do
+  tcpok "$h" "${IP[kms]}" 22 && F "$h reached SSH (22)" || P "$h cannot reach SSH (22)"
 done
 
 hdr "2a  node_exporter's port (#305): from the monitoring zone only"
