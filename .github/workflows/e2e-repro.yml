@@ -1,7 +1,14 @@
 # regalia-kms-9xw: reproduce a three-node e2e flake on GitHub-hosted runners, by hand, at one commit. The three-node
 # e2e changes the machine as root (namespaces, loop devices, dm-crypt, transient units), so it cannot run on the
-# shared heavy pool; this is the one place it is re-run on purpose (GA exception to the pre-run rule, 2026-11-25).
-# Dispatch only: no pull_request, push or schedule. One dispatch at a time, never cancelled.
+# shared heavy pool; this is the one place it is re-run on purpose.
+#
+# OWNER-ACCEPTED STANDING EXCEPTION to the pre-run rule (2026-11-25): e2e-repro dispatches are hosted runs of root e2e
+# that can't run on heavy, bounded to N<=5 per dispatch, dispatched by the GA only, once per flake bead, at a same-repo
+# 40-hex SHA, each use logged on the bead + #787.
+#
+# Dispatch only: no pull_request, push or schedule. One dispatch at a time, never cancelled. The plan job refuses
+# anything but a full SHA that is in main's history or is the head of an open pull request from THIS repository (a
+# fork's commit would otherwise run as root here, in main's cache scope), failing closed when GitHub cannot answer.
 #
 # Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
 # (a) the checkout takes the dispatched commit, (b) each run's TPM diagnostics have their own name.
@@ -35,14 +42,29 @@ jobs:
     outputs:
       runs: ${{ steps.plan.outputs.runs }}
     steps:
-      - name: The commit is a full SHA and the run count is 1-5
+      - name: The commit is a full SHA from this repository and the run count is 1-5
         id: plan
         env:
           REF: ${{ inputs.ref }}
           RUNS: ${{ inputs.runs }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
           [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
+          if ! status=$(gh api "repos/$REPO/compare/$REF...main" --jq .status); then
+            echo "::error::GitHub could not say whether $REF is in main's history: refused" >&2; exit 1
+          fi
+          if [[ "$status" == ahead || "$status" == identical ]]; then
+            echo "$REF is in main's history"
+          else
+            if ! heads=$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.head.sha) \(.head.repo.full_name // "-")"'); then
+              echo "::error::GitHub could not list the open pull requests: refused" >&2; exit 1
+            fi
+            grep -Fxq -- "$REF $REPO" <<< "$heads" || {
+              echo "::error::$REF is neither in main's history nor the head of an open pull request from $REPO: refused" >&2; exit 1; }
+            echo "$REF is the head of an open pull request from $REPO"
+          fi
           echo "runs=[$(seq -s, 1 "$RUNS")]" >> "$GITHUB_OUTPUT"
 
   three-node-leases:

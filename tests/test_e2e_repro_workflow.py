@@ -2,6 +2,8 @@
 runners, under the GA's conditions (2026-11-25): read-only token, no secrets or environments, a full 40-hex SHA only,
 at most 5 runs, one dispatch at a time. Its steps are node-units.yml's, held equal here, so a repro runs what CI runs."""
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -44,9 +46,8 @@ class Repro(unittest.TestCase):
         inputs = self.doc.get(True, self.doc.get("on"))["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["runs"]["options"], ["1", "2", "3", "4", "5"])
         [plan] = self.doc["jobs"]["plan"]["steps"]
-        self.assertEqual(plan["env"], {"REF": "${{ inputs.ref }}", "RUNS": "${{ inputs.runs }}"})
-        self.assertIn('[[ "$REF" =~ ^[0-9a-f]{40}$ ]] || {', plan["run"])
-        self.assertIn('[[ "$RUNS" =~ ^[1-5]$ ]] || {', plan["run"])
+        self.assertEqual(plan["env"], {"REF": "${{ inputs.ref }}", "RUNS": "${{ inputs.runs }}",
+                                       "REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}"})
         self.assertEqual(self.job["needs"], "plan")
         self.assertEqual(self.job["strategy"]["matrix"]["run"], "${{ fromJSON(needs.plan.outputs.runs) }}")
 
@@ -76,6 +77,81 @@ class Repro(unittest.TestCase):
         """If node-units.yml's job is renamed or emptied, the equality above would hold vacuously: it is not."""
         scripts = "\n".join(step.get("run", "") for step in self.ci["steps"])
         self.assertRegex(scripts, re.escape("python3 -Es e2e/three-node-leases.py"))
+
+
+SHA = "a" * 40
+REPO_NAME = "owner/regalia-kms"
+FAKE_GH = """#!/bin/sh
+echo "$*" >> "$FAKE_LOG"
+case "$*" in
+  *compare*) [ -n "$FAKE_COMPARE_RC" ] && exit "$FAKE_COMPARE_RC"; printf '%s\\n' "$FAKE_COMPARE";;
+  *pulls*) [ -n "$FAKE_PULLS_RC" ] && exit "$FAKE_PULLS_RC"; printf '%s' "$FAKE_PULLS";;
+  *) exit 99;;
+esac
+"""
+
+
+class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
+    """The plan job's script itself, run under bash -e (as Actions runs it) with a stand-in `gh` that answers the two
+    questions it asks: is the commit in main's history, and which open pull requests have which head from which repo.
+    A fork's commit would run as root on the runner, in main's cache scope (council, #788): it is refused, and so is
+    every commit GitHub cannot vouch for."""
+
+    def run_plan(self, ref=SHA, runs="5", compare="ahead", compare_rc="", pulls="", pulls_rc=""):
+        [plan] = load(REPRO)["jobs"]["plan"]["steps"]
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = Path(tmp) / "gh"
+            gh.write_text(FAKE_GH)
+            gh.chmod(0o755)
+            out, log = Path(tmp) / "output", Path(tmp) / "log"
+            out.write_text("")
+            log.write_text("")
+            env = {"PATH": "%s:/usr/bin:/bin" % tmp, "REF": ref, "RUNS": runs, "REPO": REPO_NAME, "GH_TOKEN": "x",
+                   "GITHUB_OUTPUT": str(out), "FAKE_LOG": str(log), "FAKE_COMPARE": compare,
+                   "FAKE_COMPARE_RC": compare_rc, "FAKE_PULLS": pulls, "FAKE_PULLS_RC": pulls_rc}
+            done = subprocess.run(["bash", "-e", "-c", plan["run"]], env=env, capture_output=True, text=True)
+            return done.returncode, out.read_text(), log.read_text(), done.stderr
+
+    def assert_refused(self, result, why):
+        rc, output, _, stderr = result
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(output, "", "a refused plan must give the matrix nothing to run")
+        self.assertIn(why, stderr)
+
+    def test_a_commit_in_mains_history_runs(self):
+        for status in ("ahead", "identical"):
+            with self.subTest(status=status):
+                rc, output, log, _ = self.run_plan(compare=status)
+                self.assertEqual((rc, output), (0, "runs=[1,2,3,4,5]\n"))
+                self.assertEqual(log, "api repos/%s/compare/%s...main --jq .status\n" % (REPO_NAME, SHA))
+
+    def test_the_head_of_an_open_pull_request_from_this_repository_runs(self):
+        pulls = "%s other/fork\n%s %s\n" % ("b" * 40, SHA, REPO_NAME)
+        rc, output, _, _ = self.run_plan(runs="2", compare="diverged", pulls=pulls)
+        self.assertEqual((rc, output), (0, "runs=[1,2]\n"))
+
+    def test_a_forks_pull_request_head_is_refused(self):
+        for repo in ("other/regalia-kms", "-", REPO_NAME + "x"):
+            with self.subTest(head_repo=repo):
+                self.assert_refused(self.run_plan(compare="diverged", pulls="%s %s\n" % (SHA, repo)),
+                                    "neither in main's history nor the head of an open pull request")
+
+    def test_a_commit_nobody_vouches_for_is_refused(self):
+        for status in ("diverged", "behind"):
+            with self.subTest(status=status):
+                self.assert_refused(self.run_plan(compare=status, pulls="%s %s\n" % ("b" * 40, REPO_NAME)),
+                                    "neither in main's history nor the head of an open pull request")
+
+    def test_github_not_answering_is_a_refusal(self):
+        self.assert_refused(self.run_plan(compare_rc="1"), "could not say whether")
+        self.assert_refused(self.run_plan(compare="diverged", pulls_rc="1"), "could not list the open pull requests")
+
+    def test_a_malformed_input_is_refused_before_github_is_asked(self):
+        for ref, runs in ((SHA[:39], "5"), (SHA.upper(), "5"), (SHA + "\n", "5"), ("main", "5"), (SHA, "6"), (SHA, "0")):
+            with self.subTest(ref=ref, runs=runs):
+                result = self.run_plan(ref=ref, runs=runs)
+                self.assert_refused(result, "must be")
+                self.assertEqual(result[2], "", "GitHub was asked about a malformed input")
 
 
 if __name__ == "__main__":
