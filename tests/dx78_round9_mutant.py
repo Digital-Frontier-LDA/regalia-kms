@@ -20,10 +20,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 TARGET = os.path.join(ROOT, "deploy", "baremetal", "ownerunlock.py")
 
-# (a) the reattest call: drop on_verified, stamp after under a re-taken lock (the gap)
+# (a) the reattest call: drop on_verified, stamp after under a re-taken lock (the gap). CALL_OLD is the
+# current fixed call (the round-9 fix, with the manifest's AK name passed to the stamp); CALL_NEW is the
+# round-8 shape (no on_verified, stamp after reattest under a re-taken lock).
 CALL_OLD = (
     '        lease.reattest(attester, evidence, node_id, session_id, manifest, node, phase="system",\n'
-    '                       on_verified=lambda state, record, old: attest_booted_stamp(state, record, old, evidence["nonce"]))'
+    '                       on_verified=lambda state, record, old: attest_booted_stamp(state, record, old, evidence["nonce"],\n'
+    '                                                                                  node["ak_name"]))'
 )
 CALL_NEW = (
     '        lease.reattest(attester, evidence, node_id, session_id, manifest, node, phase="system")\n'
@@ -79,22 +82,39 @@ def main(argv):
     mode = argv[1]
     src = open(TARGET).read()
     if mode == "apply":
+        # Apply each region when its ORIGINAL form is present (the fix). Replace the original, never the
+        # mutated form: a region whose mutated form is a prefix of its original form (the stamp binding) would
+        # otherwise match the fixed file and be skipped, leaving the mutant not what its docstring says.
         for old, new, tag in ((CALL_OLD, CALL_NEW, "call"), (POST_OLD, POST_NEW, "post-check"),
                               (STAMP_OLD, STAMP_NEW, "stamp binding")):
-            if new in src:
-                print("already applied (%s)" % tag)
-            elif old in src:
+            if old in src:
                 src = src.replace(old, new)
                 print("applied %s" % tag)
+            elif new in src:
+                print("already applied (%s)" % tag)
             else:
                 print("MUTANT FAILED: %s region not found (is the file the fix?)" % tag)
                 return 1
         open(TARGET, "w").write(src)
         print("MUTANT APPLIED (reverted: run with 'revert')")
         return 0
-    # revert: restore the committed (fixed) ownerunlock.py
-    subprocess.run(["git", "checkout", "--", "deploy/baremetal/ownerunlock.py"], cwd=ROOT, check=True)
-    print("reverted (git checkout -- deploy/baremetal/ownerunlock.py)")
+    # revert: undo ONLY the known replacements (apply's inverse), leaving any unrelated edit in the worktree
+    # alone (git checkout -- would discard an unstaged edit outside the three regions).
+    for new, old, tag in ((CALL_NEW, CALL_OLD, "call"), (POST_NEW, POST_OLD, "post-check"),
+                          (STAMP_NEW, STAMP_OLD, "stamp binding")):
+        if new in src:
+            if old in src:
+                print("revert FAILED: %s region is ambiguous (both forms present)" % tag)
+                return 1
+            src = src.replace(new, old)
+            print("reverted %s" % tag)
+        elif old in src:
+            print("already reverted (%s)" % tag)
+        else:
+            print("revert FAILED: %s region not found (is the file the fix or the mutant?)" % tag)
+            return 1
+    open(TARGET, "w").write(src)
+    print("reverted (the three regions restored; unrelated edits preserved)")
     return 0
 
 

@@ -573,10 +573,11 @@ class Verifier:
         hash to the quoted digest under THIS verifier's selection, and then only to say which PCR differs
         when the quote matches no accepted set. Such a reason carries the expected PCR values in hex: it goes to
         the caller's audit trail (the operator's), never to the node, which is answered only DENIED.
-        `on_verified` (a callable taking the node's state record, or None) runs once the quote has verified,
-        in THIS locked_state, before the record's measurement is replaced and saved: what the owner's
-        attest-booted stamp (the retire evidence) is bound to this verification by, with no gap for a
-        concurrent writer to commit in (regalia-kms-dx7.8). Its Refused stands -- the verification is refused.
+        `on_verified` (a callable taking (state, record, old_measurement), or None) runs once the quote has
+        verified, in THIS locked_state, AFTER the record's measurement is written (the new measurement is in
+        `record["measurement"]`; `old_measurement` is the measurement it replaced) and BEFORE it is saved: what
+        the owner's attest-booted stamp (the retire evidence) is bound to this verification by, with no gap for
+        a concurrent writer to commit in (regalia-kms-dx7.8). Its Refused stands -- the verification is refused.
         Returns the verdict, or raises Refused with the reason."""
         expected = self.node(node_id)
         require(phase is None or (isinstance(phase, str) and phase in PHASES), "the phase must be one of %s" % ", ".join(PHASES))

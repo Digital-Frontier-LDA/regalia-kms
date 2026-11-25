@@ -270,7 +270,8 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
         evidence.pop("phase")
     try:
         lease.reattest(attester, evidence, node_id, session_id, manifest, node, phase="system",
-                       on_verified=lambda state, record, old: attest_booted_stamp(state, record, old, evidence["nonce"]))
+                       on_verified=lambda state, record, old: attest_booted_stamp(state, record, old, evidence["nonce"],
+                                                                                  node["ak_name"]))
     except Refused as refusal:
         message = str(refusal)
         if "accepted only from the system phase" in message:
@@ -299,7 +300,7 @@ def attest_booted(manifest, document, state_path, node_id, session_id, evidence,
     return {"label": measurement["label"], "epoch": measurement["epoch"], "phase": measurement["phase"]}
 
 
-def attest_booted_stamp(state, record, old_measurement, nonce_hex):
+def attest_booted_stamp(state, record, old_measurement, nonce_hex, ak_name=None):
     """The owner's stamp, run by lease.reattest as the verifier's `on_verified` -- INSIDE the verifier's own
     verify, under the verifier's own state lock (the `state` and `record` it passes are the very ones it is
     writing), after the record's measurement is written and before it is saved: where the accepted set is not
@@ -320,7 +321,9 @@ def attest_booted_stamp(state, record, old_measurement, nonce_hex):
     replaced by this verification, its boot record just rewritten by it -- check_counters); `old_measurement`
     the record's measurement BEFORE this verification wrote its own (an unlock that committed to the state
     before this call, or None); `nonce_hex` the nonce this verification consumed (recorded by verify on the
-    new measurement AND on the boot record it wrote -- both, the identity of this verification).
+    new measurement AND on the boot record it wrote -- both, the identity of this verification); `ak_name` the
+    AK the MANIFEST names for the node (the retire evidence must name it; the verifier checked only the
+    ENROLLED AK -- adopted at enrolment -- so the manifest's name is compared here, before the record is saved).
 
     The stamp lands on the record THIS verification wrote, and on nothing else, in two checks:
     1. the record's measurement carries THIS verification's nonce -- record["measurement"] was just set by
@@ -335,6 +338,21 @@ def attest_booted_stamp(state, record, old_measurement, nonce_hex):
     witness counts only a record that says system). If either check fails, the verification is refused
     (Refused stands, as verify's docstring says) and attest_booted's post-check refuses as well: run
     attest-booted again for a fresh quote."""
+    # The quote must have been verified under the AK the MANIFEST names for the node. The verifier (attest.py
+    # verify) checks only that the quote is the node's ENROLLED AK's (adopted at enrolment, the binding the root
+    # made at intake); the manifest's name is what the retire evidence must name. The check runs HERE, inside
+    # verify's own lock, BEFORE the record is saved: a mismatch refuses the verification (Refused stands, the
+    # nonce consumed, the state left as it was) instead of persisting a system witness the owner's tool should not
+    # have written -- the witness must not name an AK the manifest does not. (reattest's post-verify AK check,
+    # lease.py, is the same comparison for the callers that do not pass on_verified; for attest_booted it is the
+    # fallback that stands if on_verified did not run.)
+    if ak_name is not None:
+        # the record holds the enrolled AK's PUBLIC area (adopt); its NAME is what the manifest names, compared
+        # here (as reattest's post-verify check does, lease.py:444, but BEFORE the record is saved).
+        ak_public = record.get("ak_public")
+        enrolled = attest.ak_identity(bytes.fromhex(ak_public))[0].hex() if isinstance(ak_public, str) else None
+        require(isinstance(enrolled, str) and hmac.compare_digest(enrolled, ak_name),
+                "the attested AK %s is not the AK the manifest names for the node" % (enrolled[:16] + "..." if isinstance(enrolled, str) and len(enrolled) > 16 else enrolled,))
     # The stamp lands on the record this verification wrote: name the phase the request was made in, so an unlock
     # (initrd) and a boot (system) are two records, not one. record["measurement"] is the one THIS verification set,
     # so naming the phase on it can never reach another verification's measurement.

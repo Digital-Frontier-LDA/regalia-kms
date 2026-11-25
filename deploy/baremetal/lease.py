@@ -410,10 +410,11 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject, phase, 
     `phase` is the boot phase the caller accepts the request from (attest.PHASES): "system" for a lease,
     "initrd" for an unlock. It has no default: where the node's measurements are per phase, the two
     requests are told apart by it and by nothing else. `binding` (bytes): the quote must also bind that value
-    (attest.transcript's sixth field, under its own label): a path enrolment key (#190). `on_verified` (a
-    zero-argument callable, or None): runs once the quote has verified, INSIDE the verifier's verify under its
-    own state lock, before the record it wrote is saved: the owner's attest-booted stamp (ownerunlock's
-    on_verified) is the one caller -- verification and the annotation it is bound to, atomic. Its Refused
+    (attest.transcript's sixth field, under its own label): a path enrolment key (#190). `on_verified` (a callable
+    taking (state, record, old_measurement), or None): runs once the quote has verified, INSIDE the verifier's
+    verify under its own state lock, AFTER the record's measurement is written (the new measurement is in
+    `record["measurement"]`) and BEFORE the record is saved: the owner's attest-booted stamp (ownerunlock's
+    attest_booted_stamp) is the one caller -- verification and the annotation it is bound to, atomic. Its Refused
     stands: the verification is refused as if the quote itself had failed, the nonce having been consumed."""
     require(isinstance(phase, str) and phase in attest.PHASES, "the phase must be one of %s" % ", ".join(attest.PHASES))
     require(isinstance(evidence, dict), "the subject has not re-attested: no lease")

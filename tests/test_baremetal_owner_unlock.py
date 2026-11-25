@@ -582,14 +582,13 @@ class AttestBooted(Case):
         the unphased state, and is the one the mutant (round 9's control) must fail."""
         path = self.d + "/gap.json"
         attester = self.enrolled_attester(path)
-        # the verification: the stamp runs inside its lock and the state is left stamped with its nonce
         evidence = self.evidence(self.m1, lt.SESSION, attester)
         # the concurrent unlock of the SAME boot, committing to the state in the gap -- after verify's save,
         # before attest_booted's post-check. Its record: the SAME epoch, the SAME label, NO phase (an unphased
         # set records no phase), and its OWN nonce. Its boot record: the SAME counters, session and key, its own
-        # nonce (check_counters writes it). The hook commits it by re-taking the state lock (released: verify's
-        # own lock is released before the hook's return) and saving -- a concurrent process's verify would do
-        # exactly this, with its own quote.
+        # nonce (check_counters writes it). It commits by re-taking the state lock AFTER verify releases it
+        # (verify's own lock is released when verify returns, before attest_booted's post-check re-reads the
+        # state) and saving -- a concurrent process's verify would do exactly this, with its own quote.
         unlock_nonce = attester.nonce("a")
         committed = {"measurement": {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()},
                      "boot": {"counters": [self.boots, 0],
@@ -597,20 +596,21 @@ class AttestBooted(Case):
                               "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest(),
                               "nonce": unlock_nonce.hex()}}
 
-        def commit_unlock_record(state, record, old_measurement):
+        def commit_unlock_record():
+            # AFTER verify released its state lock: a concurrent process's verify, committing in the gap.
             with attest.locked_state(path) as (s, save):
                 s["nodes"]["a"]["measurement"] = committed["measurement"]
                 s["nodes"]["a"]["boot"] = committed["boot"]
                 save()
 
-        real_stamp = ownerunlock.attest_booted_stamp
+        real_verify = attester.verify
 
-        def stamp_then_commit(state, record, old_measurement, nonce_hex):
-            real_stamp(state, record, old_measurement, nonce_hex)
-            commit_unlock_record(state, record, old_measurement)
+        def verify_then_commit(*a, **k):
+            verdict = real_verify(*a, **k)
+            commit_unlock_record()   # the unlock commits in the gap, after the lock is released
+            return verdict
 
-        import deploy.baremetal.ownerunlock as ou
-        with unittest.mock.patch.object(ou, "attest_booted_stamp", side_effect=stamp_then_commit):
+        with unittest.mock.patch.object(attester, "verify", side_effect=verify_then_commit):
             self.refused("attest-booted could not bind the record",
                          ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
         # the state holds the unlock's record: unphased (an unlock's record is not a boot's), its own nonce.
@@ -621,6 +621,44 @@ class AttestBooted(Case):
                          {"label": "current", "epoch": 1, "phase": None, "nonce": unlock_nonce.hex()})
         self.assertNotEqual(state["nodes"]["a"]["measurement"]["nonce"], evidence["nonce"])
         self.assertEqual(state["nodes"]["a"]["boot"], committed["boot"])
+
+    def test_the_post_check_refuses_a_stamp_whose_measurement_is_bound_but_boot_record_is_not(self):
+        """regalia-kms-dx7.8 review (CodeRabbit Minor, PRRT_kwDOUcLtQM67pdJo): the interleaving test above commits
+        the unlock's record with BOTH the measurement's nonce and the boot record's nonce changed, so the
+        measurement-nonce check alone already refuses it. This case isolates the BOOT-RECORD check: the state holds
+        this verification's stamped measurement (its nonce -- the measurement-nonce check passes) but a boot record
+        that names a DIFFERENT verification (the unlock's nonce). Only the boot-record check refuses that state. A
+        mutant that drops the boot-record binding (the measurement-only post-check) accepts it -- so this case is
+        the one that pins the boot-record check in particular, and is the complement to the interleaving test."""
+        path = self.d + "/bootonly.json"
+        attester = self.enrolled_attester(path)
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the state must hold this verification's stamped measurement (its nonce -- the measurement-nonce check
+        # passes) but a boot record written by a DIFFERENT verification (the unlock's nonce) AT THE MOMENT of the
+        # post-check. Commit the foreign boot record in the gap (after verify's save, before the post-check),
+        # where the measurement still carries this verification's nonce.
+        other_nonce = attester.nonce("a")
+        evidence = self.evidence(self.m1, lt.SESSION, attester)
+        # the foreign boot record: the SAME counters, session and key (the SAME boot, so check_counters passes)
+        # but the unlock's nonce (a DIFFERENT verification). The measurement keeps this verification's nonce;
+        # only the boot record is the unlock's.
+        foreign_boot = {"counters": [self.boots, 0],
+                        "session": hashlib.sha256(bytes.fromhex(lt.SESSION)).hexdigest(),
+                        "key": hashlib.sha256(b"boot session key " + bytes.fromhex(lt.SESSION)[:16]).hexdigest(),
+                        "nonce": other_nonce.hex()}
+
+        real_verify = attester.verify
+
+        def verify_then_commit_boot(*a, **k):
+            verdict = real_verify(*a, **k)
+            with attest.locked_state(path) as (s, save):
+                s["nodes"]["a"]["boot"] = foreign_boot   # the measurement keeps THIS verification's nonce
+                save()
+            return verdict
+
+        with unittest.mock.patch.object(attester, "verify", side_effect=verify_then_commit_boot):
+            self.refused("attest-booted could not bind the record",
+                         ownerunlock.attest_booted, self.m1, self.doc, path, "a", lt.SESSION, evidence, attester=attester)
 
     def test_a_site_advance_is_judged_by_the_owner_s_unlock_and_by_attest_booted_the_same_way(self):
         """regalia-kms-dx7.8 acceptance: a site advance changes PCR 12. The owner's unlock (initrd) and attest-booted
