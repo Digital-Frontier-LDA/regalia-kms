@@ -1,0 +1,34 @@
+# The Python unit tests' third-party packages (regalia-kms-kow). Hash-pinned; install with
+#   pip install --require-hashes -r tests/requirements-unit.txt
+# CI's "python guards" step runs the ubuntu-26.04 image's system python3 (3.14), whose packages come from the OS. A heavy
+# proof runs in a sanctioned venv built once from THIS file (fleet rule 2026-11-25: no temporary venvs, no unhashed pip),
+# so the versions here are CI's:
+# - PyYAML 6.0.3: Ubuntu 26.04 (resolute) ships python3-yaml 6.0.3-1build1 (packages.ubuntu.com/resolute/python3-yaml,
+#   read 2026-11-25). actions/runner-images' Ubuntu2604-Readme.md (image 20261116.202.1) lists no pip-installed PyYAML,
+#   so the OS package is what the image's python3 imports.
+# - cryptography, cffi, pycparser: the versions and hashes of tools/bench/requirements.txt, held in step by
+#   tests/test_requirements_unit.py; cffi adds the CPython 3.14 wheel, the image's Python.
+# Wheels are manylinux x86_64 for CPython 3.12-3.14 (cryptography's abi3 wheels cover them all), plus each sdist. Hashes
+# are PyPI's (pypi.org/pypi/<name>/<version>/json, 2026-11-25).
+pyyaml==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
+    --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5 \
+    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
+cryptography==50.0.1 \
+    --hash=sha256:51afcfceb15597cf2635068e4ac9a56b2abde622edde17f37d85fd7b5306497a \
+    --hash=sha256:51593d180cf6d179bde5c5d065bed81386b1f381656ae7d042b7ffc87a9895ad \
+    --hash=sha256:ff838d62ec1bfce4f9ba7fa16f4a7b554cd8d0c299e6be37502161a660c84eef \
+    --hash=sha256:9dde0a357190eb3b1da1bb9ab750e9c85cba82ca5977aa0836cbb94e92611239 \
+    --hash=sha256:407fe2b6db00939c05c0e945e9914238f2f0a430974839429dafc82b1ee6bee5 \
+    --hash=sha256:e22dfed744bd4002e909464cb23d2f0b05c6f3113a79ef2e9864a53db737c733 \
+    --hash=sha256:5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20
+cffi==2.1.1 \
+    --hash=sha256:34e261f78cb6ceaaa36f42f2613f4380d94d9c759a9c73c769ee6e0247364632 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf \
+    --hash=sha256:a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2 \
+    --hash=sha256:b0431303acaea1089ad4b3e9ce4e6518193def1118d4073ca848635ee4ea2e96 \
+    --hash=sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992 \
+    --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29
