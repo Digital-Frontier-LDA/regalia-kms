@@ -99,6 +99,51 @@ class TheLease(Local):
         self.assertEqual([(e["event"], e["outcome"]) for e in self.trail], [("sync-lease-nonce", "ALLOW"), ("sync-lease", "ALLOW")])
         self.assertEqual(sync.OPERATOR_UID, 0)
 
+    def test_the_allow_events_carry_the_caller_s_uid_admission_s_or_root_s(self):
+        """dx7.10.2 review: the subject of every event is this node, whoever asked; the caller's uid on each event, ALLOW
+        included, is what tells a lease root asked for (the operator's update) apart from one admission asked for."""
+        for uid in (ADMISSION_UID, sync.OPERATOR_UID):
+            with self.subTest(uid=uid):
+                del self.trail[:]
+                self.answer(ask("lease-nonce", node_id="a"), uid=uid)
+                self.answer(ask("lease", request=REQUEST, evidence=EVIDENCE), uid=uid)
+                self.assertEqual([(e["event"], e["outcome"], e["subject"], e["uid"]) for e in self.trail],
+                                 [("sync-lease-nonce", "ALLOW", "a", uid), ("sync-lease", "ALLOW", "a", uid)])
+        self.assertEqual(len(self.issued), 2)
+
+    def test_a_refused_uid_is_on_the_trail_by_its_uid_too(self):
+        self.answer(ask("lease-nonce", node_id="a"), uid=ADMISSION_UID + 1)
+        self.assertEqual((self.trail[-1]["outcome"], self.trail[-1]["uid"]), ("DENY", ADMISSION_UID + 1))
+
+    def test_the_uid_is_read_from_the_local_source_only(self):
+        self.assertEqual([sync.local_uid(s) for s in (sync.local_source(0), sync.local_source(ADMISSION_UID), "uid:", "uid:01",
+                                                       "uid:-1", "10.0.0.2", None, ("uid:0",))],
+                         [0, ADMISSION_UID, None, None, None, None, None, None])
+
+    def test_the_network_listener_s_events_carry_no_uid(self):
+        """Server (the tunnel's listener) is unchanged: its caller is a node, by its tunnel key, and no uid is recorded."""
+        trail = []
+        server = sync.Server("b", mock.Mock(envelopes=lambda after=0: [], load=lambda: None), None, None, None, lambda m, s: None,
+                             trail.append)
+        server.handle(ask("lease-nonce", node_id="a"), "10.0.0.1")
+        self.assertTrue(trail)
+        self.assertTrue(all("uid" not in e for e in trail))
+
+    def test_root_is_refused_under_multi_node_too(self):
+        """dx7.10.2 review: root is answered under the single-node profile only, as admission is. Under multi-node the
+        listener issues nothing to root either, says why, and the DENY is on the trail under uid 0."""
+        self.manifest = three()
+        for op, fields in (("lease-nonce", {"node_id": "a"}), ("lease", {"request": REQUEST, "evidence": EVIDENCE})):
+            with self.subTest(op=op):
+                answered = self.answer(ask(op, **fields), uid=sync.OPERATOR_UID)
+                self.assertIs(answered["ok"], False)
+                self.assertIn("the local lease listener answers only under the single-node profile; epoch 1 is multi-node",
+                              answered["refused"])
+                self.assertEqual((self.trail[-1]["event"], self.trail[-1]["outcome"], self.trail[-1]["uid"]),
+                                 ("sync-" + op, "DENY", sync.OPERATOR_UID))
+        self.assertEqual((self.issued, self.attested), ([], []))
+        self.verifier.nonce.assert_not_called()
+
     def test_an_operation_other_than_the_lease_s_is_refused_by_name(self):
         for op, fields in (("pull", {"summary": {}, "sequence": 0}), ("measurements", {"version": "p1"})):
             with self.subTest(op=op):

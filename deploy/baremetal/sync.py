@@ -87,13 +87,15 @@ signed or attested end to end. See #80.
 THE LOCAL LEASE LISTENER (regalia-kms-41n). A single-node host has no service tunnel and no peer: its own
 regalia-sync issues its lease (lease.issue_self, with sync's own heartbeat state, TPM signer, RevisionFloor and
 self-attest verifier, as a peer's sync issues one under multi-node), and its regalia-admission asks for it the
-way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it: the
-caller is identified by its kernel credentials (SO_PEERCRED: regalia-admission's uid, or root's for the operator's
-`update quote-for-owner` and `update promote`, which run as root and prove the serving path up by a self-issued lease
-for this boot (regalia-kms-dx7.8); anybody else is "refused"), not by a tunnel key; the quote it must send over sync's
-nonce is the authorisation. Only lease-nonce and lease are
-answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
-DEADLINE, the rate buckets) and its trail.
+way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it. The
+caller is identified by its kernel credentials (SO_PEERCRED), not by a tunnel key, and two uids are answered:
+regalia-admission's, and root's (OPERATOR_UID, regalia-kms-dx7.10.2) for the operator's `update quote-for-owner` and
+`update promote` (regalia-kms-dx7.8), which run as root and prove the serving path up by a self-issued lease for this
+boot, held in a private directory of their own and never in admission's. Any other uid is told only "refused". For
+either answered uid the authorisation is the fresh quote it must send over sync's nonce. Only lease-nonce and lease
+are answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
+DEADLINE, the rate buckets) and its trail. Every event the listener records, ALLOW and DENY, carries the caller's
+uid ("uid"), so a lease root asked for is told apart from admission's on the trail.
 
 NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (step 3);
 convergence.recover over this transport.
@@ -333,7 +335,9 @@ class Server:
         """The answer (bytes) to one request from `source`. A refusal is an answer, and so is a failure
         inside this node. Only a sink that cannot take the event raises (SinkFailed): nothing is answered
         that is not recorded."""
-        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": []}
+        # "uid": the caller's uid, for the local lease listener only (LocalServer: SO_PEERCRED); None leaves the event as it was
+        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": [],
+                 "uid": None}
         answer = refusal = None
         try:
             answer = self._decide(raw, source, known)
@@ -355,7 +359,8 @@ class Server:
         # in this window (Quiet): the flood is in the count of the next report.
         if not isinstance(refusal, Quiet):
             try:
-                return convergence.audited(self._record, known["kind"], known["manifest"], known["caller"], self.node_id, decided)
+                record = self._record if known["uid"] is None else (lambda event: self._record(dict(event, uid=known["uid"])))
+                return convergence.audited(record, known["kind"], known["manifest"], known["caller"], self.node_id, decided)
             except Refused:
                 pass
         # the reason goes to a caller this node identified and may talk to; anybody else learns nothing
@@ -885,13 +890,20 @@ LOCAL_OPS = ("lease-nonce", "lease")
 # lease for this boot (update.Host.lease_from: the proof the serving path came up). Answering only regalia-admission
 # refused both on every host ("uid:0 is not regalia-admission"; the one-node scenario's planned-outage update found it).
 # Root gains nothing it lacked: it can already read the admission file and reach the TPM; the lease still needs a fresh
-# quote over sync's nonce, and every answer is on sync's trail under the caller's uid.
+# quote over sync's nonce, and every event the listener records (ALLOW and DENY) carries the caller's uid in its "uid"
+# field (Server.handle, known["uid"]), so a lease root asked for is told apart from admission's.
 OPERATOR_UID = 0
 
 
 def local_source(uid):
     """The source a local connection is recorded as: its peer's uid (peer_source)."""
     return "uid:%d" % uid
+
+
+def local_uid(source):
+    """The uid in a local_source (an int), or None for anything else."""
+    found = re.fullmatch(r"uid:(0|[1-9][0-9]{0,9})", source) if isinstance(source, str) else None
+    return int(found.group(1)) if found else None
 
 
 def peer_source(conn, peer=None):
@@ -922,6 +934,9 @@ class LocalServer(Server):
     def _decide(self, raw, source, known):
         view = _View(self.store)
         view.late = known["late"]
+        # the caller's uid, on every event recorded for this request, ALLOW or DENY: a lease root (the operator's update)
+        # asked for is told apart from admission's on the trail, where the subject is this node either way
+        known["uid"] = local_uid(source)
         self._spend(view.late, convergence._printable(source), "address")     # before the disk and the TPM, for anybody
         # access control: only this node's admission service and root (the operator's update quote-for-owner and promote,
         # OPERATOR_UID), by the kernel's word; anybody else learns nothing
