@@ -120,6 +120,19 @@ class TheLease(Local):
                                                        "uid:-1", "10.0.0.2", None, ("uid:0",))],
                          [0, ADMISSION_UID, None, None, None, None, None, None])
 
+    def test_a_late_rate_report_carries_the_uid_of_the_caller_who_flooded_not_the_current_request_s(self):
+        """CodeRabbit on #786: a late sync-rate report is written while another request is handled; its uid is the
+        flooding caller's, taken from that caller's own source, so every event this listener records has a uid."""
+        for flooder in (ADMISSION_UID + 1, 0):
+            with self.subTest(flooder=flooder):
+                del self.trail[:]
+                self.server._report(sync.local_source(flooder), "any", 7, self.manifest)
+                self.assertEqual([(e["event"], e["outcome"], e["uid"]) for e in self.trail], [("sync-rate", "DENY", flooder)])
+                self.assertIn("7 more any requests from uid:%d" % flooder, self.trail[0]["reason"])
+        del self.trail[:]
+        self.server._report("not a local source", "any", 1, self.manifest)    # nothing to read a uid from: written as it was
+        self.assertNotIn("uid", self.trail[0])
+
     def test_the_network_listener_s_events_carry_no_uid(self):
         """Server (the tunnel's listener) is unchanged: its caller is a node, by its tunnel key, and no uid is recorded."""
         trail = []

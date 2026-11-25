@@ -370,9 +370,13 @@ class Server:
         def said():
             raise Refused("RATE: %d more %s requests from %s were refused before this one" % (count, kind, who))
         try:
-            convergence.audited(self._record, "sync-rate", manifest, who, self.node_id, said)
+            convergence.audited(self._report_record(who), "sync-rate", manifest, who, self.node_id, said)
         except Refused:
             pass
+
+    def _report_record(self, who):
+        """The sink a late rate report about `who` is written to (LocalServer adds that caller's uid)."""
+        return self._record
 
     def _node_at(self, source):
         """The node `source` is the address of, by the manifest this server read LAST (in memory: no disk,
@@ -915,7 +919,7 @@ def peer_source(conn, peer=None):
 class LocalServer(Server):
     """This node's own lease, to this node's own admission service, on a single-node host (module docstring). Server's
     limits, rate buckets, trail and refusals, with two differences: the caller is the uid the kernel gives (only
-    `admission_uid` is this node; anybody else is told "refused"), and the lease is this node's own (lease.issue_self).
+    `admission_uid` and root, OPERATOR_UID, are answered; anybody else is told "refused"), and the lease is this node's own (lease.issue_self).
     `attester` is node.Node.self_attester: this node's verifier of its own quotes, by the manifest held then."""
 
     def __init__(self, node_id, store, freshness, attester, signer, sink, admission_uid, buckets=None, clock=time.time, floor=None,
@@ -927,6 +931,12 @@ class LocalServer(Server):
     @staticmethod
     def _no_tunnel(manifest, source):
         raise Refused("the local lease listener has no tunnel key")
+
+    def _report_record(self, who):
+        # a late sync-rate report is about the caller who flooded (`who`, its own source "uid:N"), never the current
+        # request's: its uid comes from `who`, so every event this listener records carries a uid (CodeRabbit on #786)
+        uid = local_uid(who)
+        return self._record if uid is None else (lambda event: self._record(dict(event, uid=uid)))
 
     def _node_at(self, source):
         return None             # no address table to stand in front of: every source is counted under its uid
