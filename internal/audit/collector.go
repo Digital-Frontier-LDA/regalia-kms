@@ -357,14 +357,15 @@ func (c *Collector) MetricsHandler() http.Handler {
 			streams[key] = stream
 		}
 		c.mu.Unlock()
-		// One entry per node site, gathering every identity's stream for it: a certificate
-		// hand-over (handover.go) leaves the retired identity's streams beside its successor's, so
-		// two identities can hold the same node's trails. The endpoint must still emit ONE series per
-		// gauge per site (a duplicate metric-name/label set makes the scrape's value undefined —
-		// PR #783 r4685272669), and the value is the HIGHEST epoch any identity's committed trail
-		// holds: the behind rules fire when the node is below the witness, so the maximum is the
-		// sensitive choice, and a stale predecessor's lower epoch can never mask a rollback below
-		// what the successor already shipped.
+		// One entry per node site, gathering every identity's stream for it. Streams are keyed by
+		// (identity, site), and the site is the X-Regalia-Site header, which the collector checks only
+		// for its charset, not against the identity: two client certificates that ship under the same
+		// site name therefore hold two streams for one node (binding a site to one identity is
+		// regalia-kms-dx7.9 follow-up NIT2). The endpoint must still emit ONE series per gauge per site
+		// (a duplicate metric-name/label set makes the scrape's value undefined — PR #783 r4685272669),
+		// and the value is the HIGHEST epoch any identity's committed trail holds: the behind rules
+		// fire when the node is below the witness, so the maximum is the sensitive choice, and a
+		// lagging stream's lower epoch can never mask a rollback below what another already shipped.
 		type witness struct {
 			identity string
 			site     string
@@ -409,9 +410,11 @@ func (c *Collector) MetricsHandler() http.Handler {
 		for _, site := range sites {
 			node := nodes[site]
 			if membership, ok := highest(node.sync); ok {
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
 				fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", site, membership)
 			}
 			if anchor, ok := highest(node.esp); ok {
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
 				fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", site, anchor)
 			}
 		}
