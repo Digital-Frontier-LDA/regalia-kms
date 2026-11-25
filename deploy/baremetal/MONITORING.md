@@ -57,8 +57,17 @@ As a commissioning prerequisite, register **both** endpoints for every node in p
 inventory. Set the target label `topology_profile` to the fixed value `single-node` or `multi-node` on both jobs.
 Set `honor_labels: false` on both jobs so an endpoint cannot override inventory labels. Keep both targets
 registered during reboots, failed scrapes and outages, including before their first successful scrape. A
-profile is an external label for monitoring, not an admission decision. The two endpoints can have different
-`instance` values. Keep each `job`, `instance` pair unique so that no other endpoint supplies its health evidence.
+profile is an external label for monitoring, not an admission decision. Keep each `job`, `instance` pair unique
+so that no other endpoint supplies its health evidence.
+
+**The node's `instance` is the shipper's site.** The single-node behind rules compare a node's epoch series
+against the collector's witness on `instance` (the fleet rules join on `job`, which may differ; the behind rules
+do not). So the `regalia-node` target's `instance` label must be set, in the inventory, to the node's shipper site
+(the same value the collector's stream site carries, `nodea` for node-a) — not left at Prometheus's default of the
+scrape address (`192.0.2.10:9100`). The collector's `metric_relabel_configs` (section 4.1) maps its `site` label to
+that same `instance` and drops `site`, so both sides of the comparison carry one shared `instance` and nothing else
+the join does not ignore. A target whose `instance` is the bare address never matches its own witness: the behind
+rules stay silent for it and `RegaliaCollectorEpochMissing` fires.
 
 The rule tests hold job matchers to these names. New registrations require the profile label on both jobs. Older
 unlabeled targets keep the legacy multi-node alert behavior while the metadata warning is active.
@@ -150,10 +159,11 @@ the collector's mTLS listener (the same listener and client CA the sink's protoc
 second). The endpoint emits ONE series per node: the membership series (from the node's sync trail) and the
 anchor series (from its esp-advances trail) share the label `site` = the node's own site (the stream's site
 minus its trail suffix), so a node's two gauges agree on identity and a node the collector has not seen gets
-no series. The scrape job `regalia-collector` adds its own `job` and copies `site` onto `instance`
+no series. The scrape job `regalia-collector` adds its own `job`, copies `site` onto `instance`, and drops `site`
 (`metric_relabel_configs` — series labels are rewritten only there; `relabel_configs` rewrites target
-metadata, which a scraped series no longer has), so the reference carries the node's
-instance under the collector's job. The behind rules compare on the full label set minus `job` and
+metadata, which a scraped series no longer has), so the reference carries the node's `instance` under the
+collector's job and no label the node's own series lack. The node's `instance` is set to the shipper's site in the
+inventory (section 2), so the two sides agree on it. The behind rules compare on the full label set minus `job` and
 `topology_profile` (the two labels the sides carry differently), so one-to-one on `instance`: a node is judged
 against its own off-host witness, and another node's witness cannot be its floor. While the collector is not
 configured or not scraping, the comparisons have no right-hand side and stay silent: that blind state is
@@ -167,13 +177,18 @@ configured or not scraping, the comparisons have no right-hand side and stay sil
   # sink's clients are). The collector's listener is RequireAndVerifyClientCert; a scrape with no
   # chain-verified certificate never reaches a handler.
   # Copy the collector's site label onto the node's instance so the behind rules' one-to-one
-  # match on instance works. The site is the node's own; the instance is the node's own.
-  # This is metric_relabel_configs (series labels, post-scrape): relabel_configs only rewrites
-  # target metadata at discovery time and cannot touch a label the endpoint itself emits.
+  # match on instance works, then drop the site label: the node's own epoch series carry no
+  # site, and the rules' ignoring(job, topology_profile) join requires the sides to agree on
+  # every other label, so a leftover site would keep the operands apart (the behind alerts stay
+  # silent, and the missing-reference warning fires on every node). Distinct nodes keep distinct
+  # instance values. This is metric_relabel_configs (series labels, post-scrape): relabel_configs
+  # only rewrites target metadata at discovery time and cannot touch a label the endpoint emits.
   metric_relabel_configs:
     - source_labels: [site]
       target_label: instance
       action: replace
+    - regex: site
+      action: labeldrop
 ```
 
 **The restore-pending metric.** `regalia_restore_pending` (0 or 1) is written by `deploy/baremetal/metrics.py`

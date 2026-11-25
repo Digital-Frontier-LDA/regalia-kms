@@ -438,13 +438,16 @@ func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf fu
 		if trimmed != "" {
 			var event Event
 			if json.Unmarshal([]byte(trimmed), &event) == nil {
-				if value, found := epochOf(&event); found && value > epoch {
-					epoch = value
+				// ok tracks whether an epoch was FOUND, not whether the trail was committed: a
+				// committed trail with no ALLOW epoch reports absence (the blind state), never a
+				// zero floor. A genuine epoch 0 is found and published.
+				if value, found := epochOf(&event); found && (!ok || value > epoch) {
+					epoch, ok = value, true
 				}
 			}
 		}
 		if readErr != nil {
-			return epoch, true
+			return epoch, ok
 		}
 	}
 }
@@ -468,6 +471,12 @@ func epochFromLine(event *Event) (uint64, bool) {
 		Epoch   int64  `json:"epoch"`
 	}
 	if json.Unmarshal([]byte(detail.Line), &line) != nil || line.Outcome != "ALLOW" {
+		return 0, false
+	}
+	// A negative epoch is not an epoch: it would wrap to the top of the uint64 range on
+	// conversion and stand as a spurious maximum the behind rules could never exceed. Zero and
+	// positive epochs keep their behavior (epoch 0 is a real, witnessed value).
+	if line.Epoch < 0 {
 		return 0, false
 	}
 	return uint64(line.Epoch), true

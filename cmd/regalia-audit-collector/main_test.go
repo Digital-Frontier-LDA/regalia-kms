@@ -364,6 +364,97 @@ func TestTheMetricsEndpointReportsTheCommittedWitness(t *testing.T) {
 	}
 }
 
+// THE WITNESS REPORTS ABSENCE, NOT A FLOOR (regalia-kms-dx7.9 review, round 5): a committed trail
+// that holds no ALLOW epoch is not a witnessed epoch-0 — it is the blind state, and a zero series
+// would both suppress RegaliaCollectorEpochMissing and give the behind rules a floor to compare
+// against. So a node whose sync trail committed but never allowed an epoch gets NO membership
+// series (and the anchor is untouched); likewise a negative epoch is not an epoch (it would wrap
+// to the top of the uint64 range and stand as a spurious maximum), so a trail of only negative
+// epochs also gets no series.
+func TestTheMetricsEndpointReportsAbsenceWhenNoEpochWasAllowed(t *testing.T) {
+	dir := t.TempDir()
+	authorityPath, clientTLS, serverPEM, serverKey := collectorPKIFiles(t, dir)
+
+	collector, err := audit.OpenCollector(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", collector.Handler())
+	mux.Handle("GET /metrics", collector.MetricsHandler())
+	server, err := buildServer("127.0.0.1:0", serverPEM, serverKey, authorityPath, mux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	go func() { _ = server.ServeTLS(listener, "", "") }()
+
+	authenticated, err := audit.NewMTLSHTTPClient(clientTLS, clientRoots(t, authorityPath), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := "https://" + listener.Addr().String() + "/v1/events"
+
+	ship := func(stream, line string) {
+		t.Helper()
+		dot := strings.LastIndexByte(stream, '.')
+		events, err := audit.TrailEvents(stream[dot+1:], []byte(line+"\n"))
+		if err != nil {
+			t.Fatalf("the %s line %q does not map: %v", stream, line, err)
+		}
+		event := events[0]
+		event.Sequence = 1
+		event.PreviousHash = audit.GenesisHash()
+		event.Hash = audit.EventHashForTest(event)
+		body, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-Regalia-Site", stream)
+		response, err := authenticated.Do(request)
+		if err != nil {
+			t.Fatalf("commit the %s line: %v", stream, err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			t.Fatalf("commit the %s line: %d %s", stream, response.StatusCode, mustReadBody(t, response))
+		}
+	}
+
+	// nodeb's sync trail committed but allowed no epoch (a RECORDED line, no epoch at all).
+	ship("nodeb.sync", `{"at":1790000010,"event":"epoch","prev":"","seq":1,"outcome":"RECORDED"}`)
+	// nodec's sync trail allowed only a negative epoch (not an epoch; would wrap uint64).
+	ship("nodec.sync", `{"at":1790000011,"event":"epoch","prev":"","seq":1,"outcome":"ALLOW","epoch":-1}`)
+
+	response, err := authenticated.Get("https://" + listener.Addr().String() + "/metrics")
+	if err != nil {
+		t.Fatalf("scrape the metrics endpoint: %v", err)
+	}
+	defer response.Body.Close()
+	body := mustReadBody(t, response)
+	for _, absent := range []string{
+		`regalia_collector_witnessed_membership_epoch{site="nodeb"}`,
+		`regalia_collector_witnessed_membership_epoch{site="nodec"}`,
+	} {
+		if strings.Contains(body, absent) {
+			t.Fatalf("the scrape publishes a membership series for a node with no allowed epoch (%q):\\n%s", absent, body)
+		}
+	}
+	// The endpoint still names the gauge (the series is what is absent, not the metric).
+	if !strings.Contains(body, "# HELP regalia_collector_witnessed_membership_epoch") {
+		t.Fatalf("the gauge is no longer named:\\n%s", body)
+	}
+}
+
 func mustReadBody(t *testing.T, response *http.Response) string {
 	t.Helper()
 	contents, err := io.ReadAll(response.Body)
