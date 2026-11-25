@@ -13,9 +13,10 @@
 #
 # Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
 # (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) the TPM diagnostics action is main's,
-# from its own sparse checkout, so no action code from the dispatched commit runs, (d) each run's diagnostics have their
-# own name. The dispatched commit's own code still runs (as root) in main's cache scope: that residual is what the
-# same-repo check bounds and the owner's exception accepts.
+# referenced remotely at a pinned commit the plan job checks is on main and current, so no action code comes from the
+# dispatched commit or its workspace, (d) each run's diagnostics have their own name. The dispatched commit's own code
+# still runs (as root) in main's cache scope: that residual is what the same-repo check bounds and the owner's exception
+# accepts (follow-up regalia-kms-cvl: dispatch on a dedicated non-main ref instead).
 name: e2e repro
 
 on:
@@ -53,9 +54,22 @@ jobs:
           RUNS: ${{ inputs.runs }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
+          PIN: 2833e65fe39a0c238fb0458ab9dcd82d47910c86   # the diagnostics action's commit, as in its `uses:` below
         run: |
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
           [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
+          # the diagnostics action is used remotely at PIN: PIN must be on main, and its action must be main's current one
+          if ! pin_status=$(gh api "repos/$REPO/compare/heads/main...$PIN" --jq .status); then
+            echo "::error::GitHub could not say whether the diagnostics pin $PIN is on main: refused" >&2; exit 1
+          fi
+          [[ "$pin_status" == behind || "$pin_status" == identical ]] || {
+            echo "::error::the diagnostics pin $PIN is not on main: refused" >&2; exit 1; }
+          if ! pin_tree=$(gh api "repos/$REPO/contents/.github/actions?ref=$PIN" --jq '.[] | select(.name == "tpm-diagnostics") | .sha') ||
+             ! main_tree=$(gh api "repos/$REPO/contents/.github/actions?ref=heads/main" --jq '.[] | select(.name == "tpm-diagnostics") | .sha'); then
+            echo "::error::GitHub could not read the diagnostics action: refused" >&2; exit 1
+          fi
+          [[ -n "$pin_tree" && "$pin_tree" == "$main_tree" ]] || {
+            echo "::error::the diagnostics pin $PIN is stale (main's tpm-diagnostics changed): bump it" >&2; exit 1; }
           # compare main...REF: `behind` or `identical` means REF is an ancestor of main. `ahead` and `diverged` mean REF
           # has commits main lacks, and GitHub resolves commits from FORKS in the repo network, so they are never enough.
           if ! status=$(gh api "repos/$REPO/compare/heads/main...$REF" --jq .status); then
@@ -112,18 +126,11 @@ jobs:
             echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
           grep -q '^three-node-leases: 20 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
             echo "::error::the three-node lease test did not pass all 20 checks" >&2; exit 1; }
-      # The diagnostics action is MAIN's, from its own sparse checkout: no action code from the dispatched commit runs
-      # (CodeQL actions/cache-poisoning/poisonable-step, #788).
-      - name: Main's diagnostics action, not the dispatched commit's
-        if: failure()
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/heads/main
-          path: .e2e-repro-trusted
-          sparse-checkout: .github/actions
-          persist-credentials: false
+      # The diagnostics action is MAIN's, fetched by the runner from GitHub at a pinned commit (PIN, checked on main and
+      # current by the plan job), never from the workspace the dispatched commit's root code could rewrite (CodeQL
+      # actions/cache-poisoning/poisonable-step, #788).
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
-        uses: ./.e2e-repro-trusted/.github/actions/tpm-diagnostics
+        uses: Digital-Frontier-LDA/regalia-kms/.github/actions/tpm-diagnostics@2833e65fe39a0c238fb0458ab9dcd82d47910c86 # main, 2026-11-25
         with:
           name: three-node-leases-run-${{ matrix.run }}
