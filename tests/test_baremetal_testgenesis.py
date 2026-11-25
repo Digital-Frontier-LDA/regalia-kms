@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 import re
 import shutil
 import stat
@@ -173,7 +174,7 @@ class Outputs(Case):
     def test_the_owner_wireguard_pair_is_one_pair_and_its_hex_is_what_the_genesis_pins(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-        read = lambda n: open(os.path.join(self.out, n)).read()
+        read = lambda n: pathlib.Path(self.out, n).read_text()
         private = base64.b64decode(read("TEST-owner-wg.key").strip(), validate=True)
         self.assertEqual(len(private), 32)
         self.assertEqual((private[0] & 7, private[31] & 0xC0), (0, 0x40))          # clamped, as `wg genkey` writes it
@@ -216,7 +217,7 @@ class Outputs(Case):
             self.assertTrue(name.startswith("TEST-"), name)
         summary = self.load("TEST-genesis.json")
         self.assertIs(summary["TEST"], True)
-        self.assertIn("TEST ONLY", open(os.path.join(self.out, "TEST-README.txt")).read())
+        self.assertIn("TEST ONLY", pathlib.Path(self.out, "TEST-README.txt").read_text())
         with open(os.path.join(self.out, "TEST-SHA256SUMS")) as f:
             sums = dict(reversed(line.rstrip("\n").split("  ", 1)) for line in f)
         self.assertEqual(sorted(sums), [n for n in names if n != "TEST-SHA256SUMS"])
@@ -244,7 +245,7 @@ class Outputs(Case):
                                                                           serialization.NoEncryption())
         for path in glob.glob(os.path.join(self.out, "**"), recursive=True):
             if os.path.isfile(path):
-                data = open(path, "rb").read()
+                data = pathlib.Path(path).read_bytes()
                 for needle in (pem, raw, raw.hex().encode(), base64.b64encode(raw)):
                     self.assertNotIn(needle, data, path)
 
@@ -278,7 +279,7 @@ class Guard(Case):
                 glob.glob(os.path.join(vectors, "offline-keys-record", "*")) + [os.path.join(vectors, "ownerauth-v1.json")]:
             if not os.path.isfile(path):
                 continue
-            text = open(path).read()
+            text = pathlib.Path(path).read_text()
             if path.endswith(".hex"):
                 found.add(text.strip())
             found.update(re.findall(r'"root_entry":\s*\{"alg":\s*"ed25519",\s*"key":\s*"([0-9a-f]{64})"', text))
