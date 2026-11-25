@@ -88,3 +88,8 @@ regexes = [
     '''^70618ee1ed7a0a036a24f7aa3960e35b24949311e1c74b72a2011fcfcfabdf03$''',
     '''^177a14ba2774354c557f9e8c2f3b7a2ee637bae340bebd872da57622053aac60$''',
 ]
+
+[[allowlists]]
+description = "A FILE NAME, not a secret: tests/test_baremetal_testgenesis.py lists the TEST output files that must be 0600, and generic-api-key reads the name of the owner's TEST key file as a key (regalia-kms-223, #787, in commit 52b34484 of the PR's range and in main's history once merged). The file it names is written by testgenesis at run time and is never committed (--out inside a checkout is refused). Pinned by exact value."
+regexTarget = "secret"
+regexes = ['''^TEST-owner-main\.ed25519\.pk8\.pem$''']
