@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -77,10 +78,14 @@ func TestTheMetricsEndpointEmitsOneWitnessPairPerSiteAcrossIdentities(t *testing
 		}
 	}
 	want := map[string]string{
-		`regalia_collector_witnessed_membership_epoch{site="nodea"}`: "9",
-		`regalia_collector_witnessed_anchor_epoch{site="nodea"}`:     "4",
-		`regalia_collector_witnessed_membership_epoch{site="nodeb"}`: "4",
-		`regalia_collector_witnessed_anchor_epoch{site="nodeb"}`:     "1",
+		`regalia_collector_witnessed_membership_epoch{site="nodea"}`:                   "9",
+		`regalia_collector_witnessed_anchor_epoch{site="nodea"}`:                       "4",
+		`regalia_collector_witnessed_membership_epoch{site="nodeb"}`:                   "4",
+		`regalia_collector_witnessed_anchor_epoch{site="nodeb"}`:                       "1",
+		`regalia_collector_witness_stream_readable{site="nodea",trail="sync"}`:         "1",
+		`regalia_collector_witness_stream_readable{site="nodea",trail="esp-advances"}`: "1",
+		`regalia_collector_witness_stream_readable{site="nodeb",trail="sync"}`:         "1",
+		`regalia_collector_witness_stream_readable{site="nodeb",trail="esp-advances"}`: "1",
 	}
 	for name, value := range want {
 		if !strings.Contains(string(body), name+" "+value+"\n") {
@@ -204,5 +209,133 @@ func truncateToFirstLine(t *testing.T, path string) {
 	}
 	if err := os.Truncate(path, int64(first+1)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// AN UNREADABLE ESP-ADVANCES STREAM IS SAID, NOT SILENT (PR #783 GA review 6052752757): the anchor
+// epoch is withheld (a partial maximum could hide a rollback), and the endpoint publishes
+// regalia_collector_witness_stream_readable{trail="esp-advances"} 0 so that
+// RegaliaCollectorWitnessUnreadable and RegaliaCollectorAnchorEpochMissing fire. The membership
+// side, read in full, is unaffected.
+func TestAnUnreadableAnchorStreamWithholdsTheAnchorAndSaysSo(t *testing.T) {
+	f := newWitnessFixture(t)
+	identity := strings.Repeat("1", 64)
+	f.commit(identity, "nodea.sync", 4)
+	f.commit(identity, "nodea.esp-advances", 2, 3)
+	truncateToFirstLine(t, f.collector.streamPath(identity, "nodea.esp-advances"))
+	body := f.scrape()
+	for _, want := range []string{
+		`regalia_collector_witnessed_membership_epoch{site="nodea"} 4` + "\n",
+		`regalia_collector_witness_stream_readable{site="nodea",trail="sync"} 1` + "\n",
+		`regalia_collector_witness_stream_readable{site="nodea",trail="esp-advances"} 0` + "\n",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("want %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "regalia_collector_witnessed_anchor_epoch{") {
+		t.Fatalf("a truncated esp-advances stream still published an anchor epoch:\n%s", body)
+	}
+}
+
+// AN OPEN FAILURE AND A NON-EOF READ ERROR ARE UNREADABLE TOO (GA review nits): the stream file
+// removed (os.Open fails), and the stream file replaced by a directory (os.Open succeeds; the
+// read fails with an error that is not EOF). Each withholds the epoch and publishes readable 0.
+func TestAnOpenFailureOrAReadErrorMarksTheStreamUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		break_ func(t *testing.T, path string)
+	}{
+		{"removed", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a directory", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newWitnessFixture(t)
+			identity := strings.Repeat("2", 64)
+			f.commit(identity, "nodea.sync", 6)
+			tc.break_(t, f.collector.streamPath(identity, "nodea.sync"))
+			body := f.scrape()
+			if strings.Contains(body, "regalia_collector_witnessed_membership_epoch{") {
+				t.Fatalf("an unreadable stream (%s) published an epoch:\n%s", tc.name, body)
+			}
+			if !strings.Contains(body, `regalia_collector_witness_stream_readable{site="nodea",trail="sync"} 0`+"\n") {
+				t.Fatalf("an unreadable stream (%s) did not say readable 0:\n%s", tc.name, body)
+			}
+		})
+	}
+}
+
+// A SCRAPE CONCURRENT WITH COMMITS IS RACE-FREE AND NEVER BELOW WHAT WAS COMMITTED BEFORE IT
+// (CodeRabbit r4685272685, GA review nit): commits append to nodea.sync while scrapes run; under
+// -race the size snapshot must not race the append, and every scrape's value is a committed epoch
+// no lower than the one committed before the scrape began.
+func TestScrapesConcurrentWithCommitsAreRaceFreeAndMonotone(t *testing.T) {
+	f := newWitnessFixture(t)
+	identity := strings.Repeat("3", 64)
+	const epochs = 60
+	var data strings.Builder
+	prev := ""
+	for i := 0; i < epochs; i++ {
+		line := `{"at":` + strconv.Itoa(1790000000+i) + `,"event":"epoch","prev":"` + prev + `","seq":` + strconv.Itoa(i+1) + `,"outcome":"ALLOW","epoch":` + strconv.Itoa(i) + `}`
+		sum := sha256.Sum256([]byte(line + "\n"))
+		prev = hex.EncodeToString(sum[:])
+		data.WriteString(line + "\n")
+	}
+	events, err := TrailEvents("sync", []byte(data.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var committed atomic.Int64
+	committed.Store(-1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i, event := range events {
+			if status, _, message := f.collector.commit(identity, "nodea.sync", event); status != http.StatusNoContent {
+				t.Errorf("commit %d: %d %s", i, status, message)
+				return
+			}
+			committed.Store(int64(i))
+		}
+	}()
+	scrapes := 0
+	for running := true; running; scrapes++ {
+		select {
+		case <-done:
+			running = false
+		default:
+		}
+		floor := committed.Load()
+		body := f.scrape()
+		prefix := `regalia_collector_witnessed_membership_epoch{site="nodea"} `
+		at := strings.Index(body, prefix)
+		if at < 0 {
+			if floor >= 0 {
+				t.Fatalf("epoch %d was committed before the scrape, and the scrape published none:\n%s", floor, body)
+			}
+			continue
+		}
+		rest := body[at+len(prefix):]
+		value, err := strconv.ParseInt(rest[:strings.IndexByte(rest, '\n')], 10, 64)
+		if err != nil || value < floor || value >= epochs {
+			t.Fatalf("scrape published %q, below the committed floor %d or not a committed epoch:\n%s", rest[:strings.IndexByte(rest, '\n')], floor, body)
+		}
+		if strings.Contains(body, `trail="sync"} 0`) {
+			t.Fatalf("a scrape concurrent with an append called the stream unreadable:\n%s", body)
+		}
+	}
+	if scrapes < 2 {
+		t.Fatalf("only %d scrapes ran", scrapes)
 	}
 }

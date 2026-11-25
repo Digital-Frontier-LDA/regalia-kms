@@ -26,6 +26,8 @@ MISMATCH = "RegaliaTopologyProfileMismatch"
 BEHIND_M = "RegaliaMembershipBehindCollector"
 BEHIND_A = "RegaliaAnchorBehindCollector"
 EPOCH_MISSING = "RegaliaCollectorEpochMissing"
+ANCHOR_MISSING = "RegaliaCollectorAnchorEpochMissing"
+UNREADABLE = "RegaliaCollectorWitnessUnreadable"
 CANNOT_RENDER = "RegaliaNextBootCannotRender"
 OWNER = "RegaliaNextBootNeedsOwner"
 RESTORE = "RegaliaRestorePending"
@@ -40,7 +42,7 @@ COLLECTOR = {"job": "regalia-collector", "instance": "a:9100"}
 MULTI = {"job": "regalia-node", "instance": "b:9100", "topology_profile": "multi-node"}
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 ALERTS = {DOWN: "critical", PROFILE: "warning", MISSING: "warning", MISMATCH: "warning",
-          BEHIND_M: "warning", BEHIND_A: "warning", EPOCH_MISSING: "warning", CANNOT_RENDER: "warning",
+          BEHIND_M: "warning", BEHIND_A: "warning", EPOCH_MISSING: "warning", ANCHOR_MISSING: "warning", UNREADABLE: "warning", CANNOT_RENDER: "warning",
           OWNER: "info", RESTORE: "critical", RESTORE_MISSING: "warning"}
 
 
@@ -228,6 +230,38 @@ def cases():
     yield case("a multi-node target has no blind-state expectation",
                [("up", MULTI, "1+0x40")], EPOCH_MISSING)
 
+    # THE ANCHOR'S BLIND STATE (PR #783 GA review 6052752757): the membership witness is present but
+    # the anchor witness is not (an esp-advances stream the collector cannot read withholds it).
+    membership_only = [("regalia_collector_witnessed_membership_epoch", COLLECTOR, "5+0x40")]
+    yield case("anchor reference absent waits fifteen minutes",
+               [("up", NODE, "1+0x40")] + membership_only, ANCHOR_MISSING, at="14m")
+    yield case("anchor reference absent warns after fifteen, while the membership one is present",
+               [("up", NODE, "1+0x40")] + membership_only, ANCHOR_MISSING, [NODE], "16m")
+    yield case("an anchor-only gap does not fire the membership blind-state rule",
+               [("up", NODE, "1+0x40")] + membership_only, EPOCH_MISSING, at="16m")
+    yield case("a witnessed anchor reference suppresses the anchor blind-state warning",
+               [("up", NODE, "1+0x40")] + witness(), ANCHOR_MISSING, at="16m")
+    yield case("a multi-node target has no anchor blind-state expectation",
+               [("up", MULTI, "1+0x40")], ANCHOR_MISSING, at="16m")
+
+    # THE UNREADABLE WITNESS STREAM: the collector says it cannot read the node's esp-advances
+    # stream (readable 0) and withholds its anchor epoch; the cause is named after ten minutes.
+    unreadable_esp = dict(COLLECTOR, trail="esp-advances")
+    yield case("an unreadable witness stream waits ten minutes",
+               [("up", NODE, "1+0x40"), ("regalia_collector_witness_stream_readable", unreadable_esp, "0+0x40")]
+               + membership_only, UNREADABLE, at="9m")
+    yield case("an unreadable esp-advances witness stream warns after ten",
+               [("up", NODE, "1+0x40"), ("regalia_collector_witness_stream_readable", unreadable_esp, "0+0x40")]
+               + membership_only, UNREADABLE, [dict(COLLECTOR, trail="esp-advances")], "11m")
+    yield case("an unreadable esp-advances stream also fires the anchor blind-state rule",
+               [("up", NODE, "1+0x40"), ("regalia_collector_witness_stream_readable", unreadable_esp, "0+0x40")]
+               + membership_only, ANCHOR_MISSING, [NODE], "16m")
+    yield case("a readable witness stream is silent",
+               [("up", NODE, "1+0x40"), ("regalia_collector_witness_stream_readable", unreadable_esp, "1+0x40")]
+               + witness(), UNREADABLE, at="11m")
+    yield case("an unreadable stream with no scraped single-node target is silent",
+               [("regalia_collector_witness_stream_readable", unreadable_esp, "0+0x40")], UNREADABLE, at="11m")
+
     # THE UNRENDERABLE ESP: regalia-esp-advance writes it on every run, success or not.
     yield case("an unrenderable ESP under single-node warns at once",
                [("regalia_esp_boot_renderable", NODE, "0+0x40")], CANNOT_RENDER, [NODE], "1m")
@@ -297,13 +331,17 @@ def cross_profile_matrix():
         (BEHIND_A, [("regalia_esp_anchor_epoch", MULTI, "4+0x40"),
                     ("regalia_collector_witnessed_anchor_epoch", dict(COLLECTOR, instance=MULTI["instance"]), "5+0x40")]),
         (EPOCH_MISSING, [("up", MULTI, "1+0x40")]),
+        (ANCHOR_MISSING, [("up", MULTI, "1+0x40")]),
+        (UNREADABLE, [("up", MULTI, "1+0x40"),
+                      ("regalia_collector_witness_stream_readable",
+                       dict(COLLECTOR, instance=MULTI["instance"], trail="esp-advances"), "0+0x40")]),
         (CANNOT_RENDER, [("regalia_esp_boot_renderable", MULTI, "0+0x40")]),
         (OWNER, [("regalia_topology_nodes", MULTI, "1+0x40")]),
         (RESTORE, [("regalia_restore_pending", MULTI, "1+0x40")]),
         (RESTORE_MISSING, [("up", MULTI, "1+0x40")]),
     ):
         scenarios.append(("matrix: " + alert + " stays silent on a multi-node fixture", fault, alert, [],
-                          "32m" if alert in (BEHIND_M, BEHIND_A, EPOCH_MISSING, RESTORE_MISSING) else "6m"))
+                          "32m" if alert in (BEHIND_M, BEHIND_A, EPOCH_MISSING, ANCHOR_MISSING, UNREADABLE, RESTORE_MISSING) else "6m"))
     return scenarios
 
 

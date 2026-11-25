@@ -40,6 +40,8 @@ UP_JOBS = {
     "RegaliaMembershipBehindCollector": set(),
     "RegaliaAnchorBehindCollector": set(),
     "RegaliaCollectorEpochMissing": {"regalia-node"},
+    "RegaliaCollectorAnchorEpochMissing": {"regalia-node"},
+    "RegaliaCollectorWitnessUnreadable": {"regalia-node"},
     "RegaliaNextBootCannotRender": set(),
     "RegaliaNextBootNeedsOwner": set(),
     "RegaliaRestorePending": set(),
