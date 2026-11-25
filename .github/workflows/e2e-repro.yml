@@ -14,7 +14,9 @@
 # Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
 # (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) the TPM diagnostics action is main's,
 # referenced remotely at a pinned commit the plan job checks is on main and current, so no action code comes from the
-# dispatched commit or its workspace, (d) each run's diagnostics have their own name. The dispatched commit's own code
+# dispatched commit or its workspace (its tree is recorded as ACTION_TREE: any later change to the action on main makes
+# e2e-repro refuse until PIN and ACTION_TREE are bumped, fail-closed by design), (d) each run's diagnostics have their
+# own name. The dispatched commit's own code
 # still runs (as root) in main's cache scope: that residual is what the same-repo check bounds and the owner's exception
 # accepts (follow-up regalia-kms-cvl: dispatch on a dedicated non-main ref instead).
 name: e2e repro

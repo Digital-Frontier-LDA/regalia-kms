@@ -125,9 +125,10 @@ class Repro(unittest.TestCase):
         self.assertRegex(expected, r"^[0-9a-f]{40}$")
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
-            git = lambda *args: subprocess.run(["git", "-C", str(ROOT), *args], env=env, capture_output=True,
-                                               text=True, check=True).stdout.strip()
-            git("add", "--", ACTION)
+            # --force and no eol conversion: an ignore rule or an autocrlf setting cannot change the tree computed
+            git = lambda *args: subprocess.run(["git", "-C", str(ROOT), "-c", "core.autocrlf=false", *args], env=env,
+                                               capture_output=True, text=True, check=True).stdout.strip()
+            git("add", "--force", "--", ACTION)
             self.assertEqual(git("write-tree", "--prefix=%s/" % ACTION), expected)
 
     def test_the_job_it_mirrors_still_runs_the_three_node_lease_test(self):
