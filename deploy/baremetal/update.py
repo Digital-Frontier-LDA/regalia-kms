@@ -140,6 +140,10 @@ def _quietly(record, event):
         pass
 
 
+# what a single node's verifier state is: it has verified no peer (see apply)
+_NO_PEER_STATE = {"schema": attest.STATE_SCHEMA, "nodes": {}, "nonces": {}}
+
+
 def _denied(record, event, failure):
     _quietly(record, dict(event, outcome="DENY", reason=str(failure) or type(failure).__name__))
 
@@ -225,8 +229,12 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         event.update({"from": running["label"], "to": target["label"], "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
                       "lease_issuers": sorted(leases), "no_lease": refused})
         now = host.now()
+        # the node's own verifier state judges the turn (which peers it has seen on their target); a single node
+        # verifies no peer, so it holds none (no attest.json is ever written there), and may_reboot reads none
+        # under the profile: it is not read, or a single-node apply would stop on a missing file (dx7.10.2)
+        own_state = _NO_PEER_STATE if single_node else host.own_state()
         try:
-            verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, host.own_state(), list(leases.values()),
+            verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, own_state, list(leases.values()),
                                          now, planned_outage=planned_outage, run=host.run)
         except Refused as refusal:
             raise Refused("%s%s" % (refusal, "".join("; %s gave no lease: %s" % (p, refused[p]) for p in sorted(refused)))) from None
@@ -270,7 +278,8 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     try:
         leases, refused = ({}, {}) if single_node else fresh_leases(host, manifest, authorizers(manifest, node_id), session)
         event.update({"lease_issuers": sorted(leases), "no_lease": refused})
-        verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, host.own_state(), list(leases.values()),
+        verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session,
+                                     _NO_PEER_STATE if single_node else host.own_state(), list(leases.values()),
                                      host.now(), planned_outage=planned_outage, run=host.run)
         event["authorizers"] = verdict["authorizers"]
     except (Refused, attest.Refused, OSError, ValueError) as failure:

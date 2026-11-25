@@ -27,11 +27,12 @@ one_node = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(one_node)
 threenode = one_node.threenode
 
-NO_LEASE = "the source refused: a may not serve under epoch 2: no lease"
+# the revocation is epoch 3: genesis 1, the planned-outage update's approval 2 (dx7.10.2), the shutdown 3
+NO_LEASE = "the source refused: a may not serve under epoch 3: no lease"
 
 
 def denial():
-    return dict(event="admission-renew", outcome="DENY", peer="a", epoch=2, reason=NO_LEASE)
+    return dict(event="admission-renew", outcome="DENY", peer="a", epoch=3, reason=NO_LEASE)
 
 
 class RevocationDenial(unittest.TestCase):
@@ -81,7 +82,7 @@ class RevocationDenial(unittest.TestCase):
         self.assertFalse(self.accepted([denial()], collected=False))
 
     def test_sync_s_peer_a_epoch_two_no_lease_denial_satisfies_the_assertion(self):
-        self.assertTrue(self.accepted([denial()]), "the actual sync refusal must satisfy step 5")
+        self.assertTrue(self.accepted([denial()]), "the actual sync refusal must satisfy step 7")
 
     def test_another_peer_or_the_aggregate_denial_cannot_satisfy_the_assertion(self):
         for peer in ("b", ""):
@@ -91,19 +92,19 @@ class RevocationDenial(unittest.TestCase):
                 self.assertFalse(self.accepted([event]), "another peer's refusal must not prove a's revocation")
 
     def test_a_denial_from_another_epoch_cannot_satisfy_the_assertion(self):
-        for epoch in (1, 3):
+        for epoch in (2, 4):
             with self.subTest(epoch=epoch):
                 event = denial()
                 event["epoch"] = epoch
-                self.assertFalse(self.accepted([event]), "only the committed revocation epoch may satisfy step 5")
+                self.assertFalse(self.accepted([event]), "only the committed revocation epoch may satisfy step 7")
 
     def test_a_different_reason_cannot_satisfy_the_assertion(self):
         for reason in ("the manifest leaves no node this peer could attest", "no lease",
-                       "the source refused: b may not serve under epoch 2: no lease", NO_LEASE + " (unrelated)"):
+                       "the source refused: b may not serve under epoch 3: no lease", NO_LEASE + " (unrelated)"):
             with self.subTest(reason=reason):
                 event = denial()
                 event["reason"] = reason
-                self.assertFalse(self.accepted([event]), "step 5 needs the exact sync no-lease refusal")
+                self.assertFalse(self.accepted([event]), "step 7 needs the exact sync no-lease refusal")
 
     def test_a_different_event_or_outcome_cannot_satisfy_the_assertion(self):
         for field, value in (("event", "admission-serving"), ("outcome", "ALLOW")):

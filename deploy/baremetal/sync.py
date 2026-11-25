@@ -87,11 +87,15 @@ signed or attested end to end. See #80.
 THE LOCAL LEASE LISTENER (regalia-kms-41n). A single-node host has no service tunnel and no peer: its own
 regalia-sync issues its lease (lease.issue_self, with sync's own heartbeat state, TPM signer, RevisionFloor and
 self-attest verifier, as a peer's sync issues one under multi-node), and its regalia-admission asks for it the
-way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it: the
-caller is identified by its kernel credentials (SO_PEERCRED: regalia-admission's uid, or "refused"), not by a
-tunnel key; the quote it must send over sync's nonce is the authorisation. Only lease-nonce and lease are
-answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
-DEADLINE, the rate buckets) and its trail.
+way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it. The
+caller is identified by its kernel credentials (SO_PEERCRED), not by a tunnel key, and two uids are answered:
+regalia-admission's, and root's (OPERATOR_UID, regalia-kms-dx7.10.2) for the operator's `update quote-for-owner` and
+`update promote` (regalia-kms-dx7.8), which run as root and prove the serving path up by a self-issued lease for this
+boot, held in a private directory of their own and never in admission's. Any other uid is told only "refused". For
+either answered uid the authorisation is the fresh quote it must send over sync's nonce. Only lease-nonce and lease
+are answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
+DEADLINE, the rate buckets) and its trail. Every event the listener records, ALLOW and DENY, carries the caller's
+uid ("uid"), so a lease root asked for is told apart from admission's on the trail.
 
 NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (step 3);
 convergence.recover over this transport.
@@ -267,6 +271,12 @@ def _refusal(reason):
     return membership.canonical({"v": VERSION, "ok": False, "refused": convergence._printable(reason)})
 
 
+class _Late(list):
+    """A request's list of late (caller, class, count) refusals (_View.late). `uid`: the caller's uid on the local lease
+    listener (LocalServer, from SO_PEERCRED), else None; LocalServer keys its node buckets by it (_spend)."""
+    uid = None
+
+
 class _View:
     """One request's view of the node's store: the chain is read and verified ONCE, and every decision of
     the request is made on that one reading. Without it a pull verified the chain six times over (the
@@ -331,7 +341,9 @@ class Server:
         """The answer (bytes) to one request from `source`. A refusal is an answer, and so is a failure
         inside this node. Only a sink that cannot take the event raises (SinkFailed): nothing is answered
         that is not recorded."""
-        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": []}
+        # "uid": the caller's uid, for the local lease listener only (LocalServer: SO_PEERCRED); None leaves the event as it was
+        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": _Late(),
+                 "uid": None}
         answer = refusal = None
         try:
             answer = self._decide(raw, source, known)
@@ -353,7 +365,8 @@ class Server:
         # in this window (Quiet): the flood is in the count of the next report.
         if not isinstance(refusal, Quiet):
             try:
-                return convergence.audited(self._record, known["kind"], known["manifest"], known["caller"], self.node_id, decided)
+                record = self._record if known["uid"] is None else (lambda event: self._record(dict(event, uid=known["uid"])))
+                return convergence.audited(record, known["kind"], known["manifest"], known["caller"], self.node_id, decided)
             except Refused:
                 pass
         # the reason goes to a caller this node identified and may talk to; anybody else learns nothing
@@ -363,9 +376,13 @@ class Server:
         def said():
             raise Refused("RATE: %d more %s requests from %s were refused before this one" % (count, kind, who))
         try:
-            convergence.audited(self._record, "sync-rate", manifest, who, self.node_id, said)
+            convergence.audited(self._report_record(who), "sync-rate", manifest, who, self.node_id, said)
         except Refused:
             pass
+
+    def _report_record(self, who):
+        """The sink a late rate report about `who` is written to (LocalServer adds that caller's uid)."""
+        return self._record
 
     def _node_at(self, source):
         """The node `source` is the address of, by the manifest this server read LAST (in memory: no disk,
@@ -400,7 +417,7 @@ class Server:
         def decided():
             raise Refused(reason + (" (%d more dropped since the last report)" % suppressed if suppressed else ""))
         try:
-            convergence.audited(self._record, "sync-drop", None, name, self.node_id, decided)
+            convergence.audited(self._report_record(name), "sync-drop", None, name, self.node_id, decided)
         except Refused:
             pass
 
@@ -878,11 +895,25 @@ def tcp_transport(host, port=PORT, source=None, timeout=DEADLINE):
 LEASE_SOCKET = "lease.sock"             # in sync's state directory (Node.path): regalia-sync's own, 0755
 SYNC_USER, ADMISSION_USER = "regalia-sync", "regalia-admission"
 LOCAL_OPS = ("lease-nonce", "lease")
+# regalia-kms-dx7.10.2: root, the operator at the node's console. update.py runs as root (it reads the TPM and writes the
+# firmware's boot variables), and under single-node its quote-for-owner and promote ask THIS listener for the node's own
+# lease for this boot (update.Host.lease_from: the proof the serving path came up). Answering only regalia-admission
+# refused both on every host ("uid:0 is not regalia-admission"; the one-node scenario's planned-outage update found it).
+# Root gains nothing it lacked: it can already read the admission file and reach the TPM; the lease still needs a fresh
+# quote over sync's nonce, and every event the listener records (ALLOW and DENY) carries the caller's uid in its "uid"
+# field (Server.handle, known["uid"]), so a lease root asked for is told apart from admission's.
+OPERATOR_UID = 0
 
 
 def local_source(uid):
     """The source a local connection is recorded as: its peer's uid (peer_source)."""
     return "uid:%d" % uid
+
+
+def local_uid(source):
+    """The uid in a local_source (an int), or None for anything else."""
+    found = re.fullmatch(r"uid:(0|[1-9][0-9]{0,9})", source) if isinstance(source, str) else None
+    return int(found.group(1)) if found else None
 
 
 def peer_source(conn, peer=None):
@@ -894,7 +925,7 @@ def peer_source(conn, peer=None):
 class LocalServer(Server):
     """This node's own lease, to this node's own admission service, on a single-node host (module docstring). Server's
     limits, rate buckets, trail and refusals, with two differences: the caller is the uid the kernel gives (only
-    `admission_uid` is this node; anybody else is told "refused"), and the lease is this node's own (lease.issue_self).
+    `admission_uid` and root, OPERATOR_UID, are answered; anybody else is told "refused"), and the lease is this node's own (lease.issue_self).
     `attester` is node.Node.self_attester: this node's verifier of its own quotes, by the manifest held then."""
 
     def __init__(self, node_id, store, freshness, attester, signer, sink, admission_uid, buckets=None, clock=time.time, floor=None,
@@ -907,16 +938,38 @@ class LocalServer(Server):
     def _no_tunnel(manifest, source):
         raise Refused("the local lease listener has no tunnel key")
 
+    def _spend(self, late, who, kind):
+        # the node-keyed classes ("any", "lease") are counted per uid here: only admission and root get this far (_decide),
+        # so a node has at most two such keys. A late report of a flood then names whose flood it was: its key ends in
+        # that uid ("a uid:0"), never the uid of the request that happens to report it (#786 review, MUST 2)
+        uid = getattr(late, "uid", None)
+        if kind not in OPEN and uid is not None:
+            who = "%s %s" % (who, local_source(uid))
+        super()._spend(late, who, kind)
+
+    def _report_record(self, who):
+        # every event this listener records carries a uid (#786 review, MUST 2): a late sync-rate report or a sync-drop is
+        # about the caller in its key -- "uid:N" (the address class, a drop) or "<node> uid:N" (_spend) -- never about the
+        # request that writes it. A key with no uid in it (the listener's own accept failures, "too many callers") has none.
+        uid = local_uid(who.rsplit(" ", 1)[-1]) if isinstance(who, str) else None
+        return self._record if uid is None else (lambda event: self._record(dict(event, uid=uid)))
+
     def _node_at(self, source):
         return None             # no address table to stand in front of: every source is counted under its uid
 
     def _decide(self, raw, source, known):
+        # the caller's uid, on every event recorded for this request, ALLOW or DENY: a lease root (the operator's update)
+        # asked for is told apart from admission's on the trail, where the subject is this node either way. Set FIRST, so
+        # that a failure reading the store (below) is recorded under it too (#786 review)
+        known["uid"] = known["late"].uid = local_uid(source)
         view = _View(self.store)
         view.late = known["late"]
         self._spend(view.late, convergence._printable(source), "address")     # before the disk and the TPM, for anybody
-        # access control: only this node's admission service, by the kernel's word; anybody else learns nothing
-        require(source == local_source(self.admission_uid), "%s is not %s: the local lease listener answers it only" % (
-            convergence._printable(source), ADMISSION_USER))
+        # access control: only this node's admission service and root (the operator's update quote-for-owner and promote,
+        # OPERATOR_UID), by the kernel's word; anybody else learns nothing
+        require(source in (local_source(self.admission_uid), local_source(OPERATOR_UID)),
+                "%s is not %s (nor root, the operator's update): the local lease listener answers them only" % (
+                    convergence._printable(source), ADMISSION_USER))
         manifest = known["manifest"] = self._seen = view.load()
         require(manifest is not None, "this node holds no manifest")
         caller = known["caller"] = self.node_id
@@ -969,7 +1022,7 @@ def bind_local(path, owner_uid, create=None):
             os.umask(old)
         # 0666 on purpose (#761's review): connect() to an AF_UNIX socket needs WRITE on it, and the caller,
         # regalia-admission, is not this socket's owner (regalia-sync), so 0644 would refuse it. The mode is not the
-        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's ("refused" for any other),
+        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's or root's ("refused" for any other),
         # and a lease needs a fresh TPM quote over sync's nonce. Bound under umask 0177 first (never wider than meant),
         # only in a directory regalia-sync owns and nobody else can write (above); lease-nonce and lease only, and
         # only under the single-node profile.

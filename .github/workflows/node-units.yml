@@ -202,11 +202,15 @@ jobs:
   # regalia-kms-dx7.10 (docs/design/single-node.md 8): ONE node as a supported topology, on the three-node fixture under
   # Cluster(topology="single-node"): the genesis with its typed acknowledgement, the owner-assisted unlock (swtpm, LUKS2, the
   # real pre-root client, the owner's machine on SoftHSM), self-lease serving under the REAL daemon (a signature, a spend held
-  # across a restart), a refused survivor authorization, and the owner's revocation stopping the node within one lease.
-  # dx7.7 (owner-chain re-anchor) and dx7.8 (planned-outage update) extend it: until then they print as TODO, never as a pass.
+  # across a restart), a refused survivor authorization, a planned-outage update (dx7.8: refused without --planned-outage,
+  # the owner unlocking the next image, attest-booted the retire evidence), the owner-chain re-anchor (dx7.7: recover and
+  # recount from the owner's statement, the collector its witness), and the owner's revocation stopping the node within one
+  # lease (dx7.10.2 runs the last two of dx7.10's steps).
   one-node:
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    # 60, as three-node-recovery: dx7.10.2 adds a reboot onto the next image and an owner-chain recovery, each waiting
+    # for a's own lease again
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,14 +239,12 @@ jobs:
             python3 -Es e2e/one-node.py | tee "$RUNNER_TEMP/one.log"
           grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/one.log" || {
             echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
-          grep -q '^one-node: 26 passed, 0 failed$' "$RUNNER_TEMP/one.log" || {
-            echo "::error::the one-node test did not pass all 26 checks" >&2; exit 1; }
-          # dx7.7 and dx7.8's steps are said as TODO and counted neither way: both still said, until those beads replace them
-          for step in 7 8; do
-            prefix="$(printf '  \033[33mTODO\033[0m regalia-kms-dx7.%s: ' "${step}")"
-            [ "$(awk -v prefix="$prefix" 'index($0, prefix) == 1 {count++} END {print count+0}' "$RUNNER_TEMP/one.log")" = 1 ] || {
-              echo "::error::expected exactly one regalia-kms-dx7.${step} TODO line" >&2; exit 1; }
-          done
+          grep -q '^one-node: 41 passed, 0 failed$' "$RUNNER_TEMP/one.log" || {
+            echo "::error::the one-node test did not pass all 41 checks" >&2; exit 1; }
+          # dx7.10.2: no step is said as TODO any more (dx7.7's and dx7.8's run): a TODO line, counted neither way, fails the job
+          prefix="$(printf '  \033[33mTODO\033[0m ')"
+          [ "$(awk -v prefix="$prefix" 'index($0, prefix) == 1 {count++} END {print count+0}' "$RUNNER_TEMP/one.log")" = 0 ] || {
+            echo "::error::a one-node step was said as TODO instead of run" >&2; exit 1; }
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
         uses: ./.github/actions/tpm-diagnostics

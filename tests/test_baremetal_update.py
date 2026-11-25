@@ -341,6 +341,60 @@ class SingleNode(Case):
         self.assertEqual(self.trail[-1]["topology"], "single-node")
         self.assertEqual(self.host.rebooted, 1)                     # only the one that was planned went down
 
+    def test_apply_under_the_single_node_profile_reads_no_peer_verifier_state(self):
+        """dx7.10.2 (the one-node e2e): a single node verifies no peer, so it has no attest.json; apply must not
+        read it (Host.own_state would raise FileNotFoundError and stop the planned outage as a DENY)."""
+        def missing():
+            raise FileNotFoundError(2, "No such file or directory", "attest.json")
+        self.host.own_state = missing
+        done = self.apply(planned_outage=True)
+        self.assertEqual(done["state"]["next"], "0002")
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW"])
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.apply)
+
+    def counted_own_state(self, missing=False):
+        """Host.own_state, its calls counted (and, with `missing`, raising as a host with no attest.json does)."""
+        calls, real = [], self.host.own_state
+
+        def own_state():
+            calls.append(1)
+            if missing:
+                raise FileNotFoundError(2, "No such file or directory", "attest.json")
+            return real()
+        self.host.own_state = own_state
+        return calls
+
+    def test_a_single_node_apply_without_planned_outage_is_still_refused_and_nothing_is_armed(self):
+        """dx7.10.2 review: skipping attest.json under single-node does not open the way past the declaration: without
+        --planned-outage the apply is a DENY by name, before the phrase, with no BootNext and no reboot."""
+        calls = self.counted_own_state(missing=True)
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.apply)
+        self.assertEqual([(e["outcome"], e["planned_outage"], e["topology"]) for e in self.trail], [("DENY", False, "single-node")])
+        self.assertEqual((self.prompts, self.bootnexts(), self.host.rebooted, self.host.asked), ([], [], 0, []))
+        self.assertEqual(calls, [], "no peer verifier state is read under single-node")
+
+    def test_the_peer_verifier_state_is_skipped_only_under_single_node(self):
+        """dx7.10.2 review: _NO_PEER_STATE stands in for attest.json ONLY under the single-node profile. A multi-node apply
+        still reads Host.own_state, before the phrase and again after it, and a missing attest.json still stops it."""
+        single = self.counted_own_state()
+        self.apply(planned_outage=True)
+        self.assertEqual(single, [])
+        # the same host under multi-node (BOTH: image-1 running, image-2 the target), its peers vouching
+        self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, SET1
+        self.host.firmware = type(self.host.firmware)()
+        self.host.firmware.add("0002", "regalia-kms image-2", r"\EFI\Linux\image-2.efi")
+        multi = self.counted_own_state()
+        del self.trail[:]
+        self.apply()
+        self.assertEqual(len(multi), 2, "multi-node reads its verifier state before the phrase and after it")
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW"])
+        self.host.firmware = type(self.host.firmware)()
+        self.host.firmware.add("0002", "regalia-kms image-2", r"\EFI\Linux\image-2.efi")
+        self.counted_own_state(missing=True)
+        del self.trail[:]
+        self.assertRaises(FileNotFoundError, self.apply)
+        self.assertEqual([e["outcome"] for e in self.trail], ["DENY"])
+
     def test_apply_refuses_the_planned_outage_flag_under_another_profile(self):
         self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, self.host.running
         self.refused("--planned-outage is a single-node decision", self.apply, planned_outage=True)

@@ -24,23 +24,41 @@ GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA
   4  a refused survivor authorization (dx7.3): the owner's tool refuses to make one for the single-node chain, by name; one
      made by hand is refused by survivor.verify_authorization; admission refuses recovery when the lease runs out, then
      returns to mode single and signs when renewal resumes
-  5  owner revocation (dx7.4): the owner's revocation of a (owner.py sign-manifest, revoke.py import on a) is refused at
+  5  a planned-outage update (dx7.8, docs/design/single-node.md 4.6): epoch 2 approves NEXT beside CURRENT (the root's,
+     delivered to a); `update apply` WITHOUT --planned-outage is refused by name on the update trail and nothing is armed
+     or rebooted; with it, may_reboot answers {authorizers [], seconds None, planned_outage True} and apply records its
+     ALLOW, arms BootNext and asks for the reboot (the firmware stood in: no EFI variables on a runner, as the UKI is
+     stood in by PCR 11); a reboots onto NEXT, the owner's machine unlocks it, and it serves again (a self-lease, the
+     daemon signs); `rollout retire-ready --state owner=` refuses on the owner's unlock alone (an initrd is not a boot),
+     then owner.py attest-booted --nonce, the node's `update quote-for-owner` over it and attest-booted --evidence record
+     the boot, and retire-ready says YES on the owner's state
+  6  the owner-chain re-anchor (dx7.7, docs/design/single-node.md 4.7): a's services stopped, its store rolled back below
+     its TPM anchor (ROLLBACK); owner.py sign-recovery makes the owner's v2 recover statement over the owner's chain, the
+     audit collector witnessing a's sync stream (its export and signed receipt); `recover apply --owner-chain
+     --owner-statement` restores it, typed at a's console; a's heartbeat counter undefined in its TPM, the owner's v2
+     recount statement (the collector's beat-propose sequence) and `recount --owner-statement` define it again at a
+     floor at or above that sequence; a serves again (a self-lease, the daemon signs)
+  7  owner revocation (dx7.4): the owner's revocation of a (owner.py sign-manifest, revoke.py import on a) is refused at
      import without the typed shutdown phrase, and committed with it (the phrase in a's sync trail); within ONE lease
      (lease.MAX_LIFETIME) the daemon refuses to sign and a's admission stops serving, its own lease refused naming the state
-  6  TODO (dx7.7, dx7.8): the owner-chain re-anchor and the planned-outage update are not run here: printed as TODO, never
-     counted as a pass, until those beads land and extend this scenario
-  7  #340: every line of a's sync, admission and ESP-advance trail is in the audit collector, and the shutdown's commit is in
-     a's sync stream
+  8  #340: every line of a's sync, admission and ESP-advance trail, and of its update and recount trails, is in the audit
+     collector, and the shutdown's commit is in a's sync stream
 """
 import base64
+import contextlib
 import datetime
 import errno
 import hashlib
 import http.client
+import io
 import json
 import os
 import pathlib
+import pty
 import pwd
+import re
+import select
+import shutil
 import signal
 import ssl
 import stat
@@ -53,7 +71,8 @@ import uuid
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import sh, until                      # noqa: E402
-from deploy.baremetal import admission, lease, membership, node, ownerunlock, revoke, survivor, unlock   # noqa: E402
+from deploy.baremetal import admission, lease, measurements, membership, node, owner, ownerunlock, recover, revoke, rollout   # noqa: E402
+from deploy.baremetal import survivor, unlock   # noqa: E402
 from deploy.baremetal import manifest as manifest_tool   # noqa: E402
 
 passed, failed = 0, 0
@@ -62,6 +81,8 @@ OBJECT, SITE, DEVICE, PRINCIPAL = "e2e1-signing-key", "e2e1-site", "softhsm-e2e1
 PORT, SINK = 18463, 18464                           # the daemon, and its own audit collector (the nodes' is COLLECTOR_PORT)
 SOFTHSM = threenode.SOFTHSM
 ADMISSION_USER = "regalia-admission"
+NEXT = "image-2"                                    # the image the planned-outage update moves a onto (step 5)
+ROOT_KEY = threenode.hbt.pub(threenode.hbt.ROOT)    # the pinned membership root, as the owner's tools take it (64 hex)
 
 
 def ok(condition, text, detail=""):
@@ -73,11 +94,6 @@ def ok(condition, text, detail=""):
         failed += 1
         print("  \033[31mFAIL\033[0m %s%s" % (text, (": %s" % (detail,)) if detail != "" else ""))
     sys.stdout.flush()
-
-
-def todo(text):
-    """A step this scenario does not run yet: said, and counted neither as a pass nor as a failure."""
-    print("  \033[33mTODO\033[0m %s" % text, flush=True)
 
 
 def header(text):
@@ -434,6 +450,363 @@ def survivor_runtime_refusal(cluster, previous):
         cluster._run(cluster.nodes["a"], "sync")
 
 
+def module(name, *args):
+    """argv for `python3 -Es -m deploy.baremetal.<name> args...`, as an operator runs a tool on a node."""
+    return ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal." + name] + [str(a) for a in args]
+
+
+def on_node(cluster, name, label, argv, input=None):
+    """`argv` run as root on node `name`'s host, in its namespace (cluster.as_root): an operator's command at its console
+    that types nothing. Returns the completed process (not checked)."""
+    return cluster.as_root(name, "%s-%d" % (label, time.monotonic_ns()), argv, input=input, in_ns=True)
+
+
+def at_console(cluster, name, argv, answer=None, timeout=180):
+    """`argv` run as root at `name`'s console, as e2e/three-node-reanchor.py runs reanchor: a transient unit in its namespace
+    with what a booted host's systemd-stub gives (the node's PCR signatures and system-phase key, where its services read
+    them), on a terminal (systemd-run --pty, itself driven through a pty here). `answer`: what the operator types at the
+    "Type exactly:" prompt (True: the phrase as printed; a string: that string; None: nothing). Returns (exit status, what
+    the terminal showed)."""
+    identity = set(cluster.identity("sync"))
+    props = [p for p in cluster.properties(name, "sync") if p.split("=", 1)[0] not in identity]   # root's, not regalia-sync's
+    unit = "%s%s-console-%d" % (threenode.UNIT_PREFIX, name, int(time.monotonic() * 1000))
+    command = ["systemd-run", "--unit", unit, "--collect", "--quiet", "--pty", "--wait"] + sum((["-p", p] for p in props), []) + argv
+    pid, fd = pty.fork()
+    if pid == 0:                                                       # the child: systemd-run on the pty's terminal
+        os.execvp(command[0], command)
+    shown, typed, deadline = b"", False, time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ready, _, _ = select.select([fd], [], [], 2)
+        if not ready:
+            continue
+        try:
+            data = os.read(fd, 4096)
+        except OSError:                                                # the terminal closed: the command ended
+            break
+        if not data:
+            break
+        shown += data
+        if answer is not None and not typed and b"Type exactly: " in shown and b"\n> " in shown.replace(b"\r", b""):
+            phrase = shown.replace(b"\r", b"").split(b"Type exactly: ", 1)[1].split(b"\n", 1)[0]
+            os.write(fd, (phrase if answer is True else answer.encode()) + b"\n")
+            typed = True
+    else:
+        os.kill(pid, 9)                                                # the client only: the unit is stopped below, so that
+        sh("systemctl", "stop", unit, check=False)                     # no next step races it in the node's namespace
+        sh("systemctl", "reset-failed", unit, check=False)
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return os.waitstatus_to_exitcode(status), shown.decode(errors="replace").replace("\r", "")
+
+
+def cli(main, argv):
+    """A tool's own main(argv) run here, on the owner's machine (off the nodes): (exit status, what it printed)."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        try:
+            status = main(argv)
+        except SystemExit as exited:                                   # argparse's usage error
+            status = exited.code
+    return status, out.getvalue()
+
+
+def tool_trail(path):
+    """An operator tool's trail (trails.py), parsed: [] while it has no line."""
+    try:
+        return [json.loads(line) for line in pathlib.Path(path).read_text().splitlines() if line.startswith("{")]
+    except OSError:
+        return []
+
+
+def owner_files(cluster):
+    """The chain and the measurement document the owner's machine holds now (as owner.py's --chain and --measurements
+    read them), written under the owner's directory. Returns their paths."""
+    d = cluster.owner.dir / "files"
+    d.mkdir(mode=0o700, exist_ok=True)
+    epoch = cluster.manifest["epoch"]
+    chain, document = d / ("chain-%d.json" % epoch), d / ("measurements-%d.json" % epoch)
+    chain.write_text(json.dumps(cluster.chain))
+    document.write_text(json.dumps(cluster.document))
+    return chain, document
+
+
+# the planned-outage update as `update apply --planned-outage` runs it on the node, as root in its namespace (as
+# e2e/rolling-threenode.py asks may_reboot): update.apply itself on update.Host (the manifest from its published chain
+# against its TPM anchor, the set it runs from its TPM), its trail written, each answer may_reboot gave it recorded.
+# Only the firmware is stood in, as the UKI is (PCR 11, Cluster.boot): a runner has no EFI variables, so BootCurrent and
+# BootOrder are given, the BootNext write and its image's measurement (bootnext) are recorded, and the reboot
+# update.apply asks for is recorded for the fixture to do
+DECLARED = (
+    "import json, sys, time\n"
+    "from deploy.baremetal import bootnext, node, rollout, trails, update\n"
+    "d = json.load(sys.stdin)\n"
+    "h = update.Host(node.load(d['cfg']))\n"
+    "m = h.manifest()\n"
+    "doc = h.document(m)\n"
+    "running = update.running_set(doc, h.node_id, h.pcrs)['label']\n"
+    "armed, rebooted, said, verdicts = [], [], [], []\n"
+    "judge = rollout.may_reboot\n"
+    "rollout.may_reboot = lambda *a, **k: verdicts.append(judge(*a, **k)) or verdicts[-1]\n"
+    "h.boot = lambda: {'current': '0001', 'next': None, 'order': ['0001', '0002'], 'entries': {}}\n"
+    "bootnext.image = lambda esp, entry, boot, **where: entry\n"
+    "bootnext.measures = lambda data, accepted: None\n"
+    "bootnext.trial = lambda entry, esp, accepted, run, **where: armed.append(entry) or {'measured': accepted['label']}\n"
+    "bootnext.clear_next = lambda run: None\n"
+    "h.reboot = lambda: rebooted.append(True)\n"
+    "record = lambda event: trails.append(d['trail'], dict(event, time=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())))\n"
+    "update.apply(h, '0002', d['esp'], lambda prompt: prompt.split(\"'\")[1], record, planned_outage=True, say=said.append)\n"
+    "print(json.dumps({'running': running, 'verdicts': verdicts, 'armed': armed, 'rebooted': rebooted, 'said': said}))\n")
+
+
+def witness(cluster, name):
+    """What owner.py sign-recovery --witness takes for `name`'s sync stream: the collector's export of its committed events,
+    the collector's signed receipt for the export's last one (asked as the shipper asks), the pinned receipt key (raw
+    Ed25519, hex), the shipper's identity (the SHA-256 of its client certificate) and the stream."""
+    from cryptography.hazmat.primitives import serialization
+    export = cluster.audit_stream(name, "sync")
+    if not export:
+        raise RuntimeError("the collector holds nothing of %s's sync stream" % name)
+    receipt = cluster.receipt(name, "sync", len(export))
+    key = serialization.load_pem_public_key((cluster.audit_dir / "receipt.pub").read_bytes()).public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    identity = hashlib.sha256(ssl.PEM_cert_to_DER_cert((cluster.audit_dir / "shipper.pem").read_text())).hexdigest()
+    return export, receipt, [key], identity, "e2e3-%s.sync" % name
+
+
+def recovery_session(cluster, name):
+    """`recover session` on the node, as root: (the session it printed, ISSUED, the node's authenticated time)."""
+    done = on_node(cluster, name, "recover-session", module("recover", "session", "--config", cluster.nodes[name].cfg_path))
+    found = re.search(r"SESSION (\S+) ISSUED (\d+)", done.stdout)
+    if done.returncode != 0 or not found:
+        raise RuntimeError("recover session on %s failed (%d): %s %s" % (name, done.returncode, done.stdout[-400:], done.stderr[-400:]))
+    return found.group(1), int(found.group(2))
+
+
+def owner_statement(cluster, purpose, name, session, issued, out):
+    """owner.py sign-recovery as the owner runs it off the nodes (sign_recovery: the CLI's line is typed at /dev/tty only):
+    over the owner's chain, judged by this machine's signing record (each epoch the root signed, verified), the audit
+    collector witnessing `name`'s sync stream, the line typed as printed, the owner's key on its token. Written to `out`."""
+    record = [{"verified": True, "epoch": e["manifest"]["epoch"], "digest": membership.digest(e["manifest"])} for e in cluster.chain]
+
+    def typed(text):
+        return text.rsplit("Type exactly: ", 1)[1].split("\n", 1)[0]
+    signed = owner.sign_recovery(cluster.chain, ROOT_KEY, record, purpose, name, session, lambda: cluster.owner_signer(0), typed,
+                                 int(time.time()), witnesses=[witness(cluster, name)], say=lambda text: None, issued=issued)
+    out.write_text(json.dumps(signed))
+    return signed
+
+
+def serving_under(cluster, name, epoch):
+    """`name`'s admission document while it serves in mode single on a lease it issued itself under `epoch` (lease.json's
+    own epoch, not the manifest's the admission was checked under), else None."""
+    serving = cluster.lease(name)
+    try:
+        held = json.loads((cluster.nodes[name].admission / "lease.json").read_text())["envelope"]["lease"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(serving, dict) and serving.get("mode") == "single" and held.get("issuer") == name and held.get("epoch") == epoch:
+        return serving
+    return None
+
+
+def serving_again(cluster, kms, name, message):
+    """`name` serves again: its admission holds a lease it issued itself, in mode single; the daemon is READY on it, and
+    signs `message` (the signature verifies). Returns (whether, what was seen)."""
+    serving = until(lambda: cluster.lease(name), 180, 3)
+    ready = kms.wait_ready(200, 120)
+    status, answer, _ = kms.sign(message)
+    seen = {"admission": serving, "issuer": cluster.lease_issuer(name), "ready": ready, "sign": status}
+    return (isinstance(serving, dict) and serving.get("mode") == "single" and seen["issuer"] == name and ready == 200
+            and status == 200 and kms.verifies(message, answer)), seen
+
+
+def planned_outage_update(cluster, kms):
+    """Step 5 (dx7.8, docs/design/single-node.md 4.6): see the module text. Nine checks."""
+    cfg = cluster.nodes["a"].cfg_path
+    current = cluster.image_set("a")["label"]
+    m2, _ = cluster.accept("a", {"a": [None, NEXT]}, "v2")         # the root's epoch 2, delivered to a running a (deliver.py)
+    sets = [s["label"] for s in measurements.bind(m2, cluster.document)["a"]["accepted"]]
+    ok(m2["epoch"] == 2 and sets == [current, NEXT] and cluster.held_epoch("a") == 2 and cluster.anchored("a") == 2,
+       "epoch 2 (the root's, delivered to a) approves %s beside %s; a holds it, and its ESP advance anchored it" % (NEXT, current),
+       {"epoch": m2["epoch"], "sets": sets, "anchor": cluster.anchored("a")})
+
+    trail = cluster.ship_tool_trail("a", "update")                 # a's /var/log/regalia/update.jsonl, shipped as on a host
+    # "a STILL serves" needs a serving before the refusal. An epoch's commit stops a's renewals until a holds its own
+    # heartbeat for that epoch (lease._issue: freshness.live_until; heartbeat.verify takes only the manifest's epoch). In
+    # the d7202fce run (45587190804) accept() took 30.6 s, more than one lease (lease.MAX_LIFETIME), and this was checked
+    # 0.5 s after it returned, inside admission's retry back-off (RETRY_MAX): the run said 40/41 with the reset count
+    # unchanged (the reboot below went 2 to 3). So a serves again, on a lease under epoch 2, first; then the refusal
+    since = time.time()
+    serving_before = until(lambda: serving_under(cluster, "a", 2), 180, 3)
+    before = cluster.reset_count("a")
+    named = "a single-node host's reboot is a planned outage: give --planned-outage"
+    refused = on_node(cluster, "a", "update-apply", module("update", "apply", "--config", cfg, "--entry", "0002",
+                                                           "--esp", cluster.esp("a"), "--audit-log", trail))
+    denied = [e for e in tool_trail(trail) if e.get("event") == "update-apply"]
+    after = cluster.reset_count("a")
+    serving_after = cluster.lease("a")
+    # each condition by name, so a FAIL says which one was false (the GA's review of d7202fce: 40/41, and the line could
+    # not tell the reset count from the lease)
+    conditions = {
+        "exit status 1": refused.returncode == 1,
+        "the refusal named": named in refused.stderr,
+        "one update-apply event, a DENY": [e.get("outcome") for e in denied] == ["DENY"],
+        "the DENY's reason names it": bool(denied) and named in denied[0].get("reason", ""),
+        "the DENY says planned_outage false": bool(denied) and denied[0].get("planned_outage") is False,
+        "the DENY says topology single-node": bool(denied) and denied[0].get("topology") == membership.SINGLE_NODE,
+        "a served before, on a lease under epoch 2": isinstance(serving_before, dict),
+        "the TPM reset count is unchanged (%s, then %s)" % (before, after): after == before,
+        "a still serves after": isinstance(serving_after, dict) and serving_after.get("mode") == "single",
+    }
+    ok(all(conditions.values()),
+       "update apply WITHOUT --planned-outage is refused by name (\"%s\"), a DENY on a's update trail; nothing is armed or "
+       "rebooted (a, serving on its own lease under epoch 2, keeps TPM reset count %s and still serves)" % (named, before),
+       {"false": [k for k, v in conditions.items() if not v], "conditions": conditions, "status": refused.returncode,
+        "said": refused.stderr[-400:], "trail": denied, "serving_before": serving_before, "serving_after": serving_after,
+        "admission": [{k: e.get(k) for k in ("at", "event", "outcome", "peer", "epoch", "reason")}
+                      for e in admission_trail(cluster, "a") if e.get("at", 0) >= int(since) - 60][-8:]})
+
+    done = cluster.as_root("a", "update-planned-%d" % time.monotonic_ns(), ["/usr/bin/python3", "-Es", "-c", DECLARED],
+                           input=json.dumps({"cfg": str(cfg), "trail": str(trail), "esp": str(cluster.esp("a"))}), in_ns=True)
+    if done.returncode != 0:
+        raise RuntimeError("update apply --planned-outage on a failed (%d): %s" % (done.returncode, (done.stderr or done.stdout)[-800:]))
+    applied = json.loads(done.stdout.strip().splitlines()[-1])
+    answer = {"target": NEXT, "authorizers": [], "planned_outage": True, "seconds": None}
+    ok(applied["running"] == current and applied["verdicts"] == [answer, answer],
+       "may_reboot, as update apply asks it on a (its chain against its TPM anchor, the set it runs from its TPM; before the "
+       "phrase and again after it), with the outage declared: authorizers [], seconds None, planned_outage True (no lease "
+       "asked, no turn kept)", applied)
+    allowed = [e for e in tool_trail(trail) if e.get("event") == "update-apply" and e.get("outcome") == "ALLOW"]
+    ok(len(allowed) == 1 and allowed[0].get("planned_outage") is True and allowed[0].get("authorizers") == []
+       and allowed[0].get("topology") == membership.SINGLE_NODE and (allowed[0].get("from"), allowed[0].get("to")) == (current, NEXT)
+       and applied["armed"] == ["0002"] and applied["rebooted"] == [True],
+       "update apply --planned-outage: its ALLOW on a's update trail (planned_outage true, no authorizer, %s to %s), BootNext "
+       "armed for the next image, and the reboot asked for" % (current, NEXT), {"trail": allowed, "armed": applied["armed"]})
+
+    kms.stop_daemon()                                  # the host goes down, and the daemon with it
+    cluster.stop("a")                                  # the reboot apply asked for: a power cycle, /run emptied
+    cluster.boot("a", NEXT)                            # the BootNext image: PCR 11 measures NEXT
+    rebooted = cluster.reset_count("a")
+    with cluster.owner_tunnel("a"):
+        with cluster.owner_answering("a") as owner_said:
+            opened = cluster.unlock("a", timeout=150, rounds=3)
+            sent = until(lambda: any(line.startswith("SENT: signed response") for line in owner_said), 15, 0.5)
+    ok(rebooted == before + 1 and opened["rc"] == 0 and opened["peer"] == unlock.OWNER and opened["marker"] and sent is True,
+       "a rebooted (TPM reset count %d to %s) onto %s, and the owner's machine, answering over the boot tunnel under epoch 2, "
+       "unlocked it through the owner's keyslot (owner.py unlock SENT its signed response)" % (before, rebooted, NEXT),
+       {"unlock": opened, "owner": owner_said[-6:]})
+    cluster.start("a", SERVICES)
+    kms.start()                                        # the host's daemon, started by its boot
+    again, seen = serving_again(cluster, kms, "a", b"one node, on the next image")
+    ok(again, "a serves again on %s: its own lease in mode single, the daemon READY and its signature verifying" % NEXT,
+       dict(seen, journal=cluster.journal("a", "admission")[-600:], daemon=kms.log()))
+
+    chain, document = owner_files(cluster)
+    state = cluster.owner.owner_state / "attest.json"   # the owner's verifier, the one owner.py unlock judged the boot with
+    retire = ["--json", "retire-ready", "--membership", str(chain), "--root-key", ROOT_KEY, "--measurements", str(document),
+              "--state", "%s=%s" % (membership.OWNER, state)]
+    status, said = cli(rollout.main, retire)
+    early = json.loads(said) if said.strip() else {}
+    ok(status == 1 and "NOT YET" in early.get("refused", "") and "in the initrd of %r" % NEXT in early.get("refused", ""),
+       "rollout retire-ready --state owner=... refuses on the owner's unlock alone: it saw a in its initrd, which is not a boot",
+       early or said)
+
+    booted = ["attest-booted", "--chain", str(chain), "--root-key", ROOT_KEY, "--measurements", str(document),
+              "--state", str(cluster.owner.owner_state), "--node", "a"]
+    status, said = cli(owner.main, booted + ["--nonce"])
+    nonce = said.split("\n", 1)[0].strip()
+    if status != 0 or re.fullmatch(r"[0-9a-f]{64}", nonce) is None:
+        raise RuntimeError("owner.py attest-booted --nonce failed (%s): %s" % (status, said[-400:]))
+    quoted = on_node(cluster, "a", "quote-for-owner", module("update", "quote-for-owner", "--config", cfg, "--nonce", nonce,
+                                                             "--audit-log", trail))
+    session = re.search(r"--session (\S+)", quoted.stdout)
+    if quoted.returncode != 0 or session is None:
+        raise RuntimeError("update quote-for-owner on a failed (%d): %s %s" % (quoted.returncode, quoted.stdout[-400:], quoted.stderr[-600:]))
+    evidence = json.loads(quoted.stdout.split("\n", 1)[0])
+    carried = cluster.owner.dir / "files" / "booted-evidence.json"
+    carried.write_text(json.dumps(evidence))
+    status, said = cli(owner.main, booted + ["--session", session.group(1), "--evidence", str(carried)])
+    with open(state) as f:
+        recorded = json.load(f)["nodes"]["a"]["measurement"]
+    ok(status == 0 and evidence.get("phase") == "system" and evidence.get("nonce") == nonce
+       and ("BOOTED: a on %s (epoch 2, phase system)" % NEXT) in said
+       and {k: recorded.get(k) for k in ("label", "epoch", "phase")} == {"label": NEXT, "epoch": 2, "phase": "system"},
+       "owner.py attest-booted --nonce, a's update quote-for-owner over it (its system-phase quote; its own lease for this "
+       "boot the proof it came up), attest-booted --evidence: a booted on %s, recorded in the owner's state" % NEXT,
+       {"said": said[-400:], "evidence_phase": evidence.get("phase"), "recorded": recorded})
+    status, said = cli(rollout.main, retire)
+    ready = json.loads(said) if said.strip() else {}
+    ok(status == 0 and ready.get("ready") is True and ready.get("seen_on_target_by") == {"a": [membership.OWNER]} and ready.get("epoch") == 2,
+       "rollout retire-ready --state owner=... says YES: a was last seen on %s by the owner, the only witness" % NEXT, ready or said)
+
+
+def owner_chain_reanchor(cluster, kms):
+    """Step 6 (dx7.7, docs/design/single-node.md 4.7): see the module text. Six checks."""
+    cfg = cluster.nodes["a"].cfg_path
+    tip = cluster.manifest
+    d = cluster.owner.dir / "files"
+    # the collector holds a's sync lines at the tip's epoch before the outage: its witness is what the owner reads
+    seen = until(lambda: recover.witness_epoch(*witness(cluster, "a")) == tip["epoch"], 120, 3)
+    if seen is not True:
+        raise RuntimeError("the collector's witness of a's sync stream did not reach epoch %d" % tip["epoch"])
+    cluster.stop("a", power=None)                      # a crash: the services down, the same boot
+    store = pathlib.Path(cluster.node("a").path("membership.json"))
+    held = store.stat()
+    store.write_bytes(membership.canonical(cluster.chain[:1]))      # an older disk: one epoch below a's TPM anchor
+    os.chown(store, held.st_uid, held.st_gid)
+    os.chmod(store, stat.S_IMODE(held.st_mode))
+    said = refusal(lambda: cluster.node("a").store().load())
+    ok(said is not None and "ROLLBACK" in said, "a's store rolled back to epoch 1 below its TPM anchor at %d (its services "
+       "stopped): its membership no longer loads (%s)" % (tip["epoch"], (said or "it loads")[:120]), said)
+
+    session, issued = recovery_session(cluster, "a")
+    signed = owner_statement(cluster, "recover", "a", session, issued, d / "recover-statement.json")
+    st = signed["statement"]
+    ok((st["purpose"], st["node_id"], st["epoch"], st["tip_digest"], st["session"], st.get("collector_epoch")) ==
+       ("recover", "a", tip["epoch"], membership.digest(tip), session, tip["epoch"]),
+       "owner.py sign-recovery: the owner's v2 recover statement over its chain at epoch %d for a's session, the audit "
+       "collector witnessing epoch %d in a's sync stream (its export under its signed receipt)" % (tip["epoch"], tip["epoch"]), st)
+    since = int(time.time())
+    status, shown = at_console(cluster, "a", module("recover", "apply", "--config", cfg, "--owner-chain", owner_files(cluster)[0],
+                                                    "--owner-statement", d / "recover-statement.json"), answer=True)
+    restored = [(e.get("outcome"), e.get("sources"), e.get("minimum")) for e in cluster.trail("a")
+                if e.get("event") == "recover" and e.get("at", 0) >= since]
+    loads = refusal(lambda: cluster.node("a").store().load())
+    ok(status == 0 and ("RECOVERED: this node is at epoch %d" % tip["epoch"]) in shown and restored == [("ALLOW", ["owner-chain"], 1)]
+       and loads is None and cluster.held_epoch("a") == tip["epoch"],
+       "recover apply --owner-chain --owner-statement, its phrase typed at a's console: a's store is the owner's chain again, "
+       "at epoch %d (a's sync trail: recover ALLOW from owner-chain, minimum 1)" % tip["epoch"],
+       {"status": status, "shown": shown[-600:], "trail": restored, "load": loads})
+
+    index = "0x%x" % int(str(cluster.node("a").cfg["nv_heartbeat"]), 0)
+    with cluster.tpm_of("a") as n:                     # its route, tpm2-abrmd: never the raw socket by hand
+        gone = sh("tpm2_nvundefine", "-T", n.tcti, "-C", "o", index, check=False)
+    trail = cluster.ship_tool_trail("a", "recount")    # a's /var/log/regalia/recount.jsonl, shipped as on a host
+    session, issued = recovery_session(cluster, "a")
+    signed = owner_statement(cluster, "recount", "a", session, issued, d / "recount-statement.json")
+    st = signed["statement"]
+    witnessed = st.get("collector_sequence")
+    ok(gone.returncode == 0 and st["purpose"] == "recount" and st["session"] == session
+       and st.get("collector_epoch") == tip["epoch"] and type(witnessed) is int and witnessed >= 1,
+       "a's heartbeat counter %s undefined in its TPM; the owner's v2 recount statement names the collector's highest "
+       "beat-propose sequence in a's sync stream (%s)" % (index, witnessed), {"undefine": gone.stderr[-300:], "statement": st})
+    status, shown = at_console(cluster, "a", module("recount", "--config", cfg, "--owner-statement", d / "recount-statement.json",
+                                                    "--audit-log", trail), answer=True)
+    reads = re.search(r"the counter \S+ now reads (\d+)", shown)
+    counted = [e for e in tool_trail(trail) if e.get("event") in ("recount", "recount-requested")]
+    ok(status == 0 and "The sequence counter is unusable" in shown and reads is not None and int(reads.group(1)) >= witnessed
+       and [e["event"] for e in counted] == ["recount-requested", "recount"] and counted[-1].get("outcome") == "ALLOW"
+       and counted[-1].get("owner_sequence") == witnessed,
+       "recount --owner-statement, its phrase typed at a's console: the unusable counter defined again at %s, at or above the witnessed sequence %s "
+       "(a's recount trail: the request, then ALLOW with the owner's sequence)" % (reads.group(1) if reads else "?", witnessed),
+       {"status": status, "shown": shown[-600:], "trail": counted})
+
+    cluster.start("a", SERVICES)
+    again, seen = serving_again(cluster, kms, "a", b"one node, from the owner's chain")
+    ok(again, "a serves again after the owner-chain recovery: its own lease in mode single, the daemon READY and its "
+       "signature verifying", dict(seen, journal=cluster.journal("a", "sync")[-600:], daemon=kms.log()))
+
+
 def scenario(cluster, kms):
     header("1  genesis: schema v5, topology single-node, the limits acknowledged")
     cluster.build()
@@ -553,7 +926,13 @@ def scenario(cluster, kms):
     finally:
         installed.unlink()
 
-    header("5  owner revocation: the typed shutdown, and a stops within one lease")
+    header("5  a planned-outage update: the owner unlocks the next image, and its tool judges the boot")
+    planned_outage_update(cluster, kms)
+
+    header("6  the owner-chain re-anchor: recover and recount from the owner's chain, the collector its witness")
+    owner_chain_reanchor(cluster, kms)
+
+    header("7  owner revocation: the typed shutdown, and a stops within one lease")
     reason = "e2e: the owner revokes the only node"
     try:
         cluster.revoke_by_owner("a", "a", "REVOKED_STOLEN", reason)
@@ -561,8 +940,8 @@ def scenario(cluster, kms):
     except RuntimeError as error:                     # the fixture's sh(): the unit's exit and its output
         unphrased = str(error)
     denied = [e for e in cluster.trail("a") if e.get("event") == "revoke-commit" and e.get("outcome") == "DENY"]
-    ok(unphrased is not None and cluster.held_epoch("a") == 1 and any("shutdown phrase" in e.get("reason", "") for e in denied),
-       "without the typed shutdown phrase the import is refused, and a stays at epoch 1", {"denied": denied[-1:], "said": (unphrased or "")[-300:]})
+    ok(unphrased is not None and cluster.held_epoch("a") == 2 and any("shutdown phrase" in e.get("reason", "") for e in denied),
+       "without the typed shutdown phrase the import is refused, and a stays at epoch 2", {"denied": denied[-1:], "said": (unphrased or "")[-300:]})
     phrase = revoke.shutdown_phrase("a")
     previous = cluster.lease("a")
     if not previous:
@@ -572,39 +951,31 @@ def scenario(cluster, kms):
     started = time.monotonic()                 # conservatively before the commit operation
     cluster.revoke_by_owner("a", "a", "REVOKED_STOLEN", reason, shutdown=phrase)
     commits = [e for e in cluster.trail("a") if e.get("event") == "revoke-commit" and e.get("outcome") == "ALLOW"]
-    ok(cluster.held_epoch("a") == 2 and commits and commits[-1].get("shutdown") == phrase and commits[-1].get("signers") == [membership.OWNER],
-       "with \"%s\" typed, the owner's revocation is committed on a (epoch 2), the phrase in a's sync trail" % phrase, commits[-1:])
+    ok(cluster.held_epoch("a") == 3 and commits and commits[-1].get("shutdown") == phrase and commits[-1].get("signers") == [membership.OWNER],
+       "with \"%s\" typed, the owner's revocation is committed on a (epoch 3), the phrase in a's sync trail" % phrase, commits[-1:])
     took, stop_took = observe_shutdown(
         kms, lambda: non_serving_admission(admission_path, cluster.manifest, previous), started, lease.MAX_LIFETIME)
     ok(took is not None, "after a publishes zero admission, the daemon refuses signing with correlated audit within one lease", kms.log())
-    ok(stop_took is not None, "a publishes an epoch-2 non-serving admission within one lease",
+    ok(stop_took is not None, "a publishes an epoch-3 non-serving admission within one lease",
        cluster.journal("a", "admission")[-600:])
     if took is not None and stop_took is not None:
         print("  MEASURED: the owner's revocation of the only node -> the daemon refuses after %.0f s, admission stops after %.0f s "
               "(MAX_LIFETIME %d s)" % (took, stop_took, lease.MAX_LIFETIME), flush=True)
     # sync's local lease-nonce rejects a revoked node before building its verifier. Require a's own refusal under the
     # committed epoch, not an aggregate denial or a different peer's failure.
-    first_refusal = "the source refused: a may not serve under epoch 2: no lease"
+    first_refusal = "the source refused: a may not serve under epoch 3: no lease"
     named = until(lambda: cluster.audit_has("a", "admission", since=committed_at, event="admission-renew",
-                                            outcome="DENY", peer="a", epoch=2, reason=first_refusal), 60, 2)
+                                            outcome="DENY", peer="a", epoch=3, reason=first_refusal), 60, 2)
     ok(isinstance(named, list) and bool(named),
-       "the collector holds a's own lease refusal under epoch 2 (admission-renew DENY, peer a: %s)" % first_refusal,
+       "the collector holds a's own lease refusal under epoch 3 (admission-renew DENY, peer a: %s)" % first_refusal,
        named if isinstance(named, list) else str(named))
 
-    header("6  not here yet: dx7.7 and dx7.8 extend this scenario")
-    # TODO(regalia-kms-dx7.7): the owner-chain re-anchor and recovery (recount floor) on this one node, once that bead lands
-    todo("regalia-kms-dx7.7: re-anchor a from the owner's chain plus the collector (not run; not counted)")
-    # TODO(regalia-kms-dx7.10.2): the rolling update under --planned-outage, retire evidence from the owner tool. dx7.8
-    # landed the tools (update apply --planned-outage, owner.py attest-booted --nonce/--evidence, update
-    # quote-for-owner) and their unit tests; running the scenario here (stage a second approved image, the planned-
-    # outage update, attest-booted, retire-ready with the owner's state) is dx7.10.2's second AC
-    todo("regalia-kms-dx7.8: a planned-outage measured-boot update of a (not run; not counted; the tools are in, the scenario is dx7.10.2's)")
-
-    header("7  #340: a's trails in the audit collector")
+    header("8  #340: a's trails in the audit collector")
     wrong = cluster.audit_complete()
-    ok(wrong == {}, "every line of a's sync, admission and ESP-advance trail is in the collector, chained from genesis",
+    ok(wrong == {}, "every line of a's sync, admission and ESP-advance trail, and of its update and recount trails, is in the "
+       "collector, chained from genesis",
        {"%s.%s" % k: v for k, v in wrong.items()})
-    shutdown = cluster.audit_has("a", "sync", since=committed_at, event="revoke-commit", epoch=2, outcome="ALLOW", shutdown=phrase)
+    shutdown = cluster.audit_has("a", "sync", since=committed_at, event="revoke-commit", epoch=3, outcome="ALLOW", shutdown=phrase)
     ok(bool(shutdown), "the shutdown's commit, with its typed phrase, is in a's sync stream", shutdown[-1:] if shutdown else None)
 
 
