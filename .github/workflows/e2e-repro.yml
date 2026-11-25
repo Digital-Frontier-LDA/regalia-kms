@@ -52,16 +52,19 @@ jobs:
         run: |
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
           [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
-          if ! status=$(gh api "repos/$REPO/compare/$REF...main" --jq .status); then
+          # compare main...REF: `behind` or `identical` means REF is an ancestor of main. `ahead` and `diverged` mean REF
+          # has commits main lacks, and GitHub resolves commits from FORKS in the repo network, so they are never enough.
+          if ! status=$(gh api "repos/$REPO/compare/main...$REF" --jq .status); then
             echo "::error::GitHub could not say whether $REF is in main's history: refused" >&2; exit 1
           fi
-          if [[ "$status" == ahead || "$status" == identical ]]; then
+          if [[ "$status" == behind || "$status" == identical ]]; then
             echo "$REF is in main's history"
           else
-            if ! heads=$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.head.sha) \(.head.repo.full_name // "-")"'); then
+            # the full head SHA, the head's repository and the state, from the same response; matched as a whole line
+            if ! heads=$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.head.sha) \(.head.repo.full_name // "-") \(.state)"'); then
               echo "::error::GitHub could not list the open pull requests: refused" >&2; exit 1
             fi
-            grep -Fxq -- "$REF $REPO" <<< "$heads" || {
+            grep -Fxq -- "$REF $REPO open" <<< "$heads" || {
               echo "::error::$REF is neither in main's history nor the head of an open pull request from $REPO: refused" >&2; exit 1; }
             echo "$REF is the head of an open pull request from $REPO"
           fi

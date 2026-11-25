@@ -97,7 +97,7 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
     A fork's commit would run as root on the runner, in main's cache scope (council, #788): it is refused, and so is
     every commit GitHub cannot vouch for."""
 
-    def run_plan(self, ref=SHA, runs="5", compare="ahead", compare_rc="", pulls="", pulls_rc=""):
+    def run_plan(self, ref=SHA, runs="5", compare="behind", compare_rc="", pulls="", pulls_rc=""):
         [plan] = load(REPRO)["jobs"]["plan"]["steps"]
         with tempfile.TemporaryDirectory() as tmp:
             gh = Path(tmp) / "gh"
@@ -119,32 +119,47 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
         self.assertIn(why, stderr)
 
     def test_a_commit_in_mains_history_runs(self):
-        for status in ("ahead", "identical"):
+        """compare main...REF is `behind` (REF is an ancestor of main) or `identical`; the pulls are never asked."""
+        for status in ("behind", "identical"):
             with self.subTest(status=status):
                 rc, output, log, _ = self.run_plan(compare=status)
                 self.assertEqual((rc, output), (0, "runs=[1,2,3,4,5]\n"))
-                self.assertEqual(log, "api repos/%s/compare/%s...main --jq .status\n" % (REPO_NAME, SHA))
+                self.assertEqual(log, "api repos/%s/compare/main...%s --jq .status\n" % (REPO_NAME, SHA))
 
     def test_the_head_of_an_open_pull_request_from_this_repository_runs(self):
-        pulls = "%s other/fork\n%s %s\n" % ("b" * 40, SHA, REPO_NAME)
-        rc, output, _, _ = self.run_plan(runs="2", compare="diverged", pulls=pulls)
-        self.assertEqual((rc, output), (0, "runs=[1,2]\n"))
+        for status in ("ahead", "diverged"):
+            with self.subTest(status=status):
+                pulls = "%s other/fork open\n%s %s open\n" % ("b" * 40, SHA, REPO_NAME)
+                rc, output, _, _ = self.run_plan(runs="2", compare=status, pulls=pulls)
+                self.assertEqual((rc, output), (0, "runs=[1,2]\n"))
 
     def test_a_forks_pull_request_head_is_refused(self):
+        """GitHub resolves a fork's commit in the repo network, so compare can say `ahead` for it: that alone is
+        never enough, and a pull request from a fork does not vouch for it either."""
         for repo in ("other/regalia-kms", "-", REPO_NAME + "x"):
-            with self.subTest(head_repo=repo):
-                self.assert_refused(self.run_plan(compare="diverged", pulls="%s %s\n" % (SHA, repo)),
-                                    "neither in main's history nor the head of an open pull request")
+            for status in ("ahead", "diverged"):
+                with self.subTest(head_repo=repo, status=status):
+                    self.assert_refused(self.run_plan(compare=status, pulls="%s %s open\n" % (SHA, repo)),
+                                        "neither in main's history nor the head of an open pull request")
 
     def test_a_commit_nobody_vouches_for_is_refused(self):
-        for status in ("diverged", "behind"):
+        """`ahead` (a commit main lacks, possibly a fork's) and `diverged` are refused unless an open same-repo
+        pull request has exactly this head."""
+        for status in ("ahead", "diverged"):
             with self.subTest(status=status):
-                self.assert_refused(self.run_plan(compare=status, pulls="%s %s\n" % ("b" * 40, REPO_NAME)),
+                self.assert_refused(self.run_plan(compare=status, pulls="%s %s open\n" % ("b" * 40, REPO_NAME)),
+                                    "neither in main's history nor the head of an open pull request")
+
+    def test_the_head_must_match_whole_and_be_open(self):
+        for pulls in ("%s %s closed\n" % (SHA, REPO_NAME), "%s %s open\n" % (SHA[:39], REPO_NAME),
+                      "%s0 %s open\n" % (SHA, REPO_NAME), "x%s %s open\n" % (SHA, REPO_NAME)):
+            with self.subTest(pulls=pulls):
+                self.assert_refused(self.run_plan(compare="ahead", pulls=pulls),
                                     "neither in main's history nor the head of an open pull request")
 
     def test_github_not_answering_is_a_refusal(self):
         self.assert_refused(self.run_plan(compare_rc="1"), "could not say whether")
-        self.assert_refused(self.run_plan(compare="diverged", pulls_rc="1"), "could not list the open pull requests")
+        self.assert_refused(self.run_plan(compare="ahead", pulls_rc="1"), "could not list the open pull requests")
 
     def test_a_malformed_input_is_refused_before_github_is_asked(self):
         for ref, runs in ((SHA[:39], "5"), (SHA.upper(), "5"), (SHA + "\n", "5"), ("main", "5"), (SHA, "6"), (SHA, "0")):
