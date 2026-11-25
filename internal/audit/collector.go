@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -351,6 +352,8 @@ func (c *Collector) MetricsHandler() http.Handler {
 		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_membership_epoch gauge")
 		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_anchor_epoch The highest epoch committed in the node's esp-advances trail.")
 		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_anchor_epoch gauge")
+		fmt.Fprintln(w, "# HELP regalia_collector_witness_stream_readable 1 when every identity's stream of the node's trail was read through its committed size, 0 when one could not be (its witnessed epoch is then withheld).")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witness_stream_readable gauge")
 		// The streams' identity, site and committed size are snapshotted UNDER c.mu: the commit path
 		// updates size under the same lock, so reading it after Unlock would race an append (PR #783
 		// CodeRabbit r4685272685 follow-up). The walk below then reads each file only up to that size.
@@ -402,35 +405,57 @@ func (c *Collector) MetricsHandler() http.Handler {
 			}
 		}
 		// highest is the site's witness across its identities' streams. A stream that cannot be read
-		// through its committed size makes the WHOLE site report no value (the blind state
-		// RegaliaCollectorEpochMissing covers), never the other streams' lower maximum: an unreadable
-		// stream may hold the highest epoch, and a lower floor would hide a rollback (regalia-kms-1gv).
-		highest := func(trails []witness) (epoch uint64, ok bool) {
+		// through its committed size makes the WHOLE site report no epoch for that trail, never the
+		// other streams' lower maximum: an unreadable stream may hold the highest epoch, and a lower
+		// floor would hide a rollback (regalia-kms-1gv). That withheld epoch is not silent: readable is
+		// false, the endpoint publishes regalia_collector_witness_stream_readable 0 for the site and
+		// trail (RegaliaCollectorWitnessUnreadable), the missing series fires
+		// RegaliaCollectorEpochMissing or RegaliaCollectorAnchorEpochMissing, and the collector's log
+		// names the stream and the error (PR #783 GA review 6052752757).
+		highest := func(trails []witness) (epoch uint64, ok, readable bool) {
+			readable = true
 			for _, trail := range trails {
-				value, found, readable := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine)
-				if !readable {
-					return 0, false
+				value, found, err := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine)
+				if err != nil {
+					log.Printf("audit collector: witness stream %s is unreadable through its committed size %d: %v; the %s epoch is withheld",
+						c.streamPath(trail.identity, trail.site), trail.size, err, trail.site)
+					readable = false
+					continue
 				}
 				if found && (!ok || value > epoch) {
 					epoch, ok = value, true
 				}
 			}
-			return epoch, ok
+			if !readable {
+				return 0, false, false
+			}
+			return epoch, ok, true
 		}
 		sites := make([]string, 0, len(nodes))
 		for site := range nodes {
 			sites = append(sites, site)
 		}
 		sort.Strings(sites)
+		readableValue := map[bool]int{false: 0, true: 1}
 		for _, site := range sites {
 			node := nodes[site]
-			if membership, ok := highest(node.sync); ok {
-				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
-				fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", site, membership)
+			if len(node.sync) > 0 {
+				membership, ok, readable := highest(node.sync)
+				if ok {
+					// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
+					fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", site, membership)
+				}
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- as above: text/plain exposition, validated site with %q, a fixed trail name, %d
+				fmt.Fprintf(w, "regalia_collector_witness_stream_readable{site=%q,trail=%q} %d\n", site, "sync", readableValue[readable])
 			}
-			if anchor, ok := highest(node.esp); ok {
-				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
-				fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", site, anchor)
+			if len(node.esp) > 0 {
+				anchor, ok, readable := highest(node.esp)
+				if ok {
+					// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
+					fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", site, anchor)
+				}
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- as above: text/plain exposition, validated site with %q, a fixed trail name, %d
+				fmt.Fprintf(w, "regalia_collector_witness_stream_readable{site=%q,trail=%q} %d\n", site, "esp-advances", readableValue[readable])
 			}
 		}
 	})
@@ -451,20 +476,20 @@ func splitWitnessTrail(site string) string {
 
 // witnessedTrail reads one stream's committed lines through the committed size, from a FRESH
 // read-only handle: the commit path's file is O_WRONLY|O_APPEND and shares no offset with a
-// scrape. readable is false when the walk could not cover the committed size — the file could
-// not be opened, a read failed, or it ended before the committed size — and then no epoch is
-// reported, even one found before the failure: a partial walk can miss the highest epoch, and a
-// value it invented would suppress RegaliaCollectorEpochMissing (PR #783 r4685272685 follow-up).
-// found says whether an ALLOW epoch was seen in a fully read trail. The walk is one line at a
-// time, bounded by the committed size: a torn append is truncated back to it on commit, so the
-// committed size is a line boundary.
-func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, found, readable bool) {
+// scrape. err is non-nil when the walk could not cover the committed size — the file could not be
+// opened, a read failed, or it ended before the committed size — and then no epoch is reported,
+// even one found before the failure: a partial walk can miss the highest epoch, and a value it
+// invented would suppress the missing-witness alerts (PR #783 r4685272685 follow-up). found says
+// whether an ALLOW epoch was seen in a fully read trail. The walk is one line at a time, bounded by
+// the committed size: a torn append is truncated back to it on commit, so the committed size is a
+// line boundary.
+func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, found bool, err error) {
 	if size <= 0 {
-		return 0, false, true
+		return 0, false, nil
 	}
 	file, err := os.Open(c.streamPath(identity, site))
 	if err != nil {
-		return 0, false, false
+		return 0, false, err
 	}
 	defer file.Close()
 	reader := bufio.NewReaderSize(io.LimitReader(file, size), 64*1024)
@@ -485,10 +510,13 @@ func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf fu
 			}
 		}
 		if readErr != nil {
-			if readErr != io.EOF || read != size {
-				return 0, false, false
+			if readErr != io.EOF {
+				return 0, false, readErr
 			}
-			return epoch, found, true
+			if read != size {
+				return 0, false, fmt.Errorf("the file ends at byte %d, before its committed size %d", read, size)
+			}
+			return epoch, found, nil
 		}
 	}
 }

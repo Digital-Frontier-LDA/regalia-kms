@@ -126,7 +126,10 @@ All of it lives under `/etc/regalia/audit-ship/` and `/etc/regalia/audit-ship.en
   (`RegaliaAuditTrailBehind`), not a refusal. The collector's own `/metrics` endpoint (scraped by the
   monitoring service, job `regalia-collector`) is the reference the single-node behind rules compare against
   (MONITORING.md, section 4.1): a configured collector that is not scraping is the blind state
-  `RegaliaCollectorEpochMissing`, not a refusal.
+  `RegaliaCollectorEpochMissing` / `RegaliaCollectorAnchorEpochMissing`, not a refusal. A witness stream the collector
+  cannot read through its committed size withholds that trail's epoch and is named by
+  `RegaliaCollectorWitnessUnreadable`; the collector's log line ("witness stream <path> is unreadable through its
+  committed size") names the file and the error. Restore the stream from the collector's backup.
 
 ## 5. How to check a candidate service
 

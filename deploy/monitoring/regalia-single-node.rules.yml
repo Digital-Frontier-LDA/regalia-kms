@@ -130,7 +130,31 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.instance }} is scraped, but the audit collector holds no witnessed epoch for it: the behind-the-collector rules are blind for it (collector not configured or not scraping)."
+          summary: "{{ $labels.instance }} is scraped, but the audit collector publishes no witnessed membership epoch for it: RegaliaMembershipBehindCollector is blind for it (the collector not configured or not scraping, no witness committed yet, or its sync stream unreadable: see RegaliaCollectorWitnessUnreadable)."
+      # The same blind state for the ANCHOR reference (PR #783 GA review 6052752757): the esp-advances
+      # witness can be absent while the membership one is present (a node that has not advanced its
+      # ESP yet, or an esp-advances stream the collector cannot read through its committed size, whose
+      # epoch it then withholds). Without this rule RegaliaAnchorBehindCollector would go blind and
+      # nothing would say so.
+      - alert: RegaliaCollectorAnchorEpochMissing
+        expr: (up{job="regalia-node",topology_profile="single-node"} == 1) unless ignoring(job, topology_profile) regalia_collector_witnessed_anchor_epoch{job="regalia-collector"}
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped, but the audit collector publishes no witnessed anchor epoch for it: RegaliaAnchorBehindCollector is blind for it (the collector not configured or not scraping, no esp-advances witness committed yet, or that stream unreadable: see RegaliaCollectorWitnessUnreadable)."
+      # The collector holds a stream for the node's trail but cannot read it through its committed
+      # size (a vanished or truncated file, a disk error): it withholds that trail's witnessed epoch
+      # (a partial maximum could hide a rollback), so the missing-epoch rules above fire; this one
+      # names the cause. The collector's log names the stream file and the error. Joined to a
+      # scraped single-node target, so a multi-node installation's collector is not judged here.
+      - alert: RegaliaCollectorWitnessUnreadable
+        expr: (regalia_collector_witness_stream_readable{job="regalia-collector"} == 0) and ignoring(job, topology_profile, trail) (up{job="regalia-node",topology_profile="single-node"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The audit collector cannot read {{ $labels.instance }}'s {{ $labels.trail }} witness stream through its committed size, and withholds that trail's witnessed epoch: read the collector's log for the stream file and the error (deploy/baremetal/AUDIT-COLLECTOR.md)."
       # regalia-esp-advance writes regalia_esp_boot_renderable on EVERY run, success or not
       # (deploy/baremetal/node.py): 0 says the initrd has nothing to render. Under multi-node that is
       # RegaliaNextBootNeedsRecoveryKey (the peer can still be asked); under single-node there is no

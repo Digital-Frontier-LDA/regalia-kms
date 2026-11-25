@@ -152,7 +152,9 @@ The rules:
 | `RegaliaTopologyProfileMismatch` | warning | the verified `regalia_topology_nodes` disagrees with the external inventory profile (single-node target reports a size other than one, or a multi-node target reports size one or less), for five minutes. |
 | `RegaliaMembershipBehindCollector` | warning | the node's `regalia_membership_epoch` is older than the highest epoch the audit collector already committed in its sync trail (the off-host witness, D1=A), for thirty minutes. The reference is the collector's, not the node's own telemetry: a rolled-back or withholding node cannot supply its own floor. |
 | `RegaliaAnchorBehindCollector` | warning | the same, from the collector's `esp-advances` witness: the node's TPM anchor lags what it has already shipped, for thirty minutes. |
-| `RegaliaCollectorEpochMissing` | warning | the blind state of the two comparisons above: a scraped single-node target whose collector reference is absent (collector not configured, its scrape job missing, or no witness committed yet) has no right-hand side and the behind rules silently cannot fire. Warns after fifteen minutes. |
+| `RegaliaCollectorEpochMissing` | warning | the blind state of `RegaliaMembershipBehindCollector`: a scraped single-node target whose collector membership reference is absent (collector not configured, its scrape job missing, no witness committed yet, or its sync stream unreadable) has no right-hand side and the rule silently cannot fire. Warns after fifteen minutes. |
+| `RegaliaCollectorAnchorEpochMissing` | warning | the same blind state for `RegaliaAnchorBehindCollector`: the anchor reference (`regalia_collector_witnessed_anchor_epoch`) is absent while the target is scraped (no esp-advances witness committed yet, or that stream unreadable), so the ESP rollback comparison cannot fire. Warns after fifteen minutes. |
+| `RegaliaCollectorWitnessUnreadable` | warning | `regalia_collector_witness_stream_readable{trail} == 0` for a scraped single-node target, for ten minutes: the collector holds the node's stream for that trail but cannot read it through its committed size (a vanished or truncated file, a disk error). It withholds that trail's epoch (a partial maximum could hide a rollback), so a missing-epoch rule above fires too; this one names the cause, and the collector's log names the stream file and the error. |
 | `RegaliaNextBootCannotRender` | warning | `regalia_esp_boot_renderable == 0` under single-node: the chain on the ESP leaves the initrd nothing to render, and there is no peer to ask, so the next boot cannot be unlocked without the owner's recovery path. |
 | `RegaliaNextBootNeedsOwner` | info | renamed from `RegaliaOwnerAssistedReboot` (design 4.5): `regalia_topology_nodes == 1` under single-node. Owner presence is required at each boot, including the next reboot. |
 | `RegaliaRestorePending` | critical | the boot guard (regalia-kms-dx7.26) seen from monitoring: `regalia_restore_pending == 1` means `/etc/regalia/restore-pending` holds etcd and the daemon SKIPPED at every boot (a replacement disk awaiting its restore). The page names the cause. |
@@ -172,7 +174,10 @@ inventory (section 2), so the two sides agree on it. The behind rules compare on
 `topology_profile` (the two labels the sides carry differently), so one-to-one on `instance`: a node is judged
 against its own off-host witness, and another node's witness cannot be its floor. While the collector is not
 configured or not scraping, the comparisons have no right-hand side and stay silent: that blind state is
-`RegaliaCollectorEpochMissing`. The monitoring service must configure the scrape job:
+`RegaliaCollectorEpochMissing` (membership) and `RegaliaCollectorAnchorEpochMissing` (anchor). The endpoint also
+publishes `regalia_collector_witness_stream_readable{site,trail}` (1 or 0) for each node trail it holds: a stream it
+cannot read through its committed size withholds that trail's epoch rather than publish a partial maximum, and
+`RegaliaCollectorWitnessUnreadable` names it. The monitoring service must configure the scrape job:
 
 ```yaml
 - job_name: regalia-collector
