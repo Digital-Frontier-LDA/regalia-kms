@@ -377,7 +377,10 @@ class Verification(unittest.TestCase):
 
     def measurement(self):
         with open(os.path.join(self.d, "state.json")) as f:
-            return json.load(f)["nodes"]["site-a"].get("measurement")
+            held = json.load(f)["nodes"]["site-a"].get("measurement")
+        if held is not None and "nonce" in held:
+            held = {k: v for k, v in held.items() if k != "nonce"}   # the nonce names the verification (dx7.8), not the sighting
+        return held
 
     def test_during_an_update_either_accepted_set_passes_and_the_verdict_names_it(self):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))

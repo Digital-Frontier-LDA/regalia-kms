@@ -594,8 +594,11 @@ def scenario(cluster, kms):
     header("6  not here yet: dx7.7 and dx7.8 extend this scenario")
     # TODO(regalia-kms-dx7.7): the owner-chain re-anchor and recovery (recount floor) on this one node, once that bead lands
     todo("regalia-kms-dx7.7: re-anchor a from the owner's chain plus the collector (not run; not counted)")
-    # TODO(regalia-kms-dx7.8): the rolling update under --planned-outage, retire evidence from the owner tool
-    todo("regalia-kms-dx7.8: a planned-outage measured-boot update of a (not run; not counted)")
+    # TODO(regalia-kms-dx7.10.2): the rolling update under --planned-outage, retire evidence from the owner tool. dx7.8
+    # landed the tools (update apply --planned-outage, owner.py attest-booted --nonce/--evidence, update
+    # quote-for-owner) and their unit tests; running the scenario here (stage a second approved image, the planned-
+    # outage update, attest-booted, retire-ready with the owner's state) is dx7.10.2's second AC
+    todo("regalia-kms-dx7.8: a planned-outage measured-boot update of a (not run; not counted; the tools are in, the scenario is dx7.10.2's)")
 
     header("7  #340: a's trails in the audit collector")
     wrong = cluster.audit_complete()

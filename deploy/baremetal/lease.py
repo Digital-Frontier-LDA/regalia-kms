@@ -399,7 +399,7 @@ EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
 PCR_VALUES = "pcr_values"
 
 
-def reattest(attester, evidence, node_id, session_id, manifest, subject, phase, binding=None):
+def reattest(attester, evidence, node_id, session_id, manifest, subject, phase, binding=None, on_verified=None):
     """`node_id` re-attests NOW, in boot session `session_id`, as the node the manifest names (`subject`, its
     entry). Freshness comes only from the nonce inside `evidence`, which the peer's attestation verifier
     issued and accepts once; nothing the requester chose is trusted for it. The peer's attestation verifier
@@ -410,7 +410,12 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject, phase, 
     `phase` is the boot phase the caller accepts the request from (attest.PHASES): "system" for a lease,
     "initrd" for an unlock. It has no default: where the node's measurements are per phase, the two
     requests are told apart by it and by nothing else. `binding` (bytes): the quote must also bind that value
-    (attest.transcript's sixth field, under its own label): a path enrolment key (#190)."""
+    (attest.transcript's sixth field, under its own label): a path enrolment key (#190). `on_verified` (a callable
+    taking (state, record, old_measurement), or None): runs once the quote has verified, INSIDE the verifier's
+    verify under its own state lock, AFTER the record's measurement is written (the new measurement is in
+    `record["measurement"]`) and BEFORE the record is saved: the owner's attest-booted stamp (ownerunlock's
+    attest_booted_stamp) is the one caller -- verification and the annotation it is bound to, atomic. Its Refused
+    stands: the verification is refused as if the quote itself had failed, the nonce having been consumed."""
     require(isinstance(phase, str) and phase in attest.PHASES, "the phase must be one of %s" % ", ".join(attest.PHASES))
     require(isinstance(evidence, dict), "the subject has not re-attested: no lease")
     membership.exact(evidence, EVIDENCE_KEYS + ((PCR_VALUES,) if PCR_VALUES in evidence else ()), "attestation evidence")
@@ -431,7 +436,8 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject, phase, 
         verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(session_id),
                                   *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS), phase=phase,
                                   **({"pcr_values": values} if values is not None else {}),   # absent: the call of before
-                                  **({"binding": binding} if binding is not None else {}))    # a path enrolment key (#190)
+                                  **({"binding": binding} if binding is not None else {}),    # a path enrolment key (#190)
+                                  **({"on_verified": on_verified} if on_verified is not None else {}))
     except attest.Refused as refusal:
         raise Refused("the subject's attestation is refused: %s" % refusal)
     # The AK the quote was actually verified under, reported from inside the verifier's own lock: an AK
