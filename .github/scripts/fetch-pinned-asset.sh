@@ -7,8 +7,8 @@
 # API (the pinned asset id of the SAME owner/repo, Accept: application/octet-stream, the job's
 # GH_TOKEN through a curl config fd, never argv).
 #
-# What retries (PR #784 GA review 6053675011): only an outage, meaning an HTTP 5xx, a 429, or no
-# HTTP answer at all (timeout, connection or TLS failure). Any other HTTP status, such as a 404
+# What retries (PR #784 GA review 6053675011): only an outage, meaning an HTTP 5xx, a 429, no
+# HTTP answer at all (timeout, connection or TLS failure), or a 200 whose body died mid-transfer. Any other HTTP status, such as a 404
 # (wrong pin) or a 403, is fatal at once, with no fallback: retrying it would only hide a broken pin.
 # The sha256 pin is the trust anchor: a mismatch from either host is fatal and never retried.
 #
@@ -50,6 +50,9 @@ attempt() {
     return 0
   fi
   rm -f "$part"
+  # A 200 whose body then died (curl exit 18, 28 or 56: a stall or a reset mid-transfer) is an
+  # outage, not an answer (#784 council review).
+  [ "$rc" -ne 0 ] && [ "$code" = 200 ] && code=000
   case $code in
     5??|429|000) echo "fetch-pinned-asset: $label: an outage (HTTP $code, curl exit $rc)" >&2; return 1 ;;
     *) echo "fetch-pinned-asset: $label answered HTTP $code (curl exit $rc): fatal, not retried, no fallback" >&2; exit 5 ;;
