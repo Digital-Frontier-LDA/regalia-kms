@@ -88,8 +88,10 @@ THE LOCAL LEASE LISTENER (regalia-kms-41n). A single-node host has no service tu
 regalia-sync issues its lease (lease.issue_self, with sync's own heartbeat state, TPM signer, RevisionFloor and
 self-attest verifier, as a peer's sync issues one under multi-node), and its regalia-admission asks for it the
 way it asks a peer, over an AF_UNIX socket in sync's state directory (LEASE_SOCKET). LocalServer answers it: the
-caller is identified by its kernel credentials (SO_PEERCRED: regalia-admission's uid, or "refused"), not by a
-tunnel key; the quote it must send over sync's nonce is the authorisation. Only lease-nonce and lease are
+caller is identified by its kernel credentials (SO_PEERCRED: regalia-admission's uid, or root's for the operator's
+`update quote-for-owner` and `update promote`, which run as root and prove the serving path up by a self-issued lease
+for this boot (regalia-kms-dx7.8); anybody else is "refused"), not by a tunnel key; the quote it must send over sync's
+nonce is the authorisation. Only lease-nonce and lease are
 answered there, under the single-node profile only, with the network listener's limits (serve(), MAX_REQUEST,
 DEADLINE, the rate buckets) and its trail.
 
@@ -878,6 +880,13 @@ def tcp_transport(host, port=PORT, source=None, timeout=DEADLINE):
 LEASE_SOCKET = "lease.sock"             # in sync's state directory (Node.path): regalia-sync's own, 0755
 SYNC_USER, ADMISSION_USER = "regalia-sync", "regalia-admission"
 LOCAL_OPS = ("lease-nonce", "lease")
+# regalia-kms-dx7.10.2: root, the operator at the node's console. update.py runs as root (it reads the TPM and writes the
+# firmware's boot variables), and under single-node its quote-for-owner and promote ask THIS listener for the node's own
+# lease for this boot (update.Host.lease_from: the proof the serving path came up). Answering only regalia-admission
+# refused both on every host ("uid:0 is not regalia-admission"; the one-node scenario's planned-outage update found it).
+# Root gains nothing it lacked: it can already read the admission file and reach the TPM; the lease still needs a fresh
+# quote over sync's nonce, and every answer is on sync's trail under the caller's uid.
+OPERATOR_UID = 0
 
 
 def local_source(uid):
@@ -914,9 +923,11 @@ class LocalServer(Server):
         view = _View(self.store)
         view.late = known["late"]
         self._spend(view.late, convergence._printable(source), "address")     # before the disk and the TPM, for anybody
-        # access control: only this node's admission service, by the kernel's word; anybody else learns nothing
-        require(source == local_source(self.admission_uid), "%s is not %s: the local lease listener answers it only" % (
-            convergence._printable(source), ADMISSION_USER))
+        # access control: only this node's admission service and root (the operator's update quote-for-owner and promote,
+        # OPERATOR_UID), by the kernel's word; anybody else learns nothing
+        require(source in (local_source(self.admission_uid), local_source(OPERATOR_UID)),
+                "%s is not %s (nor root, the operator's update): the local lease listener answers them only" % (
+                    convergence._printable(source), ADMISSION_USER))
         manifest = known["manifest"] = self._seen = view.load()
         require(manifest is not None, "this node holds no manifest")
         caller = known["caller"] = self.node_id
@@ -969,7 +980,7 @@ def bind_local(path, owner_uid, create=None):
             os.umask(old)
         # 0666 on purpose (#761's review): connect() to an AF_UNIX socket needs WRITE on it, and the caller,
         # regalia-admission, is not this socket's owner (regalia-sync), so 0644 would refuse it. The mode is not the
-        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's ("refused" for any other),
+        # access control: LocalServer answers only SO_PEERCRED uid == regalia-admission's or root's ("refused" for any other),
         # and a lease needs a fresh TPM quote over sync's nonce. Bound under umask 0177 first (never wider than meant),
         # only in a directory regalia-sync owns and nobody else can write (above); lease-nonce and lease only, and
         # only under the single-node profile.

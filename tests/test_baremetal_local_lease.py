@@ -4,7 +4,8 @@ multi-node), and its regalia-admission asks for it over sync's local lease liste
 a peer. dx7.3 had admission issue it, and admission cannot write sync's state (EACCES on attest-self.json.lock, then on
 freshness.json.lock: the one-node scenario's first CI runs, dx7.10). Held here:
 
-  * the listener answers only regalia-admission's uid (SO_PEERCRED), only lease-nonce and lease, only under single-node;
+  * the listener answers only regalia-admission's uid and root's (SO_PEERCRED; root: the operator's update quote-for-owner
+    and promote, dx7.10.2), only lease-nonce and lease, only under single-node;
   * the lease is lease.issue_self with sync's OWN freshness, signer and floor (fed at the request);
   * the socket is bound under umask 0177, then 0666, in a directory only regalia-sync can write, or not at all;
   * admission builds no issuer part of its own under single-node, and asks its own sync;
@@ -86,6 +87,17 @@ class TheLease(Local):
                 self.assertEqual(self.answer(ask(op, **fields), uid=ADMISSION_UID + 1), {"v": 1, "ok": False, "refused": "refused"})
         self.assertEqual((self.issued, self.attested), ([], []))
         self.assertIn("uid:%d is not regalia-admission" % (ADMISSION_UID + 1), self.trail[-1]["reason"])
+
+    def test_root_the_operator_s_update_gets_the_node_s_own_lease_too(self):
+        """regalia-kms-dx7.10.2: update quote-for-owner and promote run as root and prove the serving path up by the
+        node's own lease for this boot (update.Host.lease_from); the listener answered regalia-admission only, so both were
+        refused on every host. Root is answered, through the same issuance; any other uid still is not."""
+        self.assertEqual(self.answer(ask("lease-nonce", node_id="a"), uid=sync.OPERATOR_UID), {"v": 1, "ok": True, "nonce": "22" * 32})
+        self.assertEqual(self.answer(ask("lease", request=REQUEST, evidence=EVIDENCE), uid=sync.OPERATOR_UID),
+                         {"v": 1, "ok": True, "lease": "its own lease"})
+        self.assertEqual([(epoch, node_id) for epoch, node_id, *_ in self.issued], [(1, "a")])
+        self.assertEqual([(e["event"], e["outcome"]) for e in self.trail], [("sync-lease-nonce", "ALLOW"), ("sync-lease", "ALLOW")])
+        self.assertEqual(sync.OPERATOR_UID, 0)
 
     def test_an_operation_other_than_the_lease_s_is_refused_by_name(self):
         for op, fields in (("pull", {"summary": {}, "sequence": 0}), ("measurements", {"version": "p1"})):
@@ -202,6 +214,7 @@ class OverTheSocket(Local):
         self.assertEqual((got, quotes), ("its own lease", ["22" * 32]))
         self.assertEqual(len(self.issued), 1)
 
+    @unittest.skipIf(os.getuid() == sync.OPERATOR_UID, "as root the client is the operator, whom the listener answers")
     def test_any_other_uid_is_refused_on_the_wire(self):
         client = self.served(admission_uid=os.getuid() + 1)
         with self.assertRaises(m.Refused) as caught:
