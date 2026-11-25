@@ -1367,3 +1367,36 @@ site field `service_mesh.authority` are gone: a site file that still names one i
   `clear-pin-latch` (manifest.py's) removes it, after the credential is fixed.
 - **Time:** a node signs only under authenticated time (`authtime`, NTS-only chrony; fail closed, each
   transition on the time trail, #303).
+
+## 9. Staging TEST genesis material (regalia-kms-223)
+
+For a staging box only, never a production genesis. `deploy.baremetal` verifies the genesis records but does not
+write them; regalia-ceremony's `offline-keys.py` writes them with the sealed offline root. A staging box under a TEST
+root gets the same records from one reviewed tool, `deploy/baremetal/testgenesis.py`:
+
+    python3 -Es -m deploy.baremetal.testgenesis --root-key HEX --root-pk8 TEST-root.pk8.pem --out DIR --node-id NODE \
+        --site SITE --host-ipv4 ... --prefix N --gateway ... --nic-mac ... --boot-address ... \
+        --owner-underlay ... --owner-address ... --client-cidr ... --monitoring-cidr ... --admin-cidr ... \
+        --audit CIDR:tcp:PORT --nts NAME=CIDR --nts NAME=CIDR \
+        --build-record SIGNED-RECORD.json --pcrs PCRS.json --tpm-firmware-version HEX16 --device ROOT-VOLUME
+
+It writes into DIR (made 0700, or an existing empty directory; every file 0600, every name `TEST-…`): the card
+ceremony record and the root's signing-state directory (TM-3), the offline-keys record with K_A (TM-4), the
+ownerauth record and the node's value (TM-5), the owner, release and SSH keys as plain TEST key files (TM-6), the
+owner's WireGuard pair, its public key also in hex (TM-7), the single-node site file (TM-8), the measurements
+document built with `uki.measurement_set` from the signed build record, the operator's PCR 0-7 file and PCR 12 from
+the site credential (TM-9), a lockout value (TM-10), and `TEST-SHA256SUMS`. Before it reports success it reads every
+record back and checks it with the existing verifiers: `manifest.card_record_keys`, `cardrecord.verify`,
+`manifest.offline_keys_record`, `ownerauth.verify`, `sitecfg.load` and `measurements.load`. It makes no SoftHSM, HSM,
+TPM, gpg or network call. `TEST-README.txt` lists the stand-ins (OpenPGP fingerprints and envelope digests, unless
+`--owner-recipient` names real TEST keys) and how to load the owner key files onto a TEST token.
+
+**What it refuses**, before the private key is read or anything is written:
+- a real or ceremony root (`testgenesis.REAL_ROOTS`: the roots regalia-ceremony's writers made for this
+  repository's vectors). It is refused even if it is also on the allow-list. When a production root exists, its id
+  goes on this list in the same change that records it;
+- any root that is not on the explicit TEST allow-list (`testgenesis.TEST_ROOTS`, the dx7-14 staging root
+  `6df81ed70ee55731…`), an unknown root included. The command line cannot extend the list;
+- a `--root-pk8` that is not the named root's key, is not mode 0600, or is a link;
+- a signed build record whose image pins another root (`initrd_review.root_key`);
+- a `--out` that is not empty, is a link, or belongs to another user. Nothing is ever written outside `--out`.
