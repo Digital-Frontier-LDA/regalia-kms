@@ -14,7 +14,8 @@ BENCH = ROOT / "tools" / "bench" / "requirements.txt"
 
 def requirements(path):
     """{name: (version, [sha256 hashes])}, from a pip requirements file with backslash continuations. A requirement that
-    is not `name==version` maps to version None, which the tests refuse."""
+    is not `name==version` maps to version None, which the tests refuse. A name given twice (after normalisation) is
+    refused (ValueError), as pip refuses a double requirement: a later valid line must not hide an earlier unpinned one."""
     text = re.sub(r"\\\n", " ", path.read_text())
     found = {}
     for line in text.splitlines():
@@ -24,6 +25,8 @@ def requirements(path):
         spec, *rest = line.split()
         m = re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", spec)
         name = re.sub(r"[-_.]+", "-", (m.group(1) if m else re.split(r"[<>=!~\[ ;]", spec)[0])).lower()
+        if name in found:
+            raise ValueError("%s: %s is required twice" % (path.name, name))
         found[name] = (m.group(2) if m else None, re.findall(r"--hash=sha256:([0-9a-f]{64})\b", " ".join(rest)))
     return found
 
@@ -78,6 +81,11 @@ class TheParserRefusesWhatPipWould(unittest.TestCase):
 
     def test_names_are_normalised(self):
         self.assertEqual(list(self.parse("PyYAML==6.0.3 --hash=sha256:%s\n" % ("b" * 64))), ["pyyaml"])
+
+    def test_a_name_given_twice_is_refused(self):
+        """An unpinned, unhashed PyYAML>=6 before a valid pyyaml==6.0.3 must not be overwritten by it (CodeRabbit, #790)."""
+        with self.assertRaisesRegex(ValueError, "pyyaml is required twice"):
+            self.parse("PyYAML>=6\npyyaml==6.0.3 --hash=sha256:%s\n" % ("c" * 64))
 
 
 if __name__ == "__main__":
