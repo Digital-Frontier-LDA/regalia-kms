@@ -1,0 +1,3158 @@
+{
+  "schemaVersion": 1,
+  "kind": "historical-case-proof-correction-proposal",
+  "status": "proposed-unapproved-inactive",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "historicalRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+  "historicalTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "legacyEnvelopeValidForCurrentAggregate": false,
+  "historicalEnvelopeSha256": "e72c210509b613b170b93652a1ae39372375781785ffe3ed2e45315e65cc3096",
+  "historicalEnvelopeAggregateSha256": "c1e2817e441ab99375c92bea5f95a9d5666edf7d1eb18d799db07cd0fd5c0d8b",
+  "inputs": {
+    "originalFacts": {
+      "kind": "external-historical-artifact",
+      "artifactId": "openspec-historical-proof/original-facts-v1",
+      "sha256": "e72c210509b613b170b93652a1ae39372375781785ffe3ed2e45315e65cc3096"
+    },
+    "primaryHostedSteps": {
+      "kind": "external-historical-artifact",
+      "artifactId": "openspec-historical-proof/hosted-job-step-metadata",
+      "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f"
+    },
+    "auditFindings": {
+      "kind": "external-historical-artifact",
+      "artifactId": "openspec-historical-proof/integration-audit-findings",
+      "sha256": "53f278e67f7e634ab55e3d952d3bfd7721779162c779a0d2694d7e80f78fba83"
+    },
+    "runtimeRaw": {
+      "kind": "repository-relative",
+      "path": "openspec/coverage/runtime-interface-ledger.json",
+      "sha256": "797c5a479e7721a4c4101ba5b9b96db51583ed87610384b2114e44ed429f4a07"
+    },
+    "canonicalLedger": {
+      "kind": "repository-relative",
+      "path": "openspec/coverage/reconciled-cases.json",
+      "sha256": "4115dd43e27fdc4de4ac8095a832ea06d5ceaa7d435d7361e121106e1d4eb1a2"
+    }
+  },
+  "immutableLimits": {
+    "path": "docs/single-node-limits.md",
+    "sha256": "5a496c71c57747ff86fa3596244a581fc401d6f0caf30a3cc31ae43a64885f54"
+  },
+  "deltaFiles": {
+    "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md": {
+      "beforeSha256": "4d4a70a0e8b55160524d05c8671013542b26031526f3c95c3f640d5d4cfe8ef0",
+      "afterSha256": "518b9a7d0b4299c12c42311c0b02dda29fd5cfa6faa1905a3a46d9819a808dc6",
+      "originalBytesExactlyRecoverable": true,
+      "addedScenarios": 1,
+      "addedRequirements": 0
+    },
+    "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md": {
+      "beforeSha256": "410e19429eec6c54c46cf34892e3838d728334a612f7e8a8b47b2c6fa0812f8b",
+      "afterSha256": "31d63b0f999f6feb900cf70a4dbfd56698d2f1fa3f4123fd9ab018de6953f5c5",
+      "originalBytesExactlyRecoverable": true,
+      "addedScenarios": 1,
+      "addedRequirements": 0
+    },
+    "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md": {
+      "beforeSha256": "bcd33507dea9d7195b75e68c419475d7922b99247c0f66ca00350c2cf427a6ae",
+      "afterSha256": "014b8cf94f2dcccd7452695be167ae0e00ac3d5f0f57061ed728b5f908151bcb",
+      "originalBytesExactlyRecoverable": true,
+      "addedScenarios": 1,
+      "addedRequirements": 0
+    },
+    "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md": {
+      "beforeSha256": "438f3251c2214f185faea956c455e0b8795b79c81cc5f20288df7fc2d52e9c7c",
+      "afterSha256": "55f01169e9c3ed6986a7e19c8f443d50b7d7c4da2d6f9fd6945993344af7ad84",
+      "originalBytesExactlyRecoverable": true,
+      "addedScenarios": 2,
+      "addedRequirements": 0
+    }
+  },
+  "caseCount": 9,
+  "artifactChecksums": {
+    "artifacts/one-node-137006823728.log": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+    "artifacts/ci-gate-137013751924.log": "5feecc237c849786ebd90df10b9b1591886d3701436a66cb8fe80cee594c4abb"
+  },
+  "cases": [
+    {
+      "caseId": "HTTP.sign.verified-signature-single",
+      "oldRawCaseSha256": "3044e4400d5976a820f70949f4337be0bdf8ddd2dadf8159b3850fe6e1759917",
+      "oldCanonicalCaseSha256": "34534ecd07b7e5f7ea66319598b7d5741341e407ead8904bd28c25db17314a47",
+      "originalInput": "The hosted single-node fixture is ready under its authenticated lease and submits a sign request.",
+      "originalOutcome": "HTTP 200 carries the signature and the fixture verifies it against the token's public key.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+          "requirementId": "KMS-API-003",
+          "scenario": "Operation succeeds",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "status == 200 and kms.verifies",
+          "line": 508,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Operation succeeds also covers correlation/no-store and structured fields.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "Signed response verifies against the configured key",
+        "relation": "direct",
+        "proposedContractScopedSha256": "f1f22922602dfcdd870b7165b32aef62e9d0f967d2bd4ff219616d25ed7c6c7f",
+        "proposedScenarioScopedSha256": "8c10d3f06dce8b4d09ac5910917409ea1ede43d29b32ff87dcb52f6f477ae79d"
+      },
+      "priorBroaderScenarioProof": "subset-only; leave original contract and scenario in place",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Configured SoftHSM key and independently read public key; admitted TLS fixture and sign request.",
+          "anchors": [
+            {
+              "line": 118,
+              "text": "def token(self):"
+            },
+            {
+              "line": 124,
+              "text": "tool = [\"pkcs11-tool\", \"--module\", SOFTHSM, \"--token-label\", \"regalia-e2e1\"]"
+            },
+            {
+              "line": 125,
+              "text": "sh(*(tool + [\"--login\", \"--pin\", \"env:P\", \"--keypairgen\", \"--key-type\", \"EC:prime256v1\", \"--usage-sign\", \"--label\", \"regalia-e2e1\", \"--id\", \"01\"]),"
+            },
+            {
+              "line": 126,
+              "text": "env=dict(self.env, P=self.pin))"
+            },
+            {
+              "line": 127,
+              "text": "sh(*(tool + [\"--read-object\", \"--type\", \"pubkey\", \"--id\", \"01\", \"--output-file\", str(self.d / \"pub.der\")]), env=self.env)"
+            },
+            {
+              "line": 128,
+              "text": "sh(\"openssl\", \"pkey\", \"-pubin\", \"-inform\", \"DER\", \"-in\", str(self.d / \"pub.der\"), \"-out\", str(self.d / \"pub.pem\"))"
+            },
+            {
+              "line": 179,
+              "text": "\"runtime_admission\": \"required\", \"runtime_admission_path\": str(n.run / \"admission\" / \"admission.json\"),"
+            },
+            {
+              "line": 180,
+              "text": "\"runtime_admission_owner\": ADMISSION_USER, \"node_id\": name, \"boot_session_path\": str(n.run / \"boot-session\"),"
+            },
+            {
+              "line": 181,
+              "text": "\"membership_chain_path\": str(n.state / node.PUBLISHED), \"membership_chain_owner\": \"regalia-sync\","
+            },
+            {
+              "line": 182,
+              "text": "\"membership_root_key_path\": str(etc / \"root-key.json\")},"
+            },
+            {
+              "line": 188,
+              "text": "context = ssl.create_default_context(cafile=str(etc / \"ca.pem\"))"
+            },
+            {
+              "line": 189,
+              "text": "context.load_cert_chain(str(etc / \"client.pem\"), str(etc / \"client.key\"))"
+            },
+            {
+              "line": 506,
+              "text": "message = b\"one node signs\""
+            },
+            {
+              "line": 507,
+              "text": "status, answer, nonce = kms.sign(message)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_call",
+          "meaning": "Send the sign route request and invoke the verifier on the response and submitted message.",
+          "anchors": [
+            {
+              "line": 255,
+              "text": "def sign(self, message, nonce=None, **request_options):"
+            },
+            {
+              "line": 256,
+              "text": "nonce = nonce or \"e2e1-nonce-\" + os.urandom(12).hex()"
+            },
+            {
+              "line": 257,
+              "text": "expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=240)).strftime(\"%Y-%m-%dT%H:%M:%SZ\")"
+            },
+            {
+              "line": 258,
+              "text": "status, answer = self.call(\"POST\", \"/v1/operations/sign\", {"
+            },
+            {
+              "line": 259,
+              "text": "\"object_id\": OBJECT, \"context\": {\"environment\": \"staging\", \"purpose\": \"e2e-signing\", \"expires_at\": expires, \"nonce\": nonce},"
+            },
+            {
+              "line": 260,
+              "text": "\"content_type\": \"application/vnd.regalia.digest\", \"payload_base64\": base64.b64encode(hashlib.sha256(message).digest()).decode()}, nonce, **request_options)"
+            },
+            {
+              "line": 261,
+              "text": "return status, answer, nonce"
+            },
+            {
+              "line": 507,
+              "text": "status, answer, nonce = kms.sign(message)"
+            },
+            {
+              "line": 508,
+              "text": "ok(status == 200 and kms.verifies(message, answer), \"a sign request is served, and the signature verifies under the token's key\","
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "Decode the result, check exact raw signature length, and verify the signature for the message with OpenSSL under the saved public key.",
+          "anchors": [
+            {
+              "line": 263,
+              "text": "def verifies(self, message, answer):"
+            },
+            {
+              "line": 264,
+              "text": "try:"
+            },
+            {
+              "line": 265,
+              "text": "raw = base64.b64decode(answer[\"result_base64\"], validate=True)"
+            },
+            {
+              "line": 266,
+              "text": "except (KeyError, TypeError, ValueError):"
+            },
+            {
+              "line": 267,
+              "text": "return False"
+            },
+            {
+              "line": 268,
+              "text": ""
+            },
+            {
+              "line": 269,
+              "text": "def integer(value):"
+            },
+            {
+              "line": 270,
+              "text": "value = value.lstrip(b\"\\x00\") or b\"\\x00\""
+            },
+            {
+              "line": 271,
+              "text": "value = (b\"\\x00\" + value) if value[0] & 0x80 else value"
+            },
+            {
+              "line": 272,
+              "text": "return b\"\\x02\" + bytes([len(value)]) + value"
+            },
+            {
+              "line": 273,
+              "text": "body = integer(raw[:32]) + integer(raw[32:])"
+            },
+            {
+              "line": 274,
+              "text": "(self.d / \"sig.der\").write_bytes(b\"\\x30\" + bytes([len(body)]) + body)"
+            },
+            {
+              "line": 275,
+              "text": "(self.d / \"message\").write_bytes(message)"
+            },
+            {
+              "line": 276,
+              "text": "return len(raw) == 64 and subprocess.run([\"openssl\", \"dgst\", \"-sha256\", \"-verify\", str(self.d / \"pub.pem\"), \"-signature\","
+            },
+            {
+              "line": 277,
+              "text": "str(self.d / \"sig.der\"), str(self.d / \"message\")], capture_output=True).returncode == 0"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "Both HTTP 200 and signature verification must be true.",
+          "anchors": [
+            {
+              "line": 508,
+              "text": "ok(status == 200 and kms.verifies(message, answer), \"a sign request is served, and the signature verifies under the token's key\","
+            }
+          ]
+        },
+        {
+          "path": "internal/api/handler.go",
+          "fileSha256": "a3ee5966fe1c2ca7744188b1295e9a3d7a9c6f68b6072803f79ba486b872a347",
+          "role": "enforcing_source",
+          "meaning": "Response construction; existence of other metadata and no-store is not the case assertion.",
+          "anchors": [
+            {
+              "line": 215,
+              "text": "writer.Header().Set(\"Cache-Control\", \"no-store\")"
+            },
+            {
+              "line": 216,
+              "text": "_ = json.NewEncoder(writer).Encode(resultDocument{"
+            },
+            {
+              "line": 217,
+              "text": "RequestID: requestID, OperationID: result.OperationID, ObjectID: input.ObjectID,"
+            },
+            {
+              "line": 218,
+              "text": "ContentType: result.ContentType, Result: base64.StdEncoding.EncodeToString(result.Data),"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "Only the successful authenticated single-node sign request and actual P-256 token-key signature verification.",
+      "outsideProof": "No attestation of response headers, all response metadata, other routes or physical key custody.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 427,
+        "originalLastLine": 427,
+        "ranges": [
+          {
+            "firstLine": 424,
+            "lastLine": 425,
+            "claim": "A self-issued single-mode lease and only self renewal set the fixture precondition.",
+            "text": [
+              "  PASS a's admission holds a lease a issued itself, in mode single",
+              "  PASS every lease a renewed is its own (admission-renew ALLOW, peer a)"
+            ]
+          },
+          {
+            "firstLine": 426,
+            "lastLine": 426,
+            "claim": "The real daemon is ready on its single-node admission.",
+            "text": [
+              "  PASS the KMS daemon is READY on a's admission, judged against a's single-node chain"
+            ]
+          },
+          {
+            "firstLine": 427,
+            "lastLine": 427,
+            "claim": "The sign request succeeds and the response signature verifies under the token key.",
+            "text": [
+              "  PASS a sign request is served, and the signature verifies under the token's key"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "HTTP.sign.replay-after-restart",
+      "oldRawCaseSha256": "c1df800afeb88eb4c1bb23890ff09bb4363869f65bbf38594978701a89f35ff7",
+      "oldCanonicalCaseSha256": "836d072fd3d87366f1015b9accc9a353c859a06e4e8e68e01521b08f11890511",
+      "originalInput": "The daemon restarts with the intact journal after a completed reservation.",
+      "originalOutcome": "The prior nonce remains spent and the request returns conflict.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+          "requirementId": "KMS-STATE-001",
+          "scenario": "Restart preserves spend",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "back == 200 and restarted == 409",
+          "line": 516,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Restart preserves spend also asserts UTC-day quota retention.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "A spent signing nonce remains spent after daemon restart",
+        "relation": "direct",
+        "proposedContractScopedSha256": "b4ac9f374d91fde82abc89dc0c391f52d49a903d86ccbb5dfd1c14255a5ef028",
+        "proposedScenarioScopedSha256": "60f372d194a6b6b438abc48ed6c5e435fdd8199d788fd2c59b9a847dea736b3c"
+      },
+      "priorBroaderScenarioProof": "subset-only; leave original contract and scenario in place",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "positive_control",
+          "meaning": "Successful first signing and reuse conflict before restart distinguish a spent nonce from a broken first request.",
+          "anchors": [
+            {
+              "line": 506,
+              "text": "message = b\"one node signs\""
+            },
+            {
+              "line": 507,
+              "text": "status, answer, nonce = kms.sign(message)"
+            },
+            {
+              "line": 508,
+              "text": "ok(status == 200 and kms.verifies(message, answer), \"a sign request is served, and the signature verifies under the token's key\","
+            },
+            {
+              "line": 510,
+              "text": "again, answer2, _ = kms.sign(message, nonce)"
+            },
+            {
+              "line": 511,
+              "text": "ok(again == 409, \"the same nonce again is refused (409): the spend is held\", \"%s %s\" % (again, answer2))"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Stop and start the real daemon; reuse config, journal and nonce.",
+          "anchors": [
+            {
+              "line": 173,
+              "text": "\"policy_path\": str(etc / \"policy.json\"), \"policy_state_path\": str(self.state / \"policy-state.jsonl\"),"
+            },
+            {
+              "line": 201,
+              "text": "self.daemon = subprocess.Popen([os.environ[\"REGALIA_KMS_BIN\"], \"-config\", str(self.etc / \"config.json\")], env=self.env,"
+            },
+            {
+              "line": 202,
+              "text": "stdout=open(self.d / \"daemon.log\", \"a\"), stderr=subprocess.STDOUT)"
+            },
+            {
+              "line": 205,
+              "text": "def stop_daemon(self):"
+            },
+            {
+              "line": 206,
+              "text": "self.daemon.send_signal(signal.SIGTERM)"
+            },
+            {
+              "line": 207,
+              "text": "try:"
+            },
+            {
+              "line": 208,
+              "text": "self.daemon.wait(timeout=20)"
+            },
+            {
+              "line": 209,
+              "text": "except subprocess.TimeoutExpired:"
+            },
+            {
+              "line": 210,
+              "text": "self.daemon.kill()"
+            },
+            {
+              "line": 211,
+              "text": "self.daemon.wait()"
+            },
+            {
+              "line": 512,
+              "text": "kms.stop_daemon()"
+            },
+            {
+              "line": 513,
+              "text": "kms.start()"
+            },
+            {
+              "line": 514,
+              "text": "back = kms.wait_ready(200, 90)"
+            },
+            {
+              "line": 515,
+              "text": "restarted, answer3, _ = kms.sign(message, nonce)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "The restarted daemon must be ready and the same nonce must return HTTP 409.",
+          "anchors": [
+            {
+              "line": 514,
+              "text": "back = kms.wait_ready(200, 90)"
+            },
+            {
+              "line": 515,
+              "text": "restarted, answer3, _ = kms.sign(message, nonce)"
+            },
+            {
+              "line": 516,
+              "text": "ok(back == 200 and restarted == 409, \"after a daemon restart the spent nonce is still refused (409): the spend is state\","
+            }
+          ]
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "fileSha256": "6077e4ae6bf22ecde5b0350e1b823a0d2875a04dede500355de32e6b9d1cfea0",
+          "role": "enforcing_source",
+          "meaning": "Maps policy replay to conflict.",
+          "anchors": [
+            {
+              "line": 341,
+              "text": "} else if decision.Code == policy.CodeReplay {"
+            },
+            {
+              "line": 342,
+              "text": "code, status = \"CONFLICT\", http.StatusConflict"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "A previously successful, reused signing nonce still returns 409 after a ready real daemon restart with its existing journal.",
+      "outsideProof": "No quota, cause code, denial envelope, crash/disk loss or corruption coverage.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 429,
+        "originalLastLine": 429,
+        "ranges": [
+          {
+            "firstLine": 427,
+            "lastLine": 427,
+            "claim": "The original signing request succeeded and its signature verified.",
+            "text": [
+              "  PASS a sign request is served, and the signature verifies under the token's key"
+            ]
+          },
+          {
+            "firstLine": 428,
+            "lastLine": 428,
+            "claim": "Before restart the same nonce is refused with 409.",
+            "text": [
+              "  PASS the same nonce again is refused (409): the spend is held"
+            ]
+          },
+          {
+            "firstLine": 429,
+            "lastLine": 429,
+            "claim": "After daemon restart the same nonce is still refused with 409.",
+            "text": [
+              "  PASS after a daemon restart the spent nonce is still refused (409): the spend is state"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "HTTP.ready.self-lease-real-daemon",
+      "oldRawCaseSha256": "48f1b2fcb7c55bde09b253d93c8e9bcdd0fafaf4ace7195c86108336b3ac4c0a",
+      "oldCanonicalCaseSha256": "68387e769e4ecaa8b13037352f0f5440bbdbf55c3b15baa0c9d5cac72544df0f",
+      "originalInput": "The software fixture starts a daemon whose chain allows its self-issued single admission.",
+      "originalOutcome": "The authenticated readiness probe reaches HTTP 200.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+          "requirementId": "KMS-RUNTIME-002",
+          "scenario": "Admission active",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "ready == 200",
+          "line": 505,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Admission active asserts authorized output, not readiness.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+        "requirementId": "KMS-RUNTIME-002",
+        "scenario": "Ready under a current single-node self-lease",
+        "relation": "direct",
+        "proposedContractScopedSha256": "3e534abb5c5f16da9313c9a2fa07f0910d7117e23f1682c0b98ee438c27fee66",
+        "proposedScenarioScopedSha256": "97f78aa20a35f2a898f714bafa75ba102e92b80d82871a8c18bbd98724d18dd0"
+      },
+      "priorBroaderScenarioProof": "subset-only; leave original contract and scenario in place",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Requires admission from the node’s published chain and uses the configured client TLS context.",
+          "anchors": [
+            {
+              "line": 179,
+              "text": "\"runtime_admission\": \"required\", \"runtime_admission_path\": str(n.run / \"admission\" / \"admission.json\"),"
+            },
+            {
+              "line": 180,
+              "text": "\"runtime_admission_owner\": ADMISSION_USER, \"node_id\": name, \"boot_session_path\": str(n.run / \"boot-session\"),"
+            },
+            {
+              "line": 181,
+              "text": "\"membership_chain_path\": str(n.state / node.PUBLISHED), \"membership_chain_owner\": \"regalia-sync\","
+            },
+            {
+              "line": 182,
+              "text": "\"membership_root_key_path\": str(etc / \"root-key.json\")},"
+            },
+            {
+              "line": 188,
+              "text": "context = ssl.create_default_context(cafile=str(etc / \"ca.pem\"))"
+            },
+            {
+              "line": 189,
+              "text": "context.load_cert_chain(str(etc / \"client.pem\"), str(etc / \"client.key\"))"
+            },
+            {
+              "line": 495,
+              "text": "cluster.start(\"a\", SERVICES)"
+            },
+            {
+              "line": 496,
+              "text": "serving = until(lambda: cluster.lease(\"a\"), 180, 3)"
+            },
+            {
+              "line": 502,
+              "text": "kms.configure(cluster, \"a\")"
+            },
+            {
+              "line": 503,
+              "text": "kms.start()"
+            },
+            {
+              "line": 632,
+              "text": "cluster = threenode.Cluster(work, audit=True, topology=membership.SINGLE_NODE, hsm_serials={\"a\": [kms.token()]})"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "positive_control",
+          "meaning": "Requires a self-issued lease in single mode and renewals only for the node itself.",
+          "anchors": [
+            {
+              "line": 497,
+              "text": "ok(bool(serving) and serving.get(\"mode\") == \"single\" and cluster.lease_issuer(\"a\") == \"a\","
+            },
+            {
+              "line": 500,
+              "text": "own = [e for e in admission_trail(cluster, \"a\") if e.get(\"event\") == \"admission-renew\" and e.get(\"outcome\") == \"ALLOW\"]"
+            },
+            {
+              "line": 501,
+              "text": "ok(bool(own) and all(e.get(\"peer\") == \"a\" for e in own), \"every lease a renewed is its own (admission-renew ALLOW, peer a)\", own[-3:])"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_call",
+          "meaning": "Wait for the real daemon's ready endpoint.",
+          "anchors": [
+            {
+              "line": 504,
+              "text": "ready = kms.wait_ready(200, 90)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "Calls GET /v1/health/ready over the configured HTTPS context and observes status; distinguishes daemon exit.",
+          "anchors": [
+            {
+              "line": 223,
+              "text": "def call(self, method, path, body=None, nonce=None, *, request_id=None, timeout=60):"
+            },
+            {
+              "line": 224,
+              "text": "connection = http.client.HTTPSConnection(\"127.0.0.1\", PORT, context=self.context, timeout=timeout)"
+            },
+            {
+              "line": 229,
+              "text": "connection.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)"
+            },
+            {
+              "line": 230,
+              "text": "response = connection.getresponse()"
+            },
+            {
+              "line": 235,
+              "text": "return response.status, json.loads(payload) if payload else {}"
+            },
+            {
+              "line": 239,
+              "text": "def ready(self):"
+            },
+            {
+              "line": 240,
+              "text": "try:"
+            },
+            {
+              "line": 241,
+              "text": "return self.call(\"GET\", \"/v1/health/ready\")[0]"
+            },
+            {
+              "line": 245,
+              "text": "def wait_ready(self, want, seconds):"
+            },
+            {
+              "line": 246,
+              "text": "deadline = time.monotonic() + seconds"
+            },
+            {
+              "line": 247,
+              "text": "while time.monotonic() < deadline:"
+            },
+            {
+              "line": 248,
+              "text": "if self.daemon.poll() is not None:"
+            },
+            {
+              "line": 249,
+              "text": "return \"the daemon exited (%s)\" % self.daemon.returncode"
+            },
+            {
+              "line": 250,
+              "text": "if self.ready() == want:"
+            },
+            {
+              "line": 251,
+              "text": "return want"
+            },
+            {
+              "line": 253,
+              "text": "return self.ready()"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "HTTP 200 is the positive readiness observation.",
+          "anchors": [
+            {
+              "line": 505,
+              "text": "ok(ready == 200, \"the KMS daemon is READY on a's admission, judged against a's single-node chain\", \"%s | %s\" % (ready, kms.log()))"
+            }
+          ]
+        },
+        {
+          "path": "internal/server/health.go",
+          "fileSha256": "a7ea223ee35ae42d2f8273e4a2dd885838624cfc0682f8df22ae4859e46f2e09",
+          "role": "enforcing_source",
+          "meaning": "Readiness response and conjunction of required probes.",
+          "anchors": [
+            {
+              "line": 247,
+              "text": "case \"/v1/health/ready\":"
+            },
+            {
+              "line": 248,
+              "text": "if request.Method != http.MethodGet {"
+            },
+            {
+              "line": 249,
+              "text": "writer.WriteHeader(http.StatusMethodNotAllowed)"
+            },
+            {
+              "line": 252,
+              "text": "if !handler.ready(request.Context()) {"
+            },
+            {
+              "line": 253,
+              "text": "writeStatus(writer, http.StatusServiceUnavailable, \"unavailable\")"
+            },
+            {
+              "line": 254,
+              "text": "return"
+            },
+            {
+              "line": 256,
+              "text": "writeStatus(writer, http.StatusOK, \"ok\")"
+            },
+            {
+              "line": 262,
+              "text": "func (handler *Handler) ready(ctx context.Context) bool {"
+            },
+            {
+              "line": 263,
+              "text": "ready := len(handler.probes) > 0"
+            },
+            {
+              "line": 265,
+              "text": "for _, probe := range handler.probes {"
+            },
+            {
+              "line": 270,
+              "text": "if probe == nil || !probeReady(ctx, probe) {"
+            },
+            {
+              "line": 271,
+              "text": "ready = false"
+            },
+            {
+              "line": 276,
+              "text": "handler.noteReadiness(ready)"
+            },
+            {
+              "line": 277,
+              "text": "return ready"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "The ready endpoint returns HTTP 200 with valid self-issued single-mode lease in the configured fixture.",
+      "outsideProof": "Readiness does not establish signing or every other dependency/negative arm.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 426,
+        "originalLastLine": 426,
+        "ranges": [
+          {
+            "firstLine": 424,
+            "lastLine": 424,
+            "claim": "The admission is a self-issued single-mode lease.",
+            "text": [
+              "  PASS a's admission holds a lease a issued itself, in mode single"
+            ]
+          },
+          {
+            "firstLine": 425,
+            "lastLine": 425,
+            "claim": "The recorded allowance is only for the node itself.",
+            "text": [
+              "  PASS every lease a renewed is its own (admission-renew ALLOW, peer a)"
+            ]
+          },
+          {
+            "firstLine": 426,
+            "lastLine": 426,
+            "claim": "The authenticated readiness case observed HTTP 200.",
+            "text": [
+              "  PASS the KMS daemon is READY on a's admission, judged against a's single-node chain"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "KMS.admission.real-revocation",
+      "oldRawCaseSha256": "f05e35f8c805eb2d67610fcbbe9d99c37e331ce470682f2b95229bb6720f1225",
+      "oldCanonicalCaseSha256": "f646d2017a1d333423e9801adf4e853cad798cfe4ef9b3d1710289b0a76f3144",
+      "originalInput": "After a signed owner revocation, the live fixture observes zero serving admission before a correlated sign refusal.",
+      "originalOutcome": "The daemon refuses signing within the lease and its audit identifies not-admitted.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+          "requirementId": "KMS-RUNTIME-002",
+          "scenario": "Admission absent or expires",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "a publishes zero admission",
+          "line": 579,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Admission absent or expires combines entry, queued and executing variants.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+        "requirementId": "KMS-RUNTIME-002",
+        "scenario": "Signing is refused after observed non-serving admission",
+        "relation": "direct",
+        "proposedContractScopedSha256": "3e534abb5c5f16da9313c9a2fa07f0910d7117e23f1682c0b98ee438c27fee66",
+        "proposedScenarioScopedSha256": "54f2b83fb88afd804fc39eaa2e76151fe0493dfbbbbe3c26ff03f16c2e9e44e5"
+      },
+      "priorBroaderScenarioProof": "subset-only; leave original contract and scenario in place",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Valid prior lease, then monotonic start before owner revocation.",
+          "anchors": [
+            {
+              "line": 566,
+              "text": "phrase = revoke.shutdown_phrase(\"a\")"
+            },
+            {
+              "line": 567,
+              "text": "previous = cluster.lease(\"a\")"
+            },
+            {
+              "line": 568,
+              "text": "if not previous:"
+            },
+            {
+              "line": 569,
+              "text": "raise RuntimeError(\"a has no serving admission before revocation\")"
+            },
+            {
+              "line": 570,
+              "text": "admission_path = cluster.nodes[\"a\"].run / \"admission\" / \"admission.json\""
+            },
+            {
+              "line": 572,
+              "text": "started = time.monotonic()                 # conservatively before the commit operation"
+            },
+            {
+              "line": 573,
+              "text": "cluster.revoke_by_owner(\"a\", \"a\", \"REVOKED_STOLEN\", reason, shutdown=phrase)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "positive_control",
+          "meaning": "Requires epoch two, typed shutdown phrase and owner signers in the commit.",
+          "anchors": [
+            {
+              "line": 574,
+              "text": "commits = [e for e in cluster.trail(\"a\") if e.get(\"event\") == \"revoke-commit\" and e.get(\"outcome\") == \"ALLOW\"]"
+            },
+            {
+              "line": 575,
+              "text": "ok(cluster.held_epoch(\"a\") == 2 and commits and commits[-1].get(\"shutdown\") == phrase and commits[-1].get(\"signers\") == [membership.OWNER],"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_call",
+          "meaning": "Reads the trusted zero-admission document and observes a subsequent signing refusal.",
+          "anchors": [
+            {
+              "line": 577,
+              "text": "took, stop_took = observe_shutdown("
+            },
+            {
+              "line": 578,
+              "text": "kms, lambda: non_serving_admission(admission_path, cluster.manifest, previous), started, lease.MAX_LIFETIME)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "Validates the same descriptor's type, ownership and mode; validates document fields, boot/session, tip and explicit non-serving state.",
+          "anchors": [
+            {
+              "line": 314,
+              "text": "def read_trusted_admission(path, owner_uid):"
+            },
+            {
+              "line": 315,
+              "text": "\"\"\"Mirror readTrustedStat and ancestorsTrusted in the daemon's admission reader.\"\"\""
+            },
+            {
+              "line": 316,
+              "text": "path = pathlib.Path(os.path.abspath(path))"
+            },
+            {
+              "line": 317,
+              "text": "trusted = {0, owner_uid}"
+            },
+            {
+              "line": 318,
+              "text": "directory = path.parent"
+            },
+            {
+              "line": 319,
+              "text": "entry = directory.lstat()"
+            },
+            {
+              "line": 320,
+              "text": "membership.require(stat.S_ISDIR(entry.st_mode) and entry.st_uid in trusted and not entry.st_mode & 0o022,"
+            },
+            {
+              "line": 321,
+              "text": "\"admission directory must be writable only by its owner or root\")"
+            },
+            {
+              "line": 322,
+              "text": "child_uid = entry.st_uid"
+            },
+            {
+              "line": 323,
+              "text": "for ancestor in directory.parents:"
+            },
+            {
+              "line": 324,
+              "text": "entry = ancestor.lstat()"
+            },
+            {
+              "line": 325,
+              "text": "membership.require(stat.S_ISDIR(entry.st_mode) and entry.st_uid in trusted,"
+            },
+            {
+              "line": 326,
+              "text": "\"admission ancestor is not a directory of its owner or root\")"
+            },
+            {
+              "line": 327,
+              "text": "membership.require(not entry.st_mode & 0o022 or"
+            },
+            {
+              "line": 328,
+              "text": "(entry.st_mode & stat.S_ISVTX and child_uid in trusted),"
+            },
+            {
+              "line": 329,
+              "text": "\"admission ancestor lets someone else replace what is below it\")"
+            },
+            {
+              "line": 330,
+              "text": "child_uid = entry.st_uid"
+            },
+            {
+              "line": 331,
+              "text": ""
+            },
+            {
+              "line": 332,
+              "text": "descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)"
+            },
+            {
+              "line": 333,
+              "text": "try:"
+            },
+            {
+              "line": 334,
+              "text": "entry = os.fstat(descriptor)"
+            },
+            {
+              "line": 335,
+              "text": "membership.require(stat.S_ISREG(entry.st_mode), \"admission is not a regular file\")"
+            },
+            {
+              "line": 336,
+              "text": "membership.require(entry.st_uid in trusted and not entry.st_mode & 0o022,"
+            },
+            {
+              "line": 337,
+              "text": "\"admission file must be writable only by its owner or root\")"
+            },
+            {
+              "line": 338,
+              "text": "with os.fdopen(descriptor, \"rb\", closefd=False) as source:"
+            },
+            {
+              "line": 339,
+              "text": "contents = source.read(4097)"
+            },
+            {
+              "line": 340,
+              "text": "membership.require(len(contents) <= 4096, \"admission file is oversized\")"
+            },
+            {
+              "line": 346,
+              "text": "def non_serving_admission(path, manifest, previous):"
+            },
+            {
+              "line": 347,
+              "text": "\"\"\"Read an explicit zero admission from the expected boot, session and manifest.\"\"\""
+            },
+            {
+              "line": 348,
+              "text": "owner_uid = pwd.getpwnam(ADMISSION_USER).pw_uid"
+            },
+            {
+              "line": 349,
+              "text": "doc = membership.load(read_trusted_admission(path, owner_uid), 4096)"
+            },
+            {
+              "line": 350,
+              "text": "expected = dict(schema=admission.SCHEMA, node_id=\"a\", session_id=previous[\"session_id\"], boot_id=previous[\"boot_id\"],"
+            },
+            {
+              "line": 351,
+              "text": "epoch=manifest[\"epoch\"], manifest_digest=membership.digest(manifest),"
+            },
+            {
+              "line": 352,
+              "text": "hsm_serials=\" \".join(membership.validate(manifest)[\"a\"][\"hsm_serials\"]),"
+            },
+            {
+              "line": 353,
+              "text": "lease_issued_at=admission.NEVER, requested_boottime_ms=0, **admission.NO_STATE,"
+            },
+            {
+              "line": 354,
+              "text": "serve_until_boottime_ms=0, mode=\"lease\")"
+            },
+            {
+              "line": 355,
+              "text": "reason = doc.get(\"reason\") if isinstance(doc, dict) else None"
+            },
+            {
+              "line": 356,
+              "text": "if (not isinstance(reason, str) or not reason.strip() or len(reason) > admission.ADMISSION_REASON_LIMIT"
+            },
+            {
+              "line": 357,
+              "text": "or any(not \" \" <= char <= \"~\" for char in reason)"
+            },
+            {
+              "line": 358,
+              "text": "or set(doc) != set(admission.FIELDS)"
+            },
+            {
+              "line": 359,
+              "text": "or any(type(doc[k]) is not type(value) or doc[k] != value for k, value in expected.items())):"
+            },
+            {
+              "line": 360,
+              "text": "return None"
+            },
+            {
+              "line": 361,
+              "text": "return doc"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "Same monotonic deadline for trusted zero observation and a matching 503; a later success invalidates pending evidence. Delayed audit must confirm an already in-budget refusal.",
+          "anchors": [
+            {
+              "line": 364,
+              "text": "def observe_shutdown(kms, read_admission, started, lifetime):"
+            },
+            {
+              "line": 365,
+              "text": "\"\"\"Observe zero admission first, then a sign refusal, under one deadline.\"\"\""
+            },
+            {
+              "line": 366,
+              "text": "deadline = started + lifetime"
+            },
+            {
+              "line": 367,
+              "text": "candidates = {}"
+            },
+            {
+              "line": 368,
+              "text": "stopped = denied = None"
+            },
+            {
+              "line": 369,
+              "text": ""
+            },
+            {
+              "line": 370,
+              "text": "def audited_denial():"
+            },
+            {
+              "line": 371,
+              "text": "for request_id, observed in candidates.items():"
+            },
+            {
+              "line": 372,
+              "text": "if kms.denied_not_admitted(request_id) is True:"
+            },
+            {
+              "line": 373,
+              "text": "return observed"
+            },
+            {
+              "line": 374,
+              "text": "return None"
+            },
+            {
+              "line": 375,
+              "text": ""
+            },
+            {
+              "line": 376,
+              "text": "while (remaining := deadline - time.monotonic()) > 0:"
+            },
+            {
+              "line": 377,
+              "text": "if stopped is None:"
+            },
+            {
+              "line": 378,
+              "text": "try:"
+            },
+            {
+              "line": 379,
+              "text": "document = read_admission()"
+            },
+            {
+              "line": 380,
+              "text": "observed = time.monotonic()"
+            },
+            {
+              "line": 381,
+              "text": "if isinstance(document, dict) and observed <= deadline:"
+            },
+            {
+              "line": 382,
+              "text": "stopped = observed - started"
+            },
+            {
+              "line": 383,
+              "text": "except (OSError, ValueError, membership.Refused):"
+            },
+            {
+              "line": 384,
+              "text": "pass"
+            },
+            {
+              "line": 385,
+              "text": "if stopped is not None and denied is None and (remaining := deadline - time.monotonic()) > 0:"
+            },
+            {
+              "line": 386,
+              "text": "request_id = str(uuid.uuid4())"
+            },
+            {
+              "line": 387,
+              "text": "try:"
+            },
+            {
+              "line": 388,
+              "text": "status, response, _ = kms.sign(b\"after the shutdown\", request_id=request_id, timeout=min(remaining, 2))"
+            },
+            {
+              "line": 389,
+              "text": "observed = time.monotonic()"
+            },
+            {
+              "line": 390,
+              "text": "if 200 <= status < 300:"
+            },
+            {
+              "line": 391,
+              "text": "return None, stopped    # a later success invalidates any pending refusal evidence"
+            },
+            {
+              "line": 392,
+              "text": "if status == 503 and isinstance(response, dict) and response.get(\"request_id\") == request_id and observed <= deadline:"
+            },
+            {
+              "line": 393,
+              "text": "candidates[request_id] = observed - started"
+            },
+            {
+              "line": 394,
+              "text": "except (OSError, http.client.HTTPException):"
+            },
+            {
+              "line": 395,
+              "text": "pass"
+            },
+            {
+              "line": 396,
+              "text": "denied = audited_denial()"
+            },
+            {
+              "line": 397,
+              "text": "if stopped is not None and denied is not None:"
+            },
+            {
+              "line": 398,
+              "text": "break"
+            },
+            {
+              "line": 399,
+              "text": "time.sleep(min(1, max(0, deadline - time.monotonic())))"
+            },
+            {
+              "line": 400,
+              "text": "if denied is None and candidates:"
+            },
+            {
+              "line": 401,
+              "text": "evidence = until(lambda: (observed,) if (observed := audited_denial()) is not None else None, 60, 1)"
+            },
+            {
+              "line": 402,
+              "text": "if isinstance(evidence, tuple):"
+            },
+            {
+              "line": 403,
+              "text": "denied = evidence[0]"
+            },
+            {
+              "line": 404,
+              "text": "return denied, stopped"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The local audit must match this request ID, SIGN, deny and not-admitted.",
+          "anchors": [
+            {
+              "line": 279,
+              "text": "def denied_not_admitted(self, request_id):"
+            },
+            {
+              "line": 281,
+              "text": "with (self.state / \"audit.jsonl\").open(\"rb\") as journal:"
+            },
+            {
+              "line": 282,
+              "text": "for line in journal:"
+            },
+            {
+              "line": 283,
+              "text": "if not line.endswith(b\"\\n\"):"
+            },
+            {
+              "line": 285,
+              "text": "event = json.loads(line)"
+            },
+            {
+              "line": 286,
+              "text": "if (isinstance(event, dict) and event.get(\"request_id\") == request_id"
+            },
+            {
+              "line": 287,
+              "text": "and event.get(\"operation\") == \"sign\" and event.get(\"decision\") == \"deny\""
+            },
+            {
+              "line": 288,
+              "text": "and event.get(\"outcome\") == \"not-admitted\"):"
+            },
+            {
+              "line": 289,
+              "text": "return True"
+            },
+            {
+              "line": 290,
+              "text": "except (OSError, ValueError):"
+            },
+            {
+              "line": 292,
+              "text": "return False"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "Both observed refusal timing and trusted admission stop are required.",
+          "anchors": [
+            {
+              "line": 579,
+              "text": "ok(took is not None, \"after a publishes zero admission, the daemon refuses signing with correlated audit within one lease\", kms.log())"
+            },
+            {
+              "line": 580,
+              "text": "ok(stop_took is not None, \"a publishes an epoch-2 non-serving admission within one lease\","
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "diagnostic_context",
+          "meaning": "Numeric reporting is diagnostic and was not used as the pass predicate.",
+          "anchors": [
+            {
+              "line": 582,
+              "text": "if took is not None and stop_took is not None:"
+            },
+            {
+              "line": 583,
+              "text": "print(\"  MEASURED: the owner's revocation of the only node -> the daemon refuses after %.0f s, admission stops after %.0f s \""
+            },
+            {
+              "line": 584,
+              "text": "\"(MAX_LIFETIME %d s)\" % (took, stop_took, lease.MAX_LIFETIME), flush=True)"
+            }
+          ]
+        },
+        {
+          "path": "internal/operations/coordinator.go",
+          "fileSha256": "6077e4ae6bf22ecde5b0350e1b823a0d2875a04dede500355de32e6b9d1cfea0",
+          "role": "enforcing_source",
+          "meaning": "Daemon denies before the operation and records not-admitted.",
+          "anchors": [
+            {
+              "line": 186,
+              "text": "if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {"
+            },
+            {
+              "line": 187,
+              "text": "coordinator.recordOrCount(ctx, request, registry.Route{}, \"deny\", \"not-admitted\", started, false, nil)"
+            },
+            {
+              "line": 188,
+              "text": "return api.Result{}, failure(\"DEPENDENCY_UNAVAILABLE\", http.StatusServiceUnavailable, true)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "Specific trusted post-revocation zero document, subsequent correlated 503 and local deny/not-admitted within one lease; measurement is a separate line.",
+      "outsideProof": "No proof of all timing, readiness or in-flight branches, or collector receipt of the daemon SIGN record.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 439,
+        "originalLastLine": 439,
+        "ranges": [
+          {
+            "firstLine": 438,
+            "lastLine": 438,
+            "claim": "Owner revocation commits at epoch two with the typed shutdown phrase.",
+            "text": [
+              "  PASS with \"shut down the KMS on a\" typed, the owner's revocation is committed on a (epoch 2), the phrase in a's sync trail"
+            ]
+          },
+          {
+            "firstLine": 439,
+            "lastLine": 439,
+            "claim": "After trusted explicit zero, the daemon refused the signing request with matching local audit within the lease.",
+            "text": [
+              "  PASS after a publishes zero admission, the daemon refuses signing with correlated audit within one lease"
+            ]
+          },
+          {
+            "firstLine": 440,
+            "lastLine": 440,
+            "claim": "A trusted epoch-two non-serving admission was observed before lease deadline.",
+            "text": [
+              "  PASS a publishes an epoch-2 non-serving admission within one lease"
+            ]
+          },
+          {
+            "firstLine": 441,
+            "lastLine": 441,
+            "claim": "Fixture diagnostic reports 5 s to refusal and 5 s to admission stop under MAX_LIFETIME 30 s; rounded, this run only.",
+            "text": [
+              "  MEASURED: the owner's revocation of the only node -> the daemon refuses after 5 s, admission stops after 5 s (MAX_LIFETIME 30 s)"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "CI.gate.all-needs",
+      "oldRawCaseSha256": "1cc050884326b2e205d88dc49be56b0e11ee338fc4056146c16fdfd60a302a7c",
+      "oldCanonicalCaseSha256": "cafca6950368ea91811b072e6282ddb64a8f8ddac45da89255aa88684c2c0518",
+      "originalInput": "A non-draft PR has all 18 dependency results available and green.",
+      "originalOutcome": "The aggregate succeeds.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+          "requirementId": "KMS-CI-001",
+          "scenario": "Complete run",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "symbol": "ci-gate: all $n jobs succeeded",
+          "line": 1292,
+          "sha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9"
+        }
+      ],
+      "originalScopeIssue": "Existing scenario fits positive case. Old line 1292 is diagnostic.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "Complete run",
+        "relation": "direct",
+        "proposedContractScopedSha256": "6a58c7ad67ccc5852412cc7c4db8dceb5e77ca4d12bd3eb965c1a7478eedcff2",
+        "proposedScenarioScopedSha256": "7c06d64f5f98f974ede66108cc0fbb563ff4056a25852ad55a244e41816e9d3a"
+      },
+      "priorBroaderScenarioProof": "exact for this observed positive case",
+      "typedAnchorGroups": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "fileSha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "fixture_selector",
+          "meaning": "Declared dependency identities and computed event draft binding.",
+          "anchors": [
+            {
+              "line": 1269,
+              "text": "ci-gate:"
+            },
+            {
+              "line": 1270,
+              "text": "if: ${{ always() }}"
+            },
+            {
+              "line": 1271,
+              "text": "needs: [build-test, e2e-swtpm, e2e-netns-disk, e2e-sandbox-policy, known-polkit-rules-debian13, govulncheck, pkcs11-e2e, privileged-and-fuzz, cosmos-node, unlock-boot-qemu, verity-boot-qemu, initrd-reproducible, rootfs-reproducible, initrd-reproducible-debian, initrd-reproducible-compare, peer-unlock-swtpm, pcrlock-luks-swtpm, uki-build]"
+            },
+            {
+              "line": 1277,
+              "text": "NEEDS: ${{ toJSON(needs) }}"
+            },
+            {
+              "line": 1278,
+              "text": "IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "fileSha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "predicate",
+          "meaning": "Collect non-successes; enforce exactly 18 dependencies with hard failure on count mismatch.",
+          "anchors": [
+            {
+              "line": 1280,
+              "text": "bad=\"$(jq -r 'to_entries[] | select(.value.result != \"success\") | \"\\(.key): \\(.value.result)\"' <<<\"$NEEDS\")\""
+            },
+            {
+              "line": 1281,
+              "text": "n=\"$(jq 'length' <<<\"$NEEDS\")\""
+            },
+            {
+              "line": 1282,
+              "text": "[ \"$n\" -eq 18 ] || { echo \"::error::ci-gate sees $n jobs, not 18\"; exit 1; }"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "fileSha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "predicate",
+          "meaning": "Exit for draft or any nonempty non-success list.",
+          "anchors": [
+            {
+              "line": 1287,
+              "text": "if [ \"$IS_DRAFT\" = \"true\" ]; then"
+            },
+            {
+              "line": 1288,
+              "text": "echo \"### ci-gate: a draft pull request never passes; mark it ready for review to run every job\" >> \"$GITHUB_STEP_SUMMARY\""
+            },
+            {
+              "line": 1289,
+              "text": "echo \"::error::a draft pull request never passes ci-gate\"; exit 1"
+            },
+            {
+              "line": 1290,
+              "text": "fi"
+            },
+            {
+              "line": 1291,
+              "text": "[ -z \"$bad\" ] || exit 1"
+            }
+          ]
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "fileSha256": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9",
+          "role": "diagnostic_context",
+          "meaning": "Step-summary and error output; success echo is directed to GITHUB_STEP_SUMMARY.",
+          "anchors": [
+            {
+              "line": 1284,
+              "text": "{ echo \"### ci-gate: not every job succeeded\"; while read -r line; do echo \"- $line\"; done <<<\"$bad\"; } >> \"$GITHUB_STEP_SUMMARY\""
+            },
+            {
+              "line": 1285,
+              "text": "echo \"::error::not every job succeeded:\"; echo \"$bad\""
+            },
+            {
+              "line": 1292,
+              "text": "echo \"ci-gate: all $n jobs succeeded\" >> \"$GITHUB_STEP_SUMMARY\""
+            }
+          ]
+        }
+      ],
+      "caseScope": "The exact 18 named dependencies succeeded, non-draft was logged, and hosted gate step 2 completed successfully.",
+      "outsideProof": "No hosted negative branch execution, branch protection or complete job/head payload from the step endpoint.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/ci-gate-137013751924.log",
+        "sha256": "5feecc237c849786ebd90df10b9b1591886d3701436a66cb8fe80cee594c4abb",
+        "originalFirstLine": 47,
+        "originalLastLine": 121,
+        "ranges": [
+          {
+            "firstLine": 47,
+            "lastLine": 121,
+            "claim": "The NEEDS object names exactly all 18 dependencies from the workflow, each success; IS_DRAFT is false.",
+            "parsed": {
+              "eachResult": {
+                "build-test": "success",
+                "e2e-swtpm": "success",
+                "e2e-netns-disk": "success",
+                "e2e-sandbox-policy": "success",
+                "known-polkit-rules-debian13": "success",
+                "govulncheck": "success",
+                "pkcs11-e2e": "success",
+                "privileged-and-fuzz": "success",
+                "cosmos-node": "success",
+                "unlock-boot-qemu": "success",
+                "verity-boot-qemu": "success",
+                "initrd-reproducible": "success",
+                "rootfs-reproducible": "success",
+                "initrd-reproducible-debian": "success",
+                "initrd-reproducible-compare": "success",
+                "peer-unlock-swtpm": "success",
+                "pcrlock-luks-swtpm": "success",
+                "uki-build": "success"
+              },
+              "isDraft": false
+            }
+          }
+        ],
+        "archivedRunId": 44956870826,
+        "archivedJobId": 137013751924,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137013751924,
+        "step": {
+          "name": "Every job succeeded, and this is not a draft pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "CI.one-node.summary",
+      "oldRawCaseSha256": "6c73d453ef9304f9886eba93a78e9ef5ee462f3dc4297e446634fd043b5c0c89",
+      "oldCanonicalCaseSha256": "198b6062c4c69353d2437d4b84061f2e4ae41809a8f06a8d51c6c5f1e39fc700",
+      "originalInput": "The executed job returns abrmd, 26/0 and one line for each expected TODO.",
+      "originalOutcome": "The job accepts the named scenario scope.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+          "requirementId": "KMS-CI-002",
+          "scenario": "One-node summary complete",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": ".github/workflows/node-units.yml",
+          "symbol": "26 passed, 0 failed",
+          "line": 238,
+          "sha256": "60d0055c8a0e1d2349071d6ea5757ee5078942eceb6d0e296c673186a69ee6cb"
+        }
+      ],
+      "originalScopeIssue": "Existing scenario fits. Old bound line 453 omits other gate inputs.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-002",
+        "scenario": "One-node summary complete",
+        "relation": "direct",
+        "proposedContractScopedSha256": "38de864eb4caac0f808c68c9dc48d46b61b4f09dc4f7dbb152b53a1fa55d944f",
+        "proposedScenarioScopedSha256": "ac6dd3844a5e5e174b3658d82e4f801085bbf3a2af4ff7503d5971191cc38b8f"
+      },
+      "priorBroaderScenarioProof": "exact for this observed positive case",
+      "typedAnchorGroups": [
+        {
+          "path": ".github/workflows/node-units.yml",
+          "fileSha256": "60d0055c8a0e1d2349071d6ea5757ee5078942eceb6d0e296c673186a69ee6cb",
+          "role": "predicate",
+          "meaning": "Pipeline failure, exact abrmd marker, exact 26/0 and exactly one TODO of each named ID are gated.",
+          "anchors": [
+            {
+              "line": 232,
+              "text": "set -o pipefail"
+            },
+            {
+              "line": 233,
+              "text": "REGALIA_UNLOCK_BIN=\"$RUNNER_TEMP/regalia-unlock\" REGALIA_AUDIT_BIN=\"$RUNNER_TEMP/audit\" REGALIA_KMS_BIN=\"$RUNNER_TEMP/regalia-kms\" \\"
+            },
+            {
+              "line": 234,
+              "text": "sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN,REGALIA_KMS_BIN \\"
+            },
+            {
+              "line": 235,
+              "text": "python3 -Es e2e/one-node.py | tee \"$RUNNER_TEMP/one.log\""
+            },
+            {
+              "line": 236,
+              "text": "grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' \"$RUNNER_TEMP/one.log\" || {"
+            },
+            {
+              "line": 237,
+              "text": "echo \"::error::the run did not take the tpm2-abrmd route (#592)\" >&2; exit 1; }"
+            },
+            {
+              "line": 238,
+              "text": "grep -q '^one-node: 26 passed, 0 failed$' \"$RUNNER_TEMP/one.log\" || {"
+            },
+            {
+              "line": 239,
+              "text": "echo \"::error::the one-node test did not pass all 26 checks\" >&2; exit 1; }"
+            },
+            {
+              "line": 240,
+              "text": "# dx7.7 and dx7.8's steps are said as TODO and counted neither way: both still said, until those beads replace them"
+            },
+            {
+              "line": 241,
+              "text": "for step in 7 8; do"
+            },
+            {
+              "line": 242,
+              "text": "prefix=\"$(printf '  \\033[33mTODO\\033[0m regalia-kms-dx7.%s: ' \"${step}\")\""
+            },
+            {
+              "line": 243,
+              "text": "[ \"$(awk -v prefix=\"$prefix\" 'index($0, prefix) == 1 {count++} END {print count+0}' \"$RUNNER_TEMP/one.log\")\" = 1 ] || {"
+            },
+            {
+              "line": 244,
+              "text": "echo \"::error::expected exactly one regalia-kms-dx7.${step} TODO line\" >&2; exit 1; }"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "Counts conditional verdicts and returns failure when an assertion failed.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 636,
+              "text": "ok(False, \"the scenario ran to its end\", traceback.format_exc()[-2000:])"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            },
+            {
+              "line": 651,
+              "text": "raise SystemExit(main())"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "diagnostic_context",
+          "meaning": "TODO outputs are outside counters; the summary is measured output consumed by the gate.",
+          "anchors": [
+            {
+              "line": 78,
+              "text": "def todo(text):"
+            },
+            {
+              "line": 79,
+              "text": "\"\"\"A step this scenario does not run yet: said, and counted neither as a pass nor as a failure.\"\"\""
+            },
+            {
+              "line": 80,
+              "text": "print(\"  \\033[33mTODO\\033[0m %s\" % text, flush=True)"
+            },
+            {
+              "line": 596,
+              "text": "todo(\"regalia-kms-dx7.7: re-anchor a from the owner's chain plus the collector (not run; not counted)\")"
+            },
+            {
+              "line": 598,
+              "text": "todo(\"regalia-kms-dx7.8: a planned-outage measured-boot update of a (not run; not counted)\")"
+            },
+            {
+              "line": 646,
+              "text": "print(\"\\none-node: %d passed, %d failed\" % (passed, failed))"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "Exact 26/0, abrmd marker and exactly one of each named TODO, plus successful hosted step 6.",
+      "outsideProof": "Both TODOs describe unexecuted work. No physical scope or assertion of all future coverage.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 453,
+        "originalLastLine": 453,
+        "ranges": [
+          {
+            "firstLine": 407,
+            "lastLine": 407,
+            "claim": "Runtime abrmd marker is present.",
+            "text": [
+              "e2e3: the nodes reach their TPMs through one tpm2-abrmd each"
+            ]
+          },
+          {
+            "firstLine": 445,
+            "lastLine": 445,
+            "claim": "Exactly one required re-anchor TODO is emitted and explicitly is not run or counted.",
+            "text": [
+              "  TODO regalia-kms-dx7.7: re-anchor a from the owner's chain plus the collector (not run; not counted)"
+            ]
+          },
+          {
+            "firstLine": 446,
+            "lastLine": 446,
+            "claim": "Exactly one required measured-boot-update TODO is emitted and explicitly is not run or counted.",
+            "text": [
+              "  TODO regalia-kms-dx7.8: a planned-outage measured-boot update of a (not run; not counted)"
+            ]
+          },
+          {
+            "firstLine": 453,
+            "lastLine": 453,
+            "claim": "Exact one-node summary is 26 passed, 0 failed.",
+            "text": [
+              "one-node: 26 passed, 0 failed"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "CI.one-node.owner-off",
+      "oldRawCaseSha256": "c416e1e97c456ab62eb15acd8458a7aad0f1c1c84f018db47042f06b5dd225cb",
+      "oldCanonicalCaseSha256": "956545752d3c882e0b581bcebede83a64b73cfc94e9b90cc6da05a4a40c3b4b7",
+      "originalInput": "The pinned owner tunnel exchanges client traffic while the owner TCP listener is stopped.",
+      "originalOutcome": "The stopped-listener case proves TCP refusal and no key rather than tunnel failure.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+          "requirementId": "KMS-CI-007",
+          "scenario": "Owner listener stopped",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "\"the pinned owner tunnel exchanges traffic",
+          "line": 483,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Existing scenario fits. Old locator 483 is only the message.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-007",
+        "scenario": "Owner listener stopped",
+        "relation": "direct",
+        "proposedContractScopedSha256": "da0b894aaa3574fb640c20397f2cbb0c49aad42c594d50030301162ccf4e6f26",
+        "proposedScenarioScopedSha256": "c24e9a55bca01917f758e98f1841c1b1d5ee499cbd0944924ce9347a6853564b"
+      },
+      "priorBroaderScenarioProof": "exact for this observed positive case",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Sample the pinned owner tunnel, with no responder, and attempt unlock once.",
+          "anchors": [
+            {
+              "line": 479,
+              "text": "with cluster.owner_tunnel(\"a\"):"
+            },
+            {
+              "line": 480,
+              "text": "before = cluster.owner_boot_traffic(\"a\")"
+            },
+            {
+              "line": 481,
+              "text": "alone = cluster.unlock(\"a\", timeout=90, rounds=1, probe_owner_off=True)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_call",
+          "meaning": "Pass the client result and baseline counters into the exact refusal predicate.",
+          "anchors": [
+            {
+              "line": 482,
+              "text": "ok(owner_connection_refused(alone, before),"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "Requires bidirectional byte deltas and handshake, exact errno, exhausted real client and no delivered key, marker or owner selection.",
+          "anchors": [
+            {
+              "line": 301,
+              "text": "def owner_connection_refused(result, before):"
+            },
+            {
+              "line": 302,
+              "text": "\"\"\"The real client made its owner attempt, received no key, and exhausted one round.\"\"\""
+            },
+            {
+              "line": 303,
+              "text": "lines = result[\"stderr\"].splitlines()"
+            },
+            {
+              "line": 304,
+              "text": "expected = \"regalia-unlock: attempt 1: %s (path epoch 1): hello: the transport failed (no connection);\" % unlock.OWNER"
+            },
+            {
+              "line": 305,
+              "text": "after = result.get(\"owner_client_traffic\")"
+            },
+            {
+              "line": 306,
+              "text": "exchanged = (before is not None and after is not None and after[0] > 0 and after[0] >= before[0]"
+            },
+            {
+              "line": 307,
+              "text": "and after[1] > before[1] and after[2] > before[2])"
+            },
+            {
+              "line": 308,
+              "text": "return (exchanged and result.get(\"owner_tcp_errno\") == errno.ECONNREFUSED"
+            },
+            {
+              "line": 309,
+              "text": "and result[\"rc\"] == 1 and result[\"peer\"] is None and not result[\"marker\"] and result[\"key_delivered\"] is False"
+            },
+            {
+              "line": 310,
+              "text": "and any(line.startswith(expected) for line in lines)"
+            },
+            {
+              "line": 311,
+              "text": "and bool(lines) and lines[-1] == \"regalia-unlock: no peer helped in 1 attempts\")"
+            }
+          ]
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "fileSha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597",
+          "role": "helper_body",
+          "meaning": "Collect manifest-pinned client traffic before separately probing TCP on the correct interface in the same boot.",
+          "anchors": [
+            {
+              "line": 243,
+              "text": "def owner_tcp_probe(ns, source, boot):"
+            },
+            {
+              "line": 244,
+              "text": "\"\"\"Observe a TCP connect result for the configured owner inside the node's live boot tunnel.\"\"\""
+            },
+            {
+              "line": 245,
+              "text": "endpoint = next(peer[\"endpoint\"] for peer in boot[\"peers\"] if peer[\"node_id\"] == unlock.OWNER)"
+            },
+            {
+              "line": 246,
+              "text": "host, _, port = endpoint.rpartition(\":\")"
+            },
+            {
+              "line": 247,
+              "text": "socket.inet_pton(socket.AF_INET, host)  # boot-mesh endpoint is numeric IPv4. No resolver wait."
+            },
+            {
+              "line": 248,
+              "text": ""
+            },
+            {
+              "line": 249,
+              "text": "def connect():"
+            },
+            {
+              "line": 250,
+              "text": "with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:"
+            },
+            {
+              "line": 251,
+              "text": "probe.settimeout(3)"
+            },
+            {
+              "line": 252,
+              "text": "probe.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b\"wg-boot\\0\")"
+            },
+            {
+              "line": 253,
+              "text": "probe.bind((source, 0))"
+            },
+            {
+              "line": 254,
+              "text": "try:"
+            },
+            {
+              "line": 255,
+              "text": "probe.connect((host, int(port)))"
+            },
+            {
+              "line": 256,
+              "text": "except OSError as failure:"
+            },
+            {
+              "line": 257,
+              "text": "return failure.errno"
+            },
+            {
+              "line": 258,
+              "text": "return 0"
+            },
+            {
+              "line": 259,
+              "text": ""
+            },
+            {
+              "line": 260,
+              "text": "try:"
+            },
+            {
+              "line": 261,
+              "text": "return in_netns(ns, connect)"
+            },
+            {
+              "line": 262,
+              "text": "except OSError:"
+            },
+            {
+              "line": 263,
+              "text": "return None  # Namespace, interface and source setup failures are not connect results."
+            },
+            {
+              "line": 2009,
+              "text": "def owner_boot_traffic(self, name):"
+            },
+            {
+              "line": 2010,
+              "text": "\"\"\"Read the handshake timestamp and byte counters for the manifest-pinned node peer.\"\"\""
+            },
+            {
+              "line": 2011,
+              "text": "peer = wgsvc.wg_key(membership.validate(self.manifest)[name][\"wg_boot_pub\"])"
+            },
+            {
+              "line": 2012,
+              "text": ""
+            },
+            {
+              "line": 2013,
+              "text": "def counters(field, width):"
+            },
+            {
+              "line": 2014,
+              "text": "rows = [line.split() for line in self.owner.in_ns(\"wg\", \"show\", \"wg-boot\", field).stdout.splitlines()]"
+            },
+            {
+              "line": 2015,
+              "text": "matches = [row[1:] for row in rows if row and row[0] == peer]"
+            },
+            {
+              "line": 2016,
+              "text": "if len(matches) != 1 or len(matches[0]) != width or not all(v.isascii() and v.isdecimal() for v in matches[0]):"
+            },
+            {
+              "line": 2017,
+              "text": "return None"
+            },
+            {
+              "line": 2018,
+              "text": "return tuple(map(int, matches[0]))"
+            },
+            {
+              "line": 2019,
+              "text": ""
+            },
+            {
+              "line": 2020,
+              "text": "handshake = counters(\"latest-handshakes\", 1)"
+            },
+            {
+              "line": 2021,
+              "text": "transfer = counters(\"transfer\", 2)"
+            },
+            {
+              "line": 2022,
+              "text": "return handshake + transfer if handshake is not None and transfer is not None else None"
+            },
+            {
+              "line": 2122,
+              "text": "result[\"rc\"], result[\"stderr\"], final_key = finish_unlock_client("
+            },
+            {
+              "line": 2123,
+              "text": "client, reply, key, UNLOCK_COMPLETION_GRACE if key else max(5.0, deadline - time.monotonic()), open_reply)"
+            },
+            {
+              "line": 2124,
+              "text": "result[\"key_delivered\"] = bool(final_key)"
+            },
+            {
+              "line": 2125,
+              "text": "if probe_owner_off:"
+            },
+            {
+              "line": 2126,
+              "text": "result[\"owner_client_traffic\"] = self.owner_boot_traffic(name)"
+            },
+            {
+              "line": 2127,
+              "text": "result[\"owner_tcp_errno\"] = owner_tcp_probe(n.ns, n.boot_address, boot)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "fileSha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597",
+          "role": "helper_body",
+          "meaning": "Capture late or queued key replies before deciding whether any key was seen.",
+          "anchors": [
+            {
+              "line": 449,
+              "text": "def finish_unlock_client(client, reply, key, timeout, open_reply):"
+            },
+            {
+              "line": 452,
+              "text": "while True:"
+            },
+            {
+              "line": 453,
+              "text": "if not key and (key := drain_unlock_reply(reply)):"
+            },
+            {
+              "line": 454,
+              "text": "open_reply(key)"
+            },
+            {
+              "line": 458,
+              "text": "try:"
+            },
+            {
+              "line": 459,
+              "text": "_, err = client.communicate(timeout=remaining if key else min(0.2, remaining))"
+            },
+            {
+              "line": 460,
+              "text": "rc = client.returncode"
+            },
+            {
+              "line": 471,
+              "text": "# A queued answer can outlive the client. Preserve its exit status and key evidence."
+            },
+            {
+              "line": 472,
+              "text": "if not key and (key := drain_unlock_reply(reply)):"
+            },
+            {
+              "line": 473,
+              "text": "open_reply(key)"
+            },
+            {
+              "line": 474,
+              "text": "return rc, (err or \"\")[-1500:], key"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "diagnostic_context",
+          "meaning": "This is the assertion message, not the predicate.",
+          "anchors": [
+            {
+              "line": 483,
+              "text": "\"the pinned owner tunnel exchanges traffic and its inner TCP endpoint refuses the connection, with no key delivered\","
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "With owner listener stopped, pinned peer traffic occurred, the separate TCP probe refused and the real client delivered no key and exhausted its attempt.",
+      "outsideProof": "No generic timeout or mount failure accepted; signed response and marker apply to the positive case only.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 419,
+        "originalLastLine": 419,
+        "ranges": [
+          {
+            "firstLine": 419,
+            "lastLine": 419,
+            "claim": "Stopped listener, pinned bidirectional tunnel, classified TCP refusal and no delivered key.",
+            "text": [
+              "  PASS the pinned owner tunnel exchanges traffic and its inner TCP endpoint refuses the connection, with no key delivered"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "CI.one-node.owner-on",
+      "oldRawCaseSha256": "83313bc665aedc1f757a9c52735a6265ae964d118e8bf53dde7e5d4156f6cf42",
+      "oldCanonicalCaseSha256": "cfc4d68d28b0c011e33e950f326de889722b5860bf804ec8b0eac7d1f3aca0ad",
+      "originalInput": "The signed owner responder is enabled over the pinned path.",
+      "originalOutcome": "The real client opens the owner keyslot and reads the volume marker.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+          "requirementId": "KMS-CI-007",
+          "scenario": "Owner listener enabled",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "opened[\"rc\"] == 0",
+          "line": 488,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Existing scenario fits. Signed SENT is a separate observation from marker readback.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-007",
+        "scenario": "Owner listener enabled",
+        "relation": "direct",
+        "proposedContractScopedSha256": "da0b894aaa3574fb640c20397f2cbb0c49aad42c594d50030301162ccf4e6f26",
+        "proposedScenarioScopedSha256": "94c64909ead31cbcf87ef6558ca23ca294601387ccf9f06af2a14a99bcbe6703"
+      },
+      "priorBroaderScenarioProof": "exact for this observed positive case",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Keep the tunnel context, reset the client session, enable responder and attempt the same path.",
+          "anchors": [
+            {
+              "line": 479,
+              "text": "with cluster.owner_tunnel(\"a\"):"
+            },
+            {
+              "line": 485,
+              "text": "cluster.stop(\"a\")                             # fresh TPM session for the positive attempt"
+            },
+            {
+              "line": 486,
+              "text": "with cluster.owner_answering(\"a\") as owner_said:"
+            },
+            {
+              "line": 487,
+              "text": "opened = cluster.unlock(\"a\", timeout=90, rounds=1)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "fileSha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597",
+          "role": "helper_body",
+          "meaning": "Start the signed owner responder on the already configured tunnel.",
+          "anchors": [
+            {
+              "line": 2025,
+              "text": "def owner_answering(self, name, which=0, serve_for=600):"
+            },
+            {
+              "line": 2026,
+              "text": "\"\"\"Run the responder on the already configured owner boot tunnel.\"\"\""
+            },
+            {
+              "line": 2033,
+              "text": "listener = in_netns(o.ns, lambda: socket.create_server((o.boot_address, site[\"boot_mesh\"][\"unlock_port\"])))"
+            },
+            {
+              "line": 2035,
+              "text": "def answer():"
+            },
+            {
+              "line": 2037,
+              "text": "owner.serve_unlock(tip, self.document, str(o.owner_state), self.owner_cards[self.owner_envelope], self.owner_signer(which),"
+            },
+            {
+              "line": 2038,
+              "text": "listener, say=said.append, serve_for=serve_for, stop=stopping.is_set)"
+            },
+            {
+              "line": 2041,
+              "text": "server = threading.Thread(target=answer, daemon=True)"
+            },
+            {
+              "line": 2042,
+              "text": "server.start()"
+            },
+            {
+              "line": 2043,
+              "text": "yield said"
+            }
+          ]
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "fileSha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597",
+          "role": "helper_body",
+          "meaning": "Observe actual mapper open, owner keyslot mapping and filesystem-marker readback.",
+          "anchors": [
+            {
+              "line": 2109,
+              "text": "def open_reply(key):"
+            },
+            {
+              "line": 2111,
+              "text": "opened = subprocess.run([\"cryptsetup\", \"open\", \"--key-file\", \"-\", \"-v\", loop, mapped], input=key, capture_output=True)"
+            },
+            {
+              "line": 2112,
+              "text": "found = re.search(rb\"Key slot (\\d+) unlocked\", opened.stdout)"
+            },
+            {
+              "line": 2114,
+              "text": "if opened.returncode == 0 and found:"
+            },
+            {
+              "line": 2115,
+              "text": "result[\"peer\"] = self.keyslot_peer(name, int(found.group(1)))"
+            },
+            {
+              "line": 2116,
+              "text": "sh(\"mount\", \"-o\", \"ro\", volume, str(mnt))"
+            },
+            {
+              "line": 2118,
+              "text": "result[\"marker\"] = (mnt / \"marker\").read_bytes() == MARKER"
+            },
+            {
+              "line": 2122,
+              "text": "result[\"rc\"], result[\"stderr\"], final_key = finish_unlock_client("
+            },
+            {
+              "line": 2123,
+              "text": "client, reply, key, UNLOCK_COMPLETION_GRACE if key else max(5.0, deadline - time.monotonic()), open_reply)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "Require client success, owner keyslot and marker.",
+          "anchors": [
+            {
+              "line": 488,
+              "text": "ok(opened[\"rc\"] == 0 and opened[\"peer\"] == unlock.OWNER and opened[\"marker\"],"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "positive_control",
+          "meaning": "Require responder-reported signed send separately; it is not the filesystem readback assertion.",
+          "anchors": [
+            {
+              "line": 491,
+              "text": "sent = until(lambda: any(line.startswith(\"SENT: signed response\") for line in owner_said), 15, 0.5)"
+            },
+            {
+              "line": 492,
+              "text": "ok(sent is True, \"the owner's machine says it SENT a signed response to a (owner.py unlock)\", owner_said[-6:])"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "Same tunnel, real client mapped owner keyslot and read marker; the responder separately reports a signed send.",
+      "outsideProof": "No additional keyslots or physical unlock claimed. The SENT log does not on its own verify authentication or mapper success.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 420,
+        "originalLastLine": 420,
+        "ranges": [
+          {
+            "firstLine": 420,
+            "lastLine": 420,
+            "claim": "Real client opened the owner keyslot and read the filesystem marker.",
+            "text": [
+              "  PASS with the owner's machine answering over the boot tunnel, the real pre-root client opens the volume through the owner's keyslot and its filesystem reads back"
+            ]
+          },
+          {
+            "firstLine": 421,
+            "lastLine": 421,
+            "claim": "Responder reports sending a signed response; separate supporting observation.",
+            "text": [
+              "  PASS the owner's machine says it SENT a signed response to a (owner.py unlock)"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    },
+    {
+      "caseId": "CI.one-node.collector-correlation",
+      "oldRawCaseSha256": "ef5ffb500e5f3996280676c569ba4e4b57e7c8424f04aeaa422844950844bc7f",
+      "oldCanonicalCaseSha256": "b3f5c1b5a59ab8e1a1187b0438fc83207855951d89ec7f0d56fe8defb14804d2",
+      "originalInput": "Owner revocation is committed and the scenario asks for the node's exact lease refusal under the new epoch.",
+      "originalOutcome": "The collector holds matching evidence for the same node, epoch, event, outcome and reason.",
+      "originalClassification": "verified_shipped",
+      "originalEvidenceTier": "hosted_emulated",
+      "originalScenarioLinks": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+          "requirementId": "KMS-CI-003",
+          "scenario": "Correlated denial",
+          "relation": "direct"
+        }
+      ],
+      "originalAssertions": [
+        {
+          "path": "e2e/one-node.py",
+          "symbol": "isinstance(named, list) and bool(named)",
+          "line": 590,
+          "sha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+        }
+      ],
+      "originalScopeIssue": "Correlated denial does not identify the renewal event or distinguish it from the daemon's local SIGN denial.",
+      "proposedScenarioLink": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-003",
+        "scenario": "Collector holds the revoked node's exact renewal denial",
+        "relation": "direct",
+        "proposedContractScopedSha256": "77582bfad867467cc92f3ab9f53a9531b9adb8b233fc51f6691e8555eabee680",
+        "proposedScenarioScopedSha256": "db9e80494c22435a3b7060958b49385ca325887caf855b6facd47155445933f4"
+      },
+      "priorBroaderScenarioProof": "subset-only; leave original contract and scenario in place",
+      "typedAnchorGroups": [
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "fixture_selector",
+          "meaning": "Committed owner revocation at epoch two, and exact renewal refusal reason.",
+          "anchors": [
+            {
+              "line": 571,
+              "text": "committed_at = time.time()                  # whole-second collector filters only"
+            },
+            {
+              "line": 573,
+              "text": "cluster.revoke_by_owner(\"a\", \"a\", \"REVOKED_STOLEN\", reason, shutdown=phrase)"
+            },
+            {
+              "line": 574,
+              "text": "commits = [e for e in cluster.trail(\"a\") if e.get(\"event\") == \"revoke-commit\" and e.get(\"outcome\") == \"ALLOW\"]"
+            },
+            {
+              "line": 575,
+              "text": "ok(cluster.held_epoch(\"a\") == 2 and commits and commits[-1].get(\"shutdown\") == phrase and commits[-1].get(\"signers\") == [membership.OWNER],"
+            },
+            {
+              "line": 587,
+              "text": "first_refusal = \"the source refused: a may not serve under epoch 2: no lease\""
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_call",
+          "meaning": "Poll for exact peer, epoch, event, decision and reason in committed collector stream.",
+          "anchors": [
+            {
+              "line": 588,
+              "text": "named = until(lambda: cluster.audit_has(\"a\", \"admission\", since=committed_at, event=\"admission-renew\","
+            },
+            {
+              "line": 589,
+              "text": "outcome=\"DENY\", peer=\"a\", epoch=2, reason=first_refusal), 60, 2)"
+            }
+          ]
+        },
+        {
+          "path": "e2e/lib/threenode.py",
+          "fileSha256": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597",
+          "role": "helper_body",
+          "meaning": "Poll can return an exception; collector comparison requires the local trail bytes' SHA-256 and all requested fields.",
+          "anchors": [
+            {
+              "line": 477,
+              "text": "def until(what, seconds, interval=1.0):"
+            },
+            {
+              "line": 478,
+              "text": "\"\"\"`what()` until it is true or the time is up; its last value (or the exception it raised).\"\"\""
+            },
+            {
+              "line": 479,
+              "text": "deadline, last = time.monotonic() + seconds, None"
+            },
+            {
+              "line": 480,
+              "text": "while time.monotonic() < deadline:"
+            },
+            {
+              "line": 481,
+              "text": "try:"
+            },
+            {
+              "line": 482,
+              "text": "last = what()"
+            },
+            {
+              "line": 483,
+              "text": "if last:"
+            },
+            {
+              "line": 484,
+              "text": "return last"
+            },
+            {
+              "line": 485,
+              "text": "except Exception as failure:       # noqa: BLE001 - keep trying until the deadline, then say what it was"
+            },
+            {
+              "line": 486,
+              "text": "last = failure"
+            },
+            {
+              "line": 487,
+              "text": "time.sleep(interval)"
+            },
+            {
+              "line": 488,
+              "text": "return last"
+            },
+            {
+              "line": 2705,
+              "text": "path = self._trail_path(name, trail)"
+            },
+            {
+              "line": 2706,
+              "text": "lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []"
+            },
+            {
+              "line": 2707,
+              "text": "out = []"
+            },
+            {
+              "line": 2708,
+              "text": "for line, event in zip(lines, self.audit_stream(name, trail)):"
+            },
+            {
+              "line": 2709,
+              "text": "if (event.get(\"detail\") or {}).get(\"line_sha256\") != hashlib.sha256(line).hexdigest():"
+            },
+            {
+              "line": 2710,
+              "text": "break                                  # from here on the collector holds another line: nothing is taken"
+            },
+            {
+              "line": 2711,
+              "text": "try:"
+            },
+            {
+              "line": 2712,
+              "text": "value = json.loads(line)"
+            },
+            {
+              "line": 2713,
+              "text": "except ValueError:"
+            },
+            {
+              "line": 2714,
+              "text": "continue"
+            },
+            {
+              "line": 2715,
+              "text": "if not isinstance(value, dict) or value.get(\"at\", 0) < int(since):"
+            },
+            {
+              "line": 2716,
+              "text": "continue"
+            },
+            {
+              "line": 2717,
+              "text": "if all(v(value.get(k)) if callable(v) else value.get(k) == v for k, v in fields.items()):"
+            },
+            {
+              "line": 2718,
+              "text": "out.append(value)"
+            },
+            {
+              "line": 2719,
+              "text": "return out"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "predicate",
+          "meaning": "Require a nonempty list of matched records; a polling exception cannot pass.",
+          "anchors": [
+            {
+              "line": 590,
+              "text": "ok(isinstance(named, list) and bool(named),"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "diagnostic_context",
+          "meaning": "Message and diagnostics do not substitute for the list predicate.",
+          "anchors": [
+            {
+              "line": 591,
+              "text": "\"the collector holds a's own lease refusal under epoch 2 (admission-renew DENY, peer a: %s)\" % first_refusal,"
+            },
+            {
+              "line": 592,
+              "text": "named if isinstance(named, list) else str(named))"
+            }
+          ]
+        },
+        {
+          "path": "e2e/one-node.py",
+          "fileSha256": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc",
+          "role": "helper_body",
+          "meaning": "The scenario verdict increments passed only when its predicate is true; failed cases make the process exit nonzero.",
+          "anchors": [
+            {
+              "line": 67,
+              "text": "def ok(condition, text, detail=\"\"):"
+            },
+            {
+              "line": 69,
+              "text": "if condition:"
+            },
+            {
+              "line": 70,
+              "text": "passed += 1"
+            },
+            {
+              "line": 71,
+              "text": "print(\"  \\033[32mPASS\\033[0m %s\" % text)"
+            },
+            {
+              "line": 72,
+              "text": "else:"
+            },
+            {
+              "line": 73,
+              "text": "failed += 1"
+            },
+            {
+              "line": 74,
+              "text": "print(\"  \\033[31mFAIL\\033[0m %s%s\" % (text, (\": %s\" % (detail,)) if detail != \"\" else \"\"))"
+            },
+            {
+              "line": 647,
+              "text": "return 1 if failed else 0"
+            }
+          ]
+        }
+      ],
+      "caseScope": "The exact epoch-2 peer-a admission-renew DENY and reason no lease matched collector hashes.",
+      "outsideProof": "No claim of every audit event; in particular, this is not collector proof of daemon SIGN denial or owner unlock.",
+      "proposedLogProof": {
+        "artifactRoot": "parent-trusted-evidence-v1",
+        "path": "artifacts/one-node-137006823728.log",
+        "sha256": "513e8c656f236f5c411c404d7ddfdb7b43abe3bfa254c90ee31f156f7ae57f5b",
+        "originalFirstLine": 442,
+        "originalLastLine": 442,
+        "ranges": [
+          {
+            "firstLine": 438,
+            "lastLine": 438,
+            "claim": "Owner revocation committed at epoch two.",
+            "text": [
+              "  PASS with \"shut down the KMS on a\" typed, the owner's revocation is committed on a (epoch 2), the phrase in a's sync trail"
+            ]
+          },
+          {
+            "firstLine": 442,
+            "lastLine": 442,
+            "claim": "The collector holds the exact peer-a, epoch-2 admission-renew DENY, reason no lease.",
+            "text": [
+              "  PASS the collector holds a's own lease refusal under epoch 2 (admission-renew DENY, peer a: the source refused: a may not serve under epoch 2: no lease)"
+            ]
+          }
+        ],
+        "archivedRunId": 44956870774,
+        "archivedJobId": 137006823728,
+        "historicalObservedRevision": "120e8796d24d417a50ea6f8651880d026457ec04",
+        "historicalObservedTree": "347cc36bd44945fcff8a6624237222cb64c0cf17"
+      },
+      "proposedHostedStepCorroboration": {
+        "input": "historical-job-step-verification.json",
+        "sha256": "76597e2afbab8ec1ee687dd43c5f817a020eed08ffdab3dfe83dc07ef3ddcd9f",
+        "jobId": 137006823728,
+        "step": {
+          "name": "One node, genesis to revocation, the owner its one unlock peer, the real daemon serving under its own lease",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6
+        },
+        "scope": "Historical step summaries only; not a full job/head payload."
+      }
+    }
+  ],
+  "pendingDecision": "Independent review of typed anchors, scoped case/scenario hashes, ranges and step corroboration before any replacement trust envelope. Current envelope stays stale."
+}

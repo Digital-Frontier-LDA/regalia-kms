@@ -186,6 +186,69 @@ jobs:
           gpg --version | head -1 && git --version
           ( cd adapters/gpgsign && REGALIA_EXPECT_GPG=1 go test -race -v ./... )
 
+      - name: Reserve OpenSpec product source directory
+        id: openspec-source-reserve
+        run: bash tools/openspec-ci/check-source.sh reserve
+
+      - name: Fetch immutable OpenSpec product source
+        id: openspec-product-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: 0a32a901d1240eec51ddff323274e2ad935116f3
+          path: .openspec-product-source
+          fetch-depth: 1
+          fetch-tags: false
+          lfs: false
+          submodules: false
+          persist-credentials: false
+
+      - name: Verify local OpenSpec product source
+        id: openspec-source-verify
+        run: >-
+          bash tools/openspec-ci/check-source.sh verify
+          0a32a901d1240eec51ddff323274e2ad935116f3
+          347cc36bd44945fcff8a6624237222cb64c0cf17
+
+      - name: Select pinned Python for OpenSpec checks
+        id: openspec-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14.7'
+          architecture: x64
+          check-latest: false
+
+      - name: Install pinned OpenSpec toolchain
+        id: openspec-install
+        run: bash tools/openspec-ci/install-runtime.sh
+
+      - name: Validate OpenSpec syntax and reference integrity
+        id: openspec-checks
+        shell: bash
+        env:
+          OPENSPEC_PRODUCT_REVISION: 0a32a901d1240eec51ddff323274e2ad935116f3
+          OPENSPEC_PRODUCT_TREE: 347cc36bd44945fcff8a6624237222cb64c0cf17
+        run: |
+          set -euo pipefail
+          runtime="$RUNNER_TEMP/openspec-ci"
+          node="$runtime/node/bin/node"
+          cli="$runtime/node_modules/@fission-ai/openspec/bin/openspec.js"
+          export OPENSPEC_TELEMETRY=0 DO_NOT_TRACK=1
+          export XDG_CACHE_HOME="$runtime/cache" XDG_CONFIG_HOME="$runtime/config"
+          mkdir -p "$runtime/tmp"
+          export TMPDIR="$runtime/tmp"
+          python_version="$(python3 --version)"
+          [[ "$python_version" == 'Python 3.14.7' ]]
+          "$node" "$cli" validate --all --strict --no-interactive --json
+          python3 -BEs -m unittest discover -v -s tests -p test_check_openspec_references.py
+          "$node" --test tools/openspec-ci/wiring.test.cjs
+          python3 -BEs tools/check_openspec_references.py --snapshot "$GITHUB_WORKSPACE" \
+            --source-repo "$GITHUB_WORKSPACE/.openspec-product-source" \
+            --source-revision "$OPENSPEC_PRODUCT_REVISION" | tee "$runtime/references.json"
+          python3 -BEs tools/openspec-ci/check-result.py "$runtime/references.json" \
+            "$OPENSPEC_PRODUCT_REVISION" "$OPENSPEC_PRODUCT_TREE"
+
+
   # Folded jobs (CI minutes): software-TPM end-to-end checks (swtpm, tpm2-tools; SoftHSM for runtime-admission). Each former job is ONE step named after it, with its own
   # timeout; every step runs even when an earlier one failed (if: !cancelled()), and the last step names each
   # failed one in the job summary and fails the job. The job's timeout is the sum of its steps'.

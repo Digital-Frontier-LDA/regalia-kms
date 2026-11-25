@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-runtime-interface-batch3-20261122",
+  "reviewedAtUTC": "2026-11-22T02:14:44.616626+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-text-only-with-two-partial-wire-dispositions",
+  "proposalPath": "openspec/coverage/runtime-interface-gap-batch3-proposal.json",
+  "proposalSha256": "a5d20bd3ad6ba3ab632f86ef9a920a64d85297481438535532db2f974f32fdc4",
+  "scope": "Six full text traces and two local descriptor subcontracts. Named upstream compatibility remains a spec gap. No new execution or qualification.",
+  "cases": [
+    {
+      "caseId": "HTTP.metrics.wrong-method",
+      "oldCaseSha256": "9414c8c2cd08043c00b2a434990a9b4b0ae059883a83c74e98d32125efeeca43",
+      "newCaseSha256": "3a6366593f956d4fc69b10a142a3d6e0c9c4e28e063247223d3b1047379cf4ef",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/observability/spec.md",
+        "requirementId": "KMS-OBS-001",
+        "scenario": "Metrics POST advertises GET",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "KMS.start.no-token-no-operations",
+      "oldCaseSha256": "a5f6b1509b7055eb52420f69fe4af530942f4de35d5a09603cc6314d3e958bb0",
+      "newCaseSha256": "de35afcc9f67e6ce1ef91564ac020a8ab072718d07179d55e47628ef42d8ffab",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/service-integration/spec.md",
+        "requirementId": "KMS-RUNTIME-001",
+        "scenario": "A daemon with no token backend withholds operations",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "KMS.policy-journal.append-before-sidecar",
+      "oldCaseSha256": "67683e66207dfc5cb257ac6ba98d0f169150493c0c0485a3c2acc67e637b9568",
+      "newCaseSha256": "b22f3ff0c7ba0aef793c906e4af0c3f0c764e3c188cb16fec5c8fbb8bb936932",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-002",
+        "scenario": "A durable append ahead of its local mark is recovered",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "SOPS.encrypt.wire",
+      "oldCaseSha256": "0267b54814907785da83ece5d9c4042ed2b9684905793613267a02d33c39b9a6",
+      "newCaseSha256": "75c0bd99482331ff2e37d1081878ffa57952f418d814dcfba3e9b793b0623bfe",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+        "requirementId": "KMS-ADAPTER-001",
+        "scenario": "Local Encrypt protobuf mapping",
+        "relation": "related_only"
+      },
+      "remainingClass": "spec_gap"
+    },
+    {
+      "caseId": "SOPS.encrypt.sidecar-principal",
+      "oldCaseSha256": "e6c65a1fcbca520f49bbf8b846497eefb1934003a2882c9386e81c62c243448e",
+      "newCaseSha256": "7d32e15e65291a6819c102dc3a57c222ba9dfb871bed160a3fd97e5f9853e7c9",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+        "requirementId": "KMS-ADAPTER-002",
+        "scenario": "Shared socket callers use the configured sidecar principal",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "SOPS.decrypt.wire",
+      "oldCaseSha256": "663e4e31cfce314246819d8416250c4a34d456c6fd726e7edb75dbe3fa125e1d",
+      "newCaseSha256": "2237154150bdca085c55e3b3307c93244d180b213988f1e27c81482adacc1f5a",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+        "requirementId": "KMS-ADAPTER-001",
+        "scenario": "Local Decrypt protobuf mapping",
+        "relation": "related_only"
+      },
+      "remainingClass": "spec_gap"
+    },
+    {
+      "caseId": "SOPS.decrypt.sidecar-principal",
+      "oldCaseSha256": "210e4c0c58ebaa0b3440297e100d3d3a7aaa06351e16aae9b147f0843c3bcb4f",
+      "newCaseSha256": "d3a0be50fd0c63d6a6c3ff969ca7fd709120df9de207777e1d557687da301b1d",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+        "requirementId": "KMS-ADAPTER-002",
+        "scenario": "Shared socket callers use the configured sidecar principal",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "GPG.cli.no-overwrite",
+      "oldCaseSha256": "dc78f8e364c091851027feecbd9a492dc63b626b6e8e36b83be8689baae81669",
+      "newCaseSha256": "abb3cda46f8f48e4e46bdc82f72198ca4cc3b2377265da8a4f1fcffb6e96b2ff",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+        "requirementId": "KMS-ADAPTER-003",
+        "scenario": "Signature publication preserves an occupied destination",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "status": "locally-implemented-candidate-tests; not-shipped-verification",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "productSourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "testFiles": {
+    "internal/operations/http_capacity_replay_test.go": "01735f9d28241c3d6e24da04fc825a285eb8e6cbf51f7c5dc2a1d18785dbe771",
+    "internal/operations/http_envelope_fixture_test.go": "bc1899a1c517ab5613d5469fbd49dcef387d10f8ba7cb5399d557233b4aeaaa7"
+  },
+  "patchSha256": "043ddafa9286ac812678f99e8db0c0960596f270d47467202b34726ebc131cc0",
+  "cases": [
+    "HTTP.sign.busy",
+    "HTTP.wrap.busy",
+    "HTTP.unwrap.busy",
+    "HTTP.certificate-sign.busy",
+    "HTTP.key-agreement.busy",
+    "HTTP.wrap.already-reserved",
+    "HTTP.unwrap.already-reserved",
+    "HTTP.certificate-sign.already-reserved",
+    "HTTP.key-agreement.already-reserved",
+    "HTTP.release-secret.busy",
+    "HTTP.release-secret.already-reserved",
+    "HTTP.seal-envelope.busy",
+    "HTTP.seal-envelope.already-reserved"
+  ],
+  "localSubtests": 15,
+  "parentRun": {
+    "binarySha256": "1156bd7d88f6f4be7341d813ead8aa25a3af9191c64ce351a1150082c96ddbe5",
+    "logSha256": "1dabe22f4fc358ac15f8ccbadca6dde7872ffe2272edf3b1c8598f7db0d1d0d1"
+  },
+  "executionTier": "local_nonroot_linux_http_integration_with_inert_backend",
+  "scope": "Actual HTTP/policy/FileState/executor path with software release/seal authentication and KEK selection; inert token backend and supplied verified TLS peer metadata.",
+  "outsideProof": [
+    "real token KEK crypto",
+    "live TLS handshake",
+    "live admission lease",
+    "daemon process restart",
+    "physical/systemd acceptance",
+    "external collector"
+  ],
+  "classificationChanges": false,
+  "hostedCi": "not run for candidate",
+  "supersedesCandidate": "openspec/coverage/runtime-api-http-test-candidate.json",
+  "supersededCandidateSha256": "61b9e124f882a2cc7e5cac88b2177388f3002cbf49a05f827ceeb8c82ce7879a",
+  "independentReview": "not performed; parent source inspection and fresh local build/run only"
+}

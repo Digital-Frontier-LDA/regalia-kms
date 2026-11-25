@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-sops-wire-batch6-20261122",
+  "reviewedAtUTC": "2026-11-22T02:54:14.425389+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-named-carrier-wire-contract-only",
+  "proposalPath": "openspec/coverage/sops-wire-contract-batch6-proposal.json",
+  "proposalSha256": "65b3c9dbe2222c56a1f005cce4b329377a9c30e6cce1c76a6edecd2e58a3cd11",
+  "scope": "Official SOPS3.13.3 service and admitted kms_key carrier field mapping; no full descriptor, CLI, TLS, token or other release qualification.",
+  "cases": [
+    {
+      "caseId": "SOPS.encrypt.wire",
+      "oldCaseSha256": "75c0bd99482331ff2e37d1081878ffa57952f418d814dcfba3e9b793b0623bfe",
+      "newCaseSha256": "189e692bb997a8695ef12779ad064896c45d08c0acbd23ead89016b24f75bcea",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Encrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "related_only"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "SOPS.decrypt.wire",
+      "oldCaseSha256": "2237154150bdca085c55e3b3307c93244d180b213988f1e27c81482adacc1f5a",
+      "newCaseSha256": "abf0453b4c06ff479c41a2478290a69d5f3de0714f6cc2cdd506849df3db6286",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Decrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "related_only"
+        }
+      ],
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "SOPS.protobuf.wire-numbers",
+      "oldCaseSha256": "10bf631ca71fcc6a92f0951b4a127d98278390c20e306e21632590ca216305a4",
+      "newCaseSha256": "8fd594054962476cfccbac0c6942acf879633b0b4735e2ded446046fd24be74b",
+      "scenarioRefs": [
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Encrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "Decrypt maps the SOPS 3.13.3 carrier wire fields",
+          "relation": "direct"
+        },
+        {
+          "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/client-adapters/spec.md",
+          "requirementId": "KMS-ADAPTER-001",
+          "scenario": "The SOPS 3.13.3 KMS carrier has matching nested tags",
+          "relation": "direct"
+        }
+      ],
+      "remainingClass": "test_gap"
+    }
+  ]
+}

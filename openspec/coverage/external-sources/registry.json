@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "contracts": [
+    {
+      "sourceRecord": "openspec/coverage/sops-3-13-3-upstream-contract.json",
+      "license": {
+        "repositoryPath": "LICENSE",
+        "gitBlob": "a612ad9813b006ce81d1ee438dd784da99a54007",
+        "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+        "cachePath": "openspec/coverage/external-sources/getsops-sops-v3.13.3/LICENSE",
+        "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/LICENSE"
+      },
+      "sources": [
+        {
+          "repository": "getsops/sops",
+          "revision": "26e2f4784ca61353082c32dbd987c25eda086dc9",
+          "repositoryPath": "keyservice/keyservice.proto",
+          "gitBlob": "3a471a34fd313bc63b77ce1104b125b8a187a0cf",
+          "sha256": "5e9f0b9e2521799b01ad08c7207bb9ba9815ce9d5a151ccd5160931a217c5844",
+          "cachePath": "openspec/coverage/external-sources/getsops-sops-v3.13.3/keyservice.proto.blob",
+          "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice.proto"
+        },
+        {
+          "repository": "getsops/sops",
+          "revision": "26e2f4784ca61353082c32dbd987c25eda086dc9",
+          "repositoryPath": "keyservice/keyservice.pb.go",
+          "gitBlob": "6314929c7d570e0d646891501247ebe9a3f59ddf",
+          "sha256": "fb25c89ee0e1eec53fa24e77fd34576aed95f1f103232258341c94cb96dbed3e",
+          "cachePath": "openspec/coverage/external-sources/getsops-sops-v3.13.3/keyservice.pb.go.blob",
+          "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice.pb.go"
+        },
+        {
+          "repository": "getsops/sops",
+          "revision": "26e2f4784ca61353082c32dbd987c25eda086dc9",
+          "repositoryPath": "keyservice/keyservice_grpc.pb.go",
+          "gitBlob": "d278b82d97ebfa9a46ab293cd7e0c850bd8de701",
+          "sha256": "e2aba26faa2ebde2884810ac3e5766b98b14d16f586e35cc8dd13ac62345d3bd",
+          "cachePath": "openspec/coverage/external-sources/getsops-sops-v3.13.3/keyservice_grpc.pb.go.blob",
+          "url": "https://github.com/getsops/sops/blob/26e2f4784ca61353082c32dbd987c25eda086dc9/keyservice/keyservice_grpc.pb.go"
+        }
+      ]
+    }
+  ]
+}

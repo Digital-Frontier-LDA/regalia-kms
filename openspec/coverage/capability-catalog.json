@@ -1,0 +1,188 @@
+[
+  {
+    "path": "runtime/api-and-configuration",
+    "prefix": "KMS-API",
+    "scope": "Operation API, errors, input limits and daemon configuration",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/authentication",
+    "prefix": "KMS-AUTH",
+    "scope": "Client identity, certificate/SPIFFE validation and principal mapping",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/authorization-and-approvals",
+    "prefix": "KMS-AUTHZ",
+    "scope": "Policy decisions, contextual authorization, approval binding and expiry",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/key-registry-and-custody",
+    "prefix": "KMS-REG",
+    "scope": "Registry object/binding validation, custody and backend-slot isolation",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/cryptographic-operations",
+    "prefix": "KMS-CRYPTO",
+    "scope": "Sign, decrypt, wrap and hardware-result semantics",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/envelopes-and-secret-release",
+    "prefix": "KMS-ENV",
+    "scope": "Envelope AEAD, KEK use and secret-release boundaries",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/cosmos-policy",
+    "prefix": "KMS-COSMOS",
+    "scope": "SignDoc/fee parsing, signing contract and supported transaction scope",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/policy-state-journal",
+    "prefix": "KMS-STATE",
+    "scope": "Spend-once, replay/quota/sequence state and recovery contracts",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/backends-and-token-lifecycle",
+    "prefix": "KMS-TOKEN",
+    "scope": "PKCS11, HSM/OpenPGP/PIV providers, PIN custody and token lifecycle",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/client-adapters",
+    "prefix": "KMS-ADAPTER",
+    "scope": "SOPS and GPG adapters and explicitly partial OpenBao integrations",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/audit-and-collector",
+    "prefix": "KMS-AUDIT",
+    "scope": "Hash chains, audit shipping/receipts, completeness and reconciliation",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/observability",
+    "prefix": "KMS-OBS",
+    "scope": "Metrics, health endpoints, alerting and operational diagnostics",
+    "owner": "runtime"
+  },
+  {
+    "path": "runtime/service-integration",
+    "prefix": "KMS-RUNTIME",
+    "scope": "Process lifecycle, executor bounds and operational-state integration",
+    "owner": "runtime"
+  },
+  {
+    "path": "delivery/software-build-and-ci",
+    "prefix": "KMS-CI",
+    "scope": "Pinned inputs, reproducibility, feature flags, CI proof and release checks",
+    "owner": "runtime"
+  },
+  {
+    "path": "baremetal/membership-and-topology",
+    "prefix": "KMS-MEM",
+    "scope": "Signed membership, immutable topology, quorum and epoch/tombstone rules",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/tpm-identity-and-attestation",
+    "prefix": "KMS-TPM",
+    "scope": "EK/AK/node identities, TPM counters, fresh quotes and enrollment proof",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/measured-boot-and-pcr-policy",
+    "prefix": "KMS-BOOT",
+    "scope": "Signed UKIs, measurements, PCR authorization and imported credentials",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/enrolment-and-config-publication",
+    "prefix": "KMS-ENROL",
+    "scope": "Checked enrolment, trust anchors, configuration ordering and resume",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/boot-network-and-unlock",
+    "prefix": "KMS-UNLOCK",
+    "scope": "Initrd network, peer unlock, key delivery and cleanup",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/single-node-owner-unlock",
+    "prefix": "KMS-OWNER",
+    "scope": "Owner contribution and attended single-node boot",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/runtime-leases-and-admission",
+    "prefix": "KMS-LEASE",
+    "scope": "Measured runtime leases, local self-lease and admission",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/activation-and-fencing",
+    "prefix": "KMS-ACT",
+    "scope": "Activation quorum, overlap restrictions, fencing and recovery authorization",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/etcd-and-operational-state",
+    "prefix": "KMS-ETCD",
+    "scope": "Member configuration, state history, startup and client access",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/recovery-and-restoration",
+    "prefix": "KMS-RESTORE",
+    "scope": "Signed epoch-raising restore, pending state and crash-safe recovery",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/replacement-and-revocation",
+    "prefix": "KMS-REPLACE",
+    "scope": "Restrictive revocation, fresh replacement, retired hardware rejection",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/update-and-site-advance",
+    "prefix": "KMS-UPDATE",
+    "scope": "Image approval, rolling/planned-outage updates and site transitions",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/offline-authorities-and-credentials",
+    "prefix": "KMS-CUSTODY",
+    "scope": "Root/owner authorities, offline records and sealed credential handoff",
+    "owner": "baremetal"
+  },
+  {
+    "path": "baremetal/appliance-and-service-hardening",
+    "prefix": "KMS-HOST",
+    "scope": "Verity/per-host etc, service users, firewall, AppArmor and storage",
+    "owner": "baremetal"
+  },
+  {
+    "path": "delivery/hardware-qualification",
+    "prefix": "KMS-HW",
+    "scope": "Real TPM/HSM/card/firmware qualification and evidence boundaries",
+    "owner": "baremetal"
+  },
+  {
+    "path": "delivery/release-milestones",
+    "prefix": "KMS-RELEASE",
+    "scope": "Single-node TEST, three-node TEST and separate production acceptance",
+    "owner": "baremetal"
+  },
+  {
+    "path": "security/threat-model-and-limitations",
+    "prefix": "KMS-SEC",
+    "scope": "Trust boundaries, topology limitations, scope and approved decisions",
+    "owner": "baremetal"
+  }
+]

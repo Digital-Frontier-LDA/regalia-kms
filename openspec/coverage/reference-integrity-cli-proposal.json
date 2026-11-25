@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "active": false,
+  "status": "implemented and tested in the local candidate patch; inactive inventory proposal",
+  "candidatePath": "tools/check_openspec_references.py",
+  "candidateSha256": "31a7da1fb601d2928388bbbaf3420955e98b03813b8315a2cf1085f7363fd3bc",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "entrypoint": {
+    "line": 650,
+    "text": "def main(argv=None):"
+  },
+  "interface": {
+    "proposedId": "TOOLS.openspec-reference-checker",
+    "invocation": "python3 tools/check_openspec_references.py",
+    "requiredOptions": [
+      "--snapshot",
+      "--source-repo",
+      "--source-revision"
+    ],
+    "output": "Normal checks emit JSON on stdout; argparse help and usage output are separate.",
+    "statuses": {
+      "0": "reference check succeeds, or argparse help is requested",
+      "1": "reference integrity refuses",
+      "2": "argument parser usage error"
+    },
+    "implicitOptions": [
+      "-h",
+      "--help"
+    ],
+    "argumentAbbreviations": false
+  },
+  "specDraft": {
+    "capability": "delivery/software-build-and-ci",
+    "proposedRequirementId": "KMS-CI-009",
+    "title": "Validate OpenSpec reference integrity",
+    "description": "The local reference checker SHALL resolve current declared scenario, source, candidate and external references against their specified inputs. It SHALL require supported schema versions as integer 1 and refuse nonstandard JSON constants. It SHALL return a nonzero status for a broken reference or malformed input. The result SHALL leave verification authority unassessed and coverage incomplete.",
+    "scenarios": [
+      {
+        "name": "Current references resolve",
+        "when": "the selected snapshot and pinned product source satisfy the supported reference profile",
+        "then": "the checker returns status zero with referenceIntegrity true, verificationAuthority not-assessed and coverageComplete false"
+      },
+      {
+        "name": "A declared reference is broken",
+        "when": "an active scenario does not belong to its named requirement or source evidence differs from its required bytes",
+        "then": "the checker reports referenceIntegrity false and exits nonzero"
+      },
+      {
+        "name": "A JSON input uses an unsupported format",
+        "when": "a versioned document supplies a schema version other than JSON integer 1 or a consumed JSON input contains NaN or either signed infinity literal",
+        "then": "the checker reports referenceIntegrity false and exits nonzero"
+      }
+    ]
+  },
+  "boundary": "No source locator or shipped claim for this candidate at the product pin. Parent review and any later inventory integration are separate.",
+  "candidateBaseDocsRevision": "848874d587e3cc356025605fdc67ccdf3928fb1f",
+  "parserPolicy": {
+    "symbol": "exact long option policy",
+    "line": 651,
+    "text": "    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)",
+    "lineSha256": "d8245733ee67dafa18136d6c475c6f8a21280ac8c228c06ba5b6306e35525b1c"
+  }
+}

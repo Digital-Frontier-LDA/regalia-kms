@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-runtime-api-batch1-20261122",
+  "reviewedAtUTC": "2026-11-22T01:40:02.389367+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-contract-text-only",
+  "proposalPath": "openspec/coverage/runtime-api-gap-batch1-proposal.json",
+  "proposalSha256": "5cac7e7ffaf16dcd29f9ea350cb3a0d75e41ef0b09b2d88c78f465fd3390bd7b",
+  "authorityBoundary": "Source-grounded documentation review only; no qualifying test execution, authenticated CI authority or physical acceptance.",
+  "cases": [
+    {
+      "caseId": "HTTP.sign.busy",
+      "oldCaseSha256": "939bd0aadb97a45cb314d02d84eb9a0db93600507793a5036ee64e3ef7f82ade",
+      "newCaseSha256": "2080afc0ac69b94df8c3ba614837843977ca4f3bd69d4387ac88917c87f26b02",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "An operation request reaches a full execution pool",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.wrap.busy",
+      "oldCaseSha256": "996eac1675a6aae4a09b293f3f0ad2d0fe7c45879ef0366d69fda7af7b384a25",
+      "newCaseSha256": "247bb853e2e9406c04c5b565f5af5ee8e1767a31751dc1f8b071c2b91e85b610",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "An operation request reaches a full execution pool",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.wrap.already-reserved",
+      "oldCaseSha256": "e53158ea7a8760a0fce582ee7d7eb9de5154f18965acc3106ebbc067d6092812",
+      "newCaseSha256": "5b4f5f9a447f42fc097be4d1a4b27bed4e4df637bb9d46a03e368f49c9b2df18",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "A reserved operation nonce receives a conflict",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.wrap.replay-after-restart",
+      "oldCaseSha256": "2dfd9dc4a6c10c9d6551497a4d9d1e801647a1ecea373a3fdf2f75ce6e9736db",
+      "newCaseSha256": "1611084d1d0ff9a538083b703c8676b7772bdbf9b5203fdebe8eb9b9632d8e68",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "A reopened daemon refuses spent wrap unwrap and certificate nonces",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.unwrap.busy",
+      "oldCaseSha256": "697910b7dd9af586ed27b0a5a6f8d0ded68d1daf4a7632c082e817737a5abbaf",
+      "newCaseSha256": "2bb11ff0261c347789f00dcc141a19667b0d04122cad9477d1501b0dd096ec63",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "An operation request reaches a full execution pool",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.unwrap.already-reserved",
+      "oldCaseSha256": "346bfd45b2a7cd3bc4d12641c904371f330e4a71bc5b140739aad846d15cb4b1",
+      "newCaseSha256": "a40a2713882722003130d7fc6dd4402d1c1f3cbd95fcdd9a4f044a7bf649f3f8",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "A reserved operation nonce receives a conflict",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.unwrap.replay-after-restart",
+      "oldCaseSha256": "25c334f8b6fdde4d1a8ccec0330c45b7b468375582c5d6b6c5cba0984f3c247d",
+      "newCaseSha256": "56980653c3a4caf928e8bd80e38afc856acb5738fc3852e7951fe4e5d6e4d58c",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "A reopened daemon refuses spent wrap unwrap and certificate nonces",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.certificate-sign.busy",
+      "oldCaseSha256": "8db97b08b4b72b979c7bba819b3e70dccbba110517746e9d573354d5f47cef35",
+      "newCaseSha256": "23613842329aa0a5d56f4f595dcc48bde5564d86f7d805daba8c9ac69ab3d04e",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "An operation request reaches a full execution pool",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.certificate-sign.already-reserved",
+      "oldCaseSha256": "03130cef051821ed209b87f13c0a826dfc18d6c69df10a5ec5cac8bf9c2f894b",
+      "newCaseSha256": "1fbfda29381bbb6b9af398da68bbb1aa57b6d6fb42f92b6c0009533d67098d73",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "A reserved operation nonce receives a conflict",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.certificate-sign.replay-after-restart",
+      "oldCaseSha256": "c5a4ce24783a5e72f64c4234afed4b6b9b4976bcf518da51ae8d87fe19e28463",
+      "newCaseSha256": "49f2742f909a6dd4e5dc4da50dbf558b225508731eb795a5d47e91fcf47ab306",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/policy-state-journal/spec.md",
+        "requirementId": "KMS-STATE-001",
+        "scenario": "A reopened daemon refuses spent wrap unwrap and certificate nonces",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.key-agreement.busy",
+      "oldCaseSha256": "bd75d0ab937890ef79325557efc3eb40edac53accb7ffc284c455e1482163388",
+      "newCaseSha256": "08e2a51ea81f47e0aba60235c33c8ef988cdd359ba9db1654eedbf08adbea829",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "An operation request reaches a full execution pool",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "HTTP.key-agreement.already-reserved",
+      "oldCaseSha256": "0315f1a58831150aa2a5bffdb20c373775fec53fd195a623c3398ed17ec11193",
+      "newCaseSha256": "8643cea4ddef2250644b78176f08c8dbd96abb8698b34ed6e11f08a716b5b35f",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/runtime/api-and-configuration/spec.md",
+        "requirementId": "KMS-API-003",
+        "scenario": "A reserved operation nonce receives a conflict",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    }
+  ]
+}

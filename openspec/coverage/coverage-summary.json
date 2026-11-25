@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "discoveryClosed": false,
+  "coverageComplete": false,
+  "ciEnforced": false,
+  "coverageClaim": "Partially reconciled case ledger for the pinned repository; exact remaining gaps retained. Candidate accounting is not exhaustive interface coverage.",
+  "inputDigests": {
+    "interface-inventory.json": "c548dd21ea845165bb8366a1f52dcb894202e3110024f1581ce37cc8d361173b",
+    "baremetal-interface-ledger.json": "79a76a6e2dfe57dac9d426b4aeac6d5ae0fc5ae9ae704bf7fb2d6bd069ae818f",
+    "runtime-interface-ledger.json": "797c5a479e7721a4c4101ba5b9b96db51583ed87610384b2114e44ed429f4a07",
+    "baremetal-spec-gap-resolution.json": "010e5c15ee2b328b07ca90d1570d198205a502913081b15ec912a24d7aea1b76",
+    "runtime-spec-gap-resolution.json": "81e8506fca9dbf2b92e21bfe1c6d1f3d93df0d7d67976b62f625020fcfc1bd1f",
+    "historical-case-proof-resolution.json": "900e38377b37731ef4755017fa9344a2abb4cdef46abf951487317f09bafb55b",
+    "historical-case-proof-acceptance.json": "934721b03d82420911189a0d43f88e395954d2b28bcc1fc0ccab6cb90be9bb7b",
+    "runtime-api-gap-batch1-proposal.json": "5cac7e7ffaf16dcd29f9ea350cb3a0d75e41ef0b09b2d88c78f465fd3390bd7b",
+    "runtime-api-gap-batch1-acceptance.json": "5bb0b435516927c7d90dabc3260166b5f6a4eb3b3a33775e7ea6fce318c4abdd",
+    "runtime-api-http-test-candidate.json": "61b9e124f882a2cc7e5cac88b2177388f3002cbf49a05f827ceeb8c82ce7879a",
+    "runtime-api-gap-batch2-proposal.json": "540e3418e6bca08783e107d4f527cb622bcb2f81e02429994a1d0f0f5504ca1e",
+    "runtime-api-gap-batch2-acceptance.json": "895610d363187e529170484bf3f9c05bc579bc4922abed5959ec94e4ae6c49a0",
+    "runtime-api-http-test-candidate-batch2.json": "d73365eb423f9103bec09e8321ebd7b497c2cc8d306b66147c73f12baaadd262",
+    "runtime-interface-gap-batch3-proposal.json": "a5d20bd3ad6ba3ab632f86ef9a920a64d85297481438535532db2f974f32fdc4",
+    "runtime-interface-gap-batch3-acceptance.json": "0d6f54c18c5946f893f2d8924447e840f9e9cc473c5580305b0dac50ffaef4ac",
+    "workflow-contract-gap-batch4-proposal.json": "bcdc06ebe2228acaa8760f39cee2d130613c1864dd64b3e045262eb5d78c4d96",
+    "workflow-authoring-supplement.json": "311e613faeff4e27a820d675ff9337a5ba33686028951415253828a9b4eb641a",
+    "workflow-contract-gap-batch4-acceptance.json": "b796944eb0be78516aafea008d939860c96dd97ae53074c3a9064d3932a9e71f",
+    "recovery-contract-gap-batch5-proposal.json": "3ce42bc54b1da42f42e68293aabc922c13bc078782f9bb4c3f49cb8c437f715f",
+    "recovery-contract-gap-batch5-acceptance.json": "059a2ebc1e9630e89c51635489905c28f6f284471623560baeed53f6b240768c",
+    "sops-3-13-3-upstream-contract.json": "c85aa4b0d148e1b15f1228ce3f5369152c3ffdef165af67cf579a22bd8c42b35",
+    "sops-wire-contract-batch6-proposal.json": "65b3c9dbe2222c56a1f005cce4b329377a9c30e6cce1c76a6edecd2e58a3cd11",
+    "sops-wire-contract-batch6-acceptance.json": "efefc6c33846b1dada76af7ae7c2e02cdddab04e31ae59c57596cd7cd0b774e7",
+    "sops-wire-test-candidate.json": "4d5f9cdbc9b7549c93668946ea47fab1b31aacc4c7ff611a0f42a622c2c8747e"
+  },
+  "summary": {
+    "originalCandidatesAccounted": 707,
+    "baremetalOriginal": 525,
+    "runtimeOriginal": 182,
+    "cases": 463,
+    "classifications": {
+      "test_gap": 418,
+      "contract_conflict": 13,
+      "spec_gap": 4,
+      "proposed": 19,
+      "verified_shipped": 9
+    },
+    "approvedExclusions": 0
+  },
+  "discovery": {
+    "baremetalDynamicSitesSourceExpanded": 16,
+    "baremetalProposedInventoryAdditions": 463,
+    "runtimeExpandedRegistrationRefs": 87,
+    "runtimeFieldDeclarations": 273,
+    "runtimeSchemaPropertyOccurrences": 85,
+    "baremetalOriginalIDsWithoutDirectCase": 517,
+    "baremetalOriginalOpenFacets": 3623,
+    "runtimeCanonicalOpenFacets": 1212,
+    "note": "Different inventory and canonical-facet scopes must not be added into a coverage percentage. Expansion, visibility, deduplication and untraced behavior remain open."
+  },
+  "historicalProofAcceptance": {
+    "path": "openspec/coverage/historical-case-proof-acceptance.json",
+    "sha256": "934721b03d82420911189a0d43f88e395954d2b28bcc1fc0ccab6cb90be9bb7b",
+    "profile": "reviewed-grouped-historical-proof/v1",
+    "scope": "Nine narrow hosted/emulated observations; no fresh or physical acceptance."
+  },
+  "localTestCandidates": [
+    {
+      "path": "openspec/coverage/runtime-api-http-test-candidate-batch2.json",
+      "sha256": "d73365eb423f9103bec09e8321ebd7b497c2cc8d306b66147c73f12baaadd262",
+      "qualification": "Current local candidate,13route cases; not verified shipped."
+    },
+    {
+      "path": "openspec/coverage/sops-wire-test-candidate.json",
+      "sha256": "4d5f9cdbc9b7549c93668946ea47fab1b31aacc4c7ff611a0f42a622c2c8747e",
+      "qualification": "Current local candidate,three wire cases; not verified shipped."
+    }
+  ],
+  "previousLocalTestCandidates": [
+    {
+      "path": "openspec/coverage/runtime-api-http-test-candidate.json",
+      "sha256": "61b9e124f882a2cc7e5cac88b2177388f3002cbf49a05f827ceeb8c82ce7879a",
+      "testPath": "internal/operations/http_capacity_replay_test.go",
+      "testSha256": "3cb24789c522779b130f61ed64b8c754e7c5ee977e429ad87862e72db76147b0",
+      "qualification": "Local candidate evidence only; assertion/test publication and independently accepted verification remain open."
+    }
+  ]
+}

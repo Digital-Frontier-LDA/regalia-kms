@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "status": "local-candidate-wire-tests; not-shipped-verification",
+  "productSourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "productSourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "candidateTestPath": "adapters/sops/sopsrpc/keyservice_upstream_wire_test.go",
+  "candidateTestSha256": "4cd89be84a0e8aab7b6cfa8692e5d4569ce8c003a458186102efb44a422a9c64",
+  "cases": [
+    "SOPS.encrypt.wire",
+    "SOPS.decrypt.wire",
+    "SOPS.protobuf.wire-numbers"
+  ],
+  "newSubtests": 7,
+  "existingPackageTests": "passed",
+  "executionTier": "local_nonroot_linux_protobuf_and_inprocess_rpc_registration",
+  "upstreamSourceRecord": "openspec/coverage/sops-3-13-3-upstream-contract.json",
+  "parentRun": {
+    "binarySha256": "f27a6ec0a9660aa0e94b6123d18d8e5b4d07654caadf218eae40ff3b27c04bd7",
+    "logSha256": "701550e77ec4e61cb1ccb577413439c5c3e154b443f2ce389ca79e557e56c6dc"
+  },
+  "outsideProof": [
+    "named SOPS release executable round trip",
+    "full descriptor/other oneof arms",
+    "TLS or transport interoperability",
+    "token or KMS operation",
+    "other releases"
+  ],
+  "classificationChanges": false,
+  "hostedCi": "not run for candidate",
+  "independentReview": "not performed; parent code/source comparison and fresh local build/run only"
+}

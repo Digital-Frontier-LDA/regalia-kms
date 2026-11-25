@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "owner": "runtime-parent-supplement",
+  "requirements": [
+    {
+      "id": "KMS-STATE-007",
+      "capability": "runtime/policy-state-journal",
+      "title": "Read-only policy history verification",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 1348,
+          "symbol": "func verifyPolicyStateJournal",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "internal/policy/state.go",
+          "line": 124,
+          "symbol": "func VerifyState",
+          "supports": "Verifies the read-only data from which the command reports the head"
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-kms/verify_policy_state_test.go",
+          "line": 91,
+          "symbol": "TestVerifyPolicyStateFailsOnAMissingJournalEvenThoughTheDaemonWouldCreateOne",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-kms/verify_policy_state_test.go",
+          "line": 47,
+          "symbol": "TestVerifyPolicyStateReportsWhatTheRunbookQuotes",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "rationale": "New contract text has case-level source/assertion references; qualifying execution and complete semantic acceptance remain open. No verification promotion.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "KMS.policy-verify.missing-journal",
+        "KMS.policy-verify.intact-journal"
+      ]
+    },
+    {
+      "id": "KMS-ADAPTER-006",
+      "capability": "runtime/client-adapters",
+      "title": "Signing command input validation",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "adapters/gpgsign/cmd/regalia-sign/main.go",
+          "line": 60,
+          "symbol": "func parse",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "adapters/gpgsign/cmd/regalia-sign/config.go",
+          "line": 30,
+          "symbol": "json:\"kms_url\"",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "tests": [
+        {
+          "path": "adapters/gpgsign/cmd/regalia-sign/main_test.go",
+          "line": 571,
+          "symbol": "TestTheCommandLineIsStrict",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "adapters/gpgsign/cmd/regalia-sign/main_test.go",
+          "line": 496,
+          "symbol": "TestAnUnsafeOrWrongDeploymentIsRefusedBeforeTheKMSIsAsked",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "rationale": "New contract text has case-level source/assertion references; qualifying execution and complete semantic acceptance remain open. No verification promotion.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "GPG.cli.strict-parser",
+        "STORE.gpg-config.unsafe-input"
+      ]
+    },
+    {
+      "id": "KMS-AUDIT-006",
+      "capability": "runtime/audit-and-collector",
+      "title": "Bounded collector alarms",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "internal/audit/collector.go",
+          "line": 766,
+          "symbol": "reported.Reason == \"\"",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "internal/audit/collector.go",
+          "line": 774,
+          "symbol": "switch c.admitReportedAlarm",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/audit/trail_test.go",
+          "line": 295,
+          "symbol": "TestReportAlarmIsRefusedOutOfBounds",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "internal/audit/trail_test.go",
+          "line": 365,
+          "symbol": "TestReportedAlarmsAreCappedPerIdentity",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "rationale": "New contract text has case-level source/assertion references; qualifying execution and complete semantic acceptance remain open. No verification promotion.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "COLLECTOR.alarms.bad-body",
+        "COLLECTOR.alarms.rate-cap"
+      ]
+    },
+    {
+      "id": "KMS-AUDIT-007",
+      "capability": "runtime/audit-and-collector",
+      "title": "Collector probe and shipping commands",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "internal/audit/collector.go",
+          "line": 307,
+          "symbol": "\"HEAD /v1/health/ready\"",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "internal/audit/httpsink.go",
+          "line": 197,
+          "symbol": "response.StatusCode == http.StatusNoContent",
+          "supports": "Accepts only the exact 204 readiness response"
+        },
+        {
+          "path": "cmd/regalia-audit-ship/check.go",
+          "line": 136,
+          "symbol": "func checkCommand",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-audit-ship/check.go",
+          "line": 180,
+          "symbol": "func conformanceCommand",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-audit-ship/main.go",
+          "line": 123,
+          "symbol": "func loop(",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "tests": [
+        {
+          "path": "cmd/regalia-audit-ship/check_test.go",
+          "line": 150,
+          "symbol": "TestCheckProbeReachesTheCollectorReadOnlyAndNamesWhatFailed",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-audit-ship/check_test.go",
+          "line": 162,
+          "symbol": "TestConformanceAgainstOurCollectorAndAgainstTheWrongReceiptKey",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-audit-ship/main_test.go",
+          "line": 76,
+          "symbol": "TestAnUnreachableCollectorIsRetriedNotStopped",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "rationale": "New contract text has case-level source/assertion references; qualifying execution and complete semantic acceptance remain open. No verification promotion.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "COLLECTOR.ready.probe-returns-204",
+        "SHIP.check.readonly-probe",
+        "SHIP.conformance.wrong-receipt-key",
+        "SHIP.run.unreachable-retry"
+      ]
+    },
+    {
+      "id": "KMS-RUNTIME-007",
+      "capability": "runtime/service-integration",
+      "title": "Bounded HTTP shutdown",
+      "status": "UNVERIFIED",
+      "sources": [
+        {
+          "path": "internal/server/service.go",
+          "line": 93,
+          "symbol": "if err := httpServer.Shutdown",
+          "supports": "Pinned source locator carried from the original case. Its limits are stated in the disposition."
+        },
+        {
+          "path": "cmd/regalia-kms/main.go",
+          "line": 300,
+          "symbol": "signal.NotifyContext",
+          "supports": "Routes SIGTERM and SIGINT to the daemon context"
+        }
+      ],
+      "tests": [
+        {
+          "path": "internal/server/serve_test.go",
+          "line": 248,
+          "symbol": "TestAShutdownThatOutlivesItsBudgetIsBoundedAndReportsTheDeadline",
+          "supports": "Pinned assertion locator carried from the original case. Its limits are stated in the disposition."
+        }
+      ],
+      "rationale": "New contract text has case-level source/assertion references; qualifying execution and complete semantic acceptance remain open. No verification promotion.",
+      "executionEvidence": [],
+      "beads": [],
+      "caseIds": [
+        "KMS.start.bounded-drain"
+      ]
+    }
+  ],
+  "sourceAreas": [],
+  "knownGaps": [
+    {
+      "id": "runtime-new-scenario-requirement-verification",
+      "capabilities": [
+        "runtime/audit-and-collector",
+        "runtime/client-adapters",
+        "runtime/policy-state-journal",
+        "runtime/service-integration"
+      ],
+      "description": "Five new requirement blocks retain UNVERIFIED authoring status pending complete assertion/case/execution reconciliation.",
+      "beads": [],
+      "releaseGate": "No shipped verification promotion from contract-text additions."
+    }
+  ]
+}

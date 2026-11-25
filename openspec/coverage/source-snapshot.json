@@ -1,0 +1,4984 @@
+{
+  "schemaVersion": 2,
+  "revision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "trackedFiles": [
+    {
+      "path": ".github/actionlint.yaml",
+      "digest": "d6d7cf697eaadf6e20d7778c1335eac9fa7912fb2b0900acddb68f07ead713e8"
+    },
+    {
+      "path": ".github/actions/tpm-diagnostics/action.yml",
+      "digest": "9bbff1ebaa03017463df5948174425c7913d29651ea3dd16650eb542859c5057"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "digest": "d64440ddaeb77bb8824f7efc6ec3d6599b07e99eb49bc4eaee40f7ad87e6def6"
+    },
+    {
+      "path": ".github/workflows/abrmd-probe.yml",
+      "digest": "31164272192c9cb781fbe9f76b905bf5b49d4930615dbf0a7cc56e4cbe2836b7"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "digest": "4f700ffd59c471e47c360420423255bc1310d082d73d48844d26a846fd1bace9"
+    },
+    {
+      "path": ".github/workflows/codeql.yml",
+      "digest": "c9a94961af60fe7e7417e0d4e5d0ac53e53e7a5948a286cecc97caa6d0d57ffc"
+    },
+    {
+      "path": ".github/workflows/initrd-drift.yml",
+      "digest": "ef20b6e1b2a2a687c9fb00d90644f74544ff8184220fdb56e0bec591185581a7"
+    },
+    {
+      "path": ".github/workflows/node-units.yml",
+      "digest": "60d0055c8a0e1d2349071d6ea5757ee5078942eceb6d0e296c673186a69ee6cb"
+    },
+    {
+      "path": ".github/workflows/recovery-matrix.yml",
+      "digest": "9f1d2da26b55640a956fd77dfa8433a64a9adc5748b084e9d2106983b5d34936"
+    },
+    {
+      "path": ".github/workflows/recovery-reconcile.yml",
+      "digest": "5942e83c604e92d27cb63eaaf26022d88db7b04e4529482f1245a10b35903644"
+    },
+    {
+      "path": ".github/workflows/secret-scan.yml",
+      "digest": "55db28fa68f75c5f0df8666450fcf4d41889c5e68a249cf03fcfabd63a7f295d"
+    },
+    {
+      "path": ".github/workflows/vtpm-probe.yml",
+      "digest": "098a072fe4625764c55c64a14b1b020ed3c6ea1a8b3a0a35a1d8f3d0bfe5db6a"
+    },
+    {
+      "path": ".gitignore",
+      "digest": "6feaded4e28ea86e001a6751b4e3d960e8b7c31b9616ff9936b79297086e809b"
+    },
+    {
+      "path": ".gitleaks.toml",
+      "digest": "6d7568bf0e9cd191555bf56000a3edbc1b35fcae0d59a0a19d91c070fbeca1bc"
+    },
+    {
+      "path": ".pre-commit-config.yaml",
+      "digest": "aca06b7cb1e02d8c9d2dae3393e4e83d277c42def7e4a3b9bd3458974c286e65"
+    },
+    {
+      "path": "API.md",
+      "digest": "344e142f8a531e703d5de2cf6189e40163edcce22cbecf5e7bb8fb9567f42d7a"
+    },
+    {
+      "path": "AUDIT.md",
+      "digest": "596d85c6e945c9233a006facee7a1ab02be127c3ff583d9113a30948218e7e93"
+    },
+    {
+      "path": "CERTIFICATES.md",
+      "digest": "8c11af1b80c039d0cab08dfbc9fdc6d06acc7430615994ee2a9c8d6bde155cc8"
+    },
+    {
+      "path": "CONFIGURATIONS.md",
+      "digest": "437ed771b6ea450f2b092abf6d09e649c5a1c3eb1c6d6e6180b921eb5b58a084"
+    },
+    {
+      "path": "COSMOS-SUPPORT.md",
+      "digest": "27e1272ca46b9c5765f466a85e2af74921b253e20c32fe437d204029cb1391c7"
+    },
+    {
+      "path": "ENVELOPE.md",
+      "digest": "4f3b81a3c1f3d6d385bfd3a181b960da4328bd90b44b1513675e2dbc4a5290c3"
+    },
+    {
+      "path": "FENCING.md",
+      "digest": "f1a922339afb6206dc0383478e45428de93a446622598ba2d4284f8b289fc0ae"
+    },
+    {
+      "path": "IDENTITY.md",
+      "digest": "4ad22a8fc761819bb8855682cdf16e8fb6c6a69cba314fa00d62e487b4b639d5"
+    },
+    {
+      "path": "KERNEL-UPDATE.md",
+      "digest": "8fe9f5119255540563bbdcf4c8376be2e7022f7ce1a2dcb737edbed468181beb"
+    },
+    {
+      "path": "LICENSE",
+      "digest": "ab7c19d66ebb78e6b5b1d93d9de0fac3dbb6076b57e9aefaf0dd574ea79aa679"
+    },
+    {
+      "path": "LIMITATIONS.md",
+      "digest": "1e80978279d6b0955e3e79175598fcf727a1bc9a4d2df701f53e2160ac381a4e"
+    },
+    {
+      "path": "NOTICE",
+      "digest": "d5bc0b14ab97cbe6752276c8cec45881a4b0b1718f62f7175fa87e50446c238f"
+    },
+    {
+      "path": "OBSERVABILITY.md",
+      "digest": "58b1e007ef75a1819cec0e3cca8d62753e6ccc90c30f8ea50e2f3bafc9baf66b"
+    },
+    {
+      "path": "OPENBAO-COMPATIBILITY.md",
+      "digest": "64e82c858e952521d921dc3419eeb58c4f9493ad736447e5003787d9e11e5905"
+    },
+    {
+      "path": "OPENPGP-COMPATIBILITY.md",
+      "digest": "3ab85c486d5a22ab8025a6ae2782d55caf36355d06be04237110fd0544a2036a"
+    },
+    {
+      "path": "PIN-CUSTODY.md",
+      "digest": "3bb66548abdee4540815ec0ad6f3a2f4fbb2458abb0a9820400bb379896dbb57"
+    },
+    {
+      "path": "PIN-IMPORT-DESIGN.md",
+      "digest": "539efc6a35b27e1d0e141b7e9946380f4c2060f2b40f4ebdd64a8d0d060a57c5"
+    },
+    {
+      "path": "POLICY-ANCHOR.md",
+      "digest": "0b9aae5f35dfbdfd673e444ef1c65763acc41e95ed1526bb17371c7220b6bcbe"
+    },
+    {
+      "path": "POLICY.md",
+      "digest": "58318dae5713f90b1f6a757dad964d1114960aecb487f0002f7d407c9c6fd8af"
+    },
+    {
+      "path": "README.md",
+      "digest": "7ad3b074ffec3bee04ee8cb819f0cd7a07370fda82d49e8950bd7d50784c133a"
+    },
+    {
+      "path": "SECURITY.md",
+      "digest": "8dfde1bd45272acae44090ee2d9c57d5c274ffbe7ca42376299bcaaed9d41465"
+    },
+    {
+      "path": "SOPS-TRANSPORT.md",
+      "digest": "18432e49162005d0c53174b9ae107897b973080a35c62580b6f2575ee53ff573"
+    },
+    {
+      "path": "TESTING.md",
+      "digest": "fecf11c33a2d31cbbe01f8889f6304e34f9febbe0d8eda7af8f882b4a68807e3"
+    },
+    {
+      "path": "THREE-SITE-THREAT-MODEL.md",
+      "digest": "3b72f70d2b711b614822c4af9b65b71b56166a98f4d5b783f4d2cee492d68ddf"
+    },
+    {
+      "path": "adapters/gpgsign/README.md",
+      "digest": "cc4baaeedfd17069532fcb81fc04ab4af6b6fb314dd8af49629a9238460c430d"
+    },
+    {
+      "path": "adapters/gpgsign/client.go",
+      "digest": "cd4c74ff93c3f7b115715949c257eb4f00d34618acfeea23d002ce263961e559"
+    },
+    {
+      "path": "adapters/gpgsign/cmd/regalia-sign/config.go",
+      "digest": "d4d02f416c0358d8369841b039434c42f6a7d16d26e82ef584968ebad6dc5788"
+    },
+    {
+      "path": "adapters/gpgsign/cmd/regalia-sign/main.go",
+      "digest": "bd29a26d8c2a9454e6de39b8bf10ea7a5b9cf53b693cf48fea56d470ec299fbc"
+    },
+    {
+      "path": "adapters/gpgsign/cmd/regalia-sign/main_test.go",
+      "digest": "b1daa0c83db5d4bba81e5180f4839b5e53bd893afda422a313a132524fa6004d"
+    },
+    {
+      "path": "adapters/gpgsign/config.example.json",
+      "digest": "85a9162716b0c347032b58b17d616ff52bfaad7bd2a383c023aeebc9f433a7da"
+    },
+    {
+      "path": "adapters/gpgsign/eddsa.go",
+      "digest": "24f5481d5950fffba8df8c86f0d758653ffb8b4287a7e7bab32d26cfc8240b10"
+    },
+    {
+      "path": "adapters/gpgsign/go.mod",
+      "digest": "77a26b899f6f9e1bc5d31c8331e344cb28febd953ec2c488fd08f581182ddd67"
+    },
+    {
+      "path": "adapters/gpgsign/go.sum",
+      "digest": "c56c47eba9917cdeabc50f32e609eeb1d4633856b641a9d63cfa1696d309528a"
+    },
+    {
+      "path": "adapters/gpgsign/gpgsign_test.go",
+      "digest": "e11a1f435b6187f87bb875827480c9426eb6e5c8ab377ce58110dd41bcbec8bd"
+    },
+    {
+      "path": "adapters/gpgsign/openpgp.go",
+      "digest": "883de6755f5324a9d0f77051b026ff2621bb29ebb8be3950b504ada8024d7c22"
+    },
+    {
+      "path": "adapters/gpgsign/signer.go",
+      "digest": "8f63f0ec40db1e859ec7a3f7beb2d30eed2bdfc403a1ab04d05a82df405c1676"
+    },
+    {
+      "path": "adapters/sops/README.md",
+      "digest": "e639b97b05ae960504c30f83e5d5c188bd65a96622be84dd7b77429da2d027e1"
+    },
+    {
+      "path": "adapters/sops/adapter.go",
+      "digest": "86e42dcf643958b922a182b9ce161c80e1de0753bf26aaedc4c57269dd966024"
+    },
+    {
+      "path": "adapters/sops/adapter_test.go",
+      "digest": "51de1efe83839645aaaea055dbba9c489d9564dba1d9ddb2d096fef09d923012"
+    },
+    {
+      "path": "adapters/sops/bypass_test.go",
+      "digest": "6cee181f1bcd11bebade66feb549bc1906036fbbab273a9b5218bc58bdbb84bd"
+    },
+    {
+      "path": "adapters/sops/client.go",
+      "digest": "eb3884937d15e8ac653347ef6565a4623f5ff519f75c2443c54c377998965f07"
+    },
+    {
+      "path": "adapters/sops/client_test.go",
+      "digest": "5e27a173be2e272b0603e65a44a77358c81c109c52045592f963de96c66e7b98"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/config.go",
+      "digest": "805385f92d4e3e0fef1ec290b3945229c8fd5d7b94f3510f9014cbd3ec0b9736"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/config_test.go",
+      "digest": "e2576c5db0e73c11cc5e7cae336e99e46829b9c430cb365c3a4f88883885c191"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/example_test.go",
+      "digest": "9cc77342b26312222fd95a98791479bf3963cb2b5505857eed91e5e9f28e6835"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/guard_coverage_test.go",
+      "digest": "aadd047aea78767be77129069c6b68a0333101258d32555344baa6f4275fd878"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/identity_test.go",
+      "digest": "0c6ba259f8ccd87582c25c7c3f79c9fb2801a01747e92d4a3ad4822584694f29"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/main.go",
+      "digest": "dac284e1f75d96fdabe13a72f0dd5ba467b033029743b20dbd1a9ff220e5406f"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/origin_test.go",
+      "digest": "e8a50cf7832ca9657ab70d08f60a2e5819b13511778c5e297798226a76edbd3d"
+    },
+    {
+      "path": "adapters/sops/cmd/regalia-sops-kms/startup_test.go",
+      "digest": "a34bc11630c8659c01a89e74fb2abfa44838cc1d2c7933b9ad25689121cf451b"
+    },
+    {
+      "path": "adapters/sops/config.example.json",
+      "digest": "7d94b938616d82d3c6cf2a004ddb20615d65ff62953102e1630fb6e8961e2a4a"
+    },
+    {
+      "path": "adapters/sops/drain_test.go",
+      "digest": "2a809c45a09ba21f3c34e534c061ff9e37f6c41b8b7707be3c90da4b9d8e3d08"
+    },
+    {
+      "path": "adapters/sops/go.mod",
+      "digest": "555ec797706ad205cd78773adfca528f3fd990c25902dc9123ebf74361f58641"
+    },
+    {
+      "path": "adapters/sops/go.sum",
+      "digest": "8369533cd3a7bd110b43dc8ea0edd07d75aa083ff59de33d8059dbc87dcfea4f"
+    },
+    {
+      "path": "adapters/sops/guard_coverage_test.go",
+      "digest": "ca227949439d558a37df3d5403b6c4d0a74506f09ffa3558ec248d2a604228cc"
+    },
+    {
+      "path": "adapters/sops/interop_test.go",
+      "digest": "fd26b3fc7feac8fc2ae0573d02bcbaa2a8bdff5747deef9e54a4f4d9b315b312"
+    },
+    {
+      "path": "adapters/sops/range_bounds_test.go",
+      "digest": "ca7d22b68f90c5e625e7f5e39a98f6f9ca8d1de7b0523e6bff8ebbf1ce8dbfb2"
+    },
+    {
+      "path": "adapters/sops/round_trip_test.go",
+      "digest": "c6adccada0241b02f11f6c5448e086c3d3aa2d2ecd72a4ad6bcc87e5a9bbe1ff"
+    },
+    {
+      "path": "adapters/sops/server.go",
+      "digest": "861ac873bebea9fa7c8af2c3ab1ae3433b334e9b7e325f4bb76a01f5a5be4fa6"
+    },
+    {
+      "path": "adapters/sops/server_test.go",
+      "digest": "f407677033d5d3c9f79ebf5450d68ba21d17f36cf42c48d59c693aeae05e8f6c"
+    },
+    {
+      "path": "adapters/sops/socket_directory_test.go",
+      "digest": "bfc9f7ccb26c208f5b4c8546a30d275fa4cf1ee902ab17b4e0c2a9753a18abcb"
+    },
+    {
+      "path": "adapters/sops/socketdir_test.go",
+      "digest": "728cc20b28de7c64977c3da4359bc021e7d047374d08563f14a31630a4bdbdb7"
+    },
+    {
+      "path": "adapters/sops/sopsrpc/keyservice.go",
+      "digest": "3fd68fe114877e55ca60a778e78a70102f19c0e0ba1c351451555f851e98df39"
+    },
+    {
+      "path": "adapters/sops/sopsrpc/keyservice_test.go",
+      "digest": "2df7e0056c8637d98978b4ca64baf1665b624c3a05998b495bad3f2e440d5113"
+    },
+    {
+      "path": "adapters/sops/transport.go",
+      "digest": "3a23273ccdeb08543c260779723d7b2d0ebc7fc1fe84ca92133374c6a1470c84"
+    },
+    {
+      "path": "adapters/sops/transport_test.go",
+      "digest": "d6fdd64fd9281b1addcbfb676328aad471bdff6bce739abc2495ca6f95360844"
+    },
+    {
+      "path": "adapters/sops/transport_validation_test.go",
+      "digest": "ebd4a727f15444d99988f2f19a52b6f3667ad48d964bcf874b0fae96093263d3"
+    },
+    {
+      "path": "api/README.md",
+      "digest": "9285be8f1da661502d03974905a7e0b5b6ca32554f1f8b141977e71be20b6bf3"
+    },
+    {
+      "path": "api/openapi.json",
+      "digest": "28183247ff0f5f41481c83920913be1280b74a1bef1c522f01220a181a28c370"
+    },
+    {
+      "path": "cmd/regalia-audit-collector/main.go",
+      "digest": "cd8c346bde6f3cceb7bbe2f2859643fbd328f3aded68b7e96f5370b561cef7ac"
+    },
+    {
+      "path": "cmd/regalia-audit-collector/main_test.go",
+      "digest": "f532304bcb9c877ea132ea3d3677d68e39a1361920fdef130fba4b2a3d8fc7f2"
+    },
+    {
+      "path": "cmd/regalia-audit-ship/check.go",
+      "digest": "3776e4518010317532385bf28dec738427d47c31b7b9275dc5de46d911819ff5"
+    },
+    {
+      "path": "cmd/regalia-audit-ship/check_test.go",
+      "digest": "8f5abac02fa2c1e900995df5c4d4eca1b8dfa077d17c2a065166a970e3a12a11"
+    },
+    {
+      "path": "cmd/regalia-audit-ship/main.go",
+      "digest": "02ff5b8f73673efec98d5b48bd3e617b75bc60d944a5eeeb5db51b7747d348b3"
+    },
+    {
+      "path": "cmd/regalia-audit-ship/main_test.go",
+      "digest": "88001976ff2b97e5636b0516d7aab8d555510a51a2538541d9d18aa61d0c0de0"
+    },
+    {
+      "path": "cmd/regalia-fence/guard_coverage_test.go",
+      "digest": "5b8efa194f66c15f0d10161f42ce0df885522b8216adab553e8f36674ab37c53"
+    },
+    {
+      "path": "cmd/regalia-fence/main.go",
+      "digest": "868c59890fa7f04451e1971f17b8adbe4daf7cbe865ad13e78c3fb7075f72150"
+    },
+    {
+      "path": "cmd/regalia-fence/main_test.go",
+      "digest": "00b4cbfbac5637e0159de389cecebd611c04dfbf7d2e63deefed2c584eda722c"
+    },
+    {
+      "path": "cmd/regalia-fence/run_test.go",
+      "digest": "60dc1c7d21bfefd125d48d1e32b0cf93357b3afac4ca090857408eba5f9e711d"
+    },
+    {
+      "path": "cmd/regalia-fence/signing_key_test.go",
+      "digest": "b000fc1951877ca05c3e4c2061c0a2bece95cf98ebf753d6c09530fad723097b"
+    },
+    {
+      "path": "cmd/regalia-kms/admission_wiring_test.go",
+      "digest": "bab43a800f0016fc26deddbd0851ea642b337e9cc88cf8c23b989734b12a4798"
+    },
+    {
+      "path": "cmd/regalia-kms/bare_invocation_test.go",
+      "digest": "c2fb47bd10491e5038de6b6161e45c95dba7fef2bae7624377248b6d82f0ed5a"
+    },
+    {
+      "path": "cmd/regalia-kms/declared_policy_test.go",
+      "digest": "2638c768da9ebb2d2b17c47fe008e3605a7cbe42f4855e677e9a335f2411b479"
+    },
+    {
+      "path": "cmd/regalia-kms/entrypoint_refusals_test.go",
+      "digest": "3848e016a72a56ce39a6ac006865d76b0d463a85a05d94ab352baea94db8fe57"
+    },
+    {
+      "path": "cmd/regalia-kms/exit_ceiling_test.go",
+      "digest": "184cb5869c2e30abeb96212ae28c942052dc5e33a8d3b89103720ee290ac4927"
+    },
+    {
+      "path": "cmd/regalia-kms/fencing_wiring_test.go",
+      "digest": "2a9bb791806cac505c569eb719aa0b801a35a1e446fd423aeda54946ef18c70e"
+    },
+    {
+      "path": "cmd/regalia-kms/fido_startup_test.go",
+      "digest": "0c73c1e66339a5b68746b8ec09a9ba5a685677ab4c6f4d738c5931b105836ae9"
+    },
+    {
+      "path": "cmd/regalia-kms/guard_coverage_round2_test.go",
+      "digest": "adb07ee4f95186ef30ae2f751699b97686c00d72f61c74c3b7336b0d98bd4e49"
+    },
+    {
+      "path": "cmd/regalia-kms/guard_coverage_test.go",
+      "digest": "77f21eb6e472b128f9e6afc93878e4a2298c6a2f0e69d27d368284b9d6b0ed9f"
+    },
+    {
+      "path": "cmd/regalia-kms/main.go",
+      "digest": "d61bd8a428ec1d0402ed8dac15b4dd775328be45675a85b3904794c663a958cc"
+    },
+    {
+      "path": "cmd/regalia-kms/main_test.go",
+      "digest": "0c39e5d53d48bcc8529051dcc3ae472559288bf205436e9ba1b8d6290a335238"
+    },
+    {
+      "path": "cmd/regalia-kms/mtls_test.go",
+      "digest": "8391f8c5531822dd3e21cdf53dff28f604ae3dcfeab9c5edcd9c9a151492787c"
+    },
+    {
+      "path": "cmd/regalia-kms/one_yubikey_piv_beside_pkcs11_piv_test.go",
+      "digest": "89fa9647eedc86df23c4fb1f4868aaf529a5e38f58f3c4552d4e27ae372a1d30"
+    },
+    {
+      "path": "cmd/regalia-kms/open_audit_test.go",
+      "digest": "161e32d422352d2da0a19878df50bedca6d16b5d43ef73f48737d935f4844d4b"
+    },
+    {
+      "path": "cmd/regalia-kms/openpgp_applet.go",
+      "digest": "b6c870412ad912651a9c835af3fdf399cb8c20944b3e3ac56b9b11cf0f465bee"
+    },
+    {
+      "path": "cmd/regalia-kms/openpgp_applet_hardware_test.go",
+      "digest": "a9440cc2201f4660bbec196cf36f44190bf1652c80d194a33a8411dd2b6b38d7"
+    },
+    {
+      "path": "cmd/regalia-kms/openpgp_applet_test.go",
+      "digest": "edf4a7423fd36411eee21882c1f3dcf624d36c99033e39d8135df918eaf099bb"
+    },
+    {
+      "path": "cmd/regalia-kms/opstate_wiring_test.go",
+      "digest": "2024aab968cc7b09b2b0b4056a41dd727d0ff5ff16b7922acbd192cdb352e5f3"
+    },
+    {
+      "path": "cmd/regalia-kms/piv_beside_pkcs11.go",
+      "digest": "965d7dcca94e0194cbf97c7857419d42c23bf97e8bcee03af69118fdb50ff1ad"
+    },
+    {
+      "path": "cmd/regalia-kms/piv_beside_pkcs11_test.go",
+      "digest": "6e023b9f8cae9fc6ad73f52ff1ce3e7f5ad7a4794dd0a0270ccd889fcc084442"
+    },
+    {
+      "path": "cmd/regalia-kms/preflight.go",
+      "digest": "5d87a21f218cf4cb6eff5b68140477c02f992784714ef920f282a0cc476808b7"
+    },
+    {
+      "path": "cmd/regalia-kms/preflight_amputation_test.go",
+      "digest": "e88d6e5eccd8b1f572dbebc45e3afd53fb2a76616e89de97391aca97f8abc23b"
+    },
+    {
+      "path": "cmd/regalia-kms/preflight_report_content_test.go",
+      "digest": "fd40d425eea4b9f1a789b65270994d6fc99f4d78c2662959605aca06b9d7a1df"
+    },
+    {
+      "path": "cmd/regalia-kms/preflight_test.go",
+      "digest": "97e962ff0d79c0efabf1a7886887cedd7f3aab98f6a204441cd4905e696d42f1"
+    },
+    {
+      "path": "cmd/regalia-kms/preflight_tls_test.go",
+      "digest": "f5131218ac9b1902d5a6136336335ad683bf74838ed9cbaaef093f1287161b76"
+    },
+    {
+      "path": "cmd/regalia-kms/provenance.go",
+      "digest": "a1d8051d5ed98fdae95548335384de915e9add69237948f12db5338114fe0181"
+    },
+    {
+      "path": "cmd/regalia-kms/provenance_test.go",
+      "digest": "2185f6a64916824079ab54155f51027a3979cec45648b964f91a12b309a56f8e"
+    },
+    {
+      "path": "cmd/regalia-kms/servable_test.go",
+      "digest": "ca1f800d48292edeae9bacf267d5c540e61ef88191fe4662a165fbbb0f159829"
+    },
+    {
+      "path": "cmd/regalia-kms/shipped_example_test.go",
+      "digest": "6a9ae4dcd9001d4e69243765097ce92be6f750f6260266a4dbfb46cee82c047a"
+    },
+    {
+      "path": "cmd/regalia-kms/startup_helpers_test.go",
+      "digest": "7431bbd011f12a887ddb047c1b8d28f5b8458bec695f252f88139e0e4bfd362e"
+    },
+    {
+      "path": "cmd/regalia-kms/token_mechanisms.go",
+      "digest": "7202e8bc4cec592ce7f7e96201c5edf0a21d8feb6537d45b442cd8de8f0ae376"
+    },
+    {
+      "path": "cmd/regalia-kms/token_mechanisms_hardware_test.go",
+      "digest": "e8baf110a67825a853e19a0ffaf6f2b708f632ace9f2523dc86ccb01a13fdcd6"
+    },
+    {
+      "path": "cmd/regalia-kms/token_mechanisms_test.go",
+      "digest": "ee19e49139b96ef20c422877be108921f98df08c0c5f1c6b1d1dce4d37ea9f27"
+    },
+    {
+      "path": "cmd/regalia-kms/verify_audit_test.go",
+      "digest": "206564d52772c48b424435523a9724d91d962b7036557579deb74d458d00c71b"
+    },
+    {
+      "path": "cmd/regalia-kms/verify_policy_state_test.go",
+      "digest": "0947396b9bf32846298c46cbe50799ed059679d3b840e48c913eb14fcb3aebc9"
+    },
+    {
+      "path": "cmd/regalia-kms/yubikey_backend_piv.go",
+      "digest": "06ac41fd2169c479b8d4888031273bb7663e55aafd0effaac76ed9188ddcd1b1"
+    },
+    {
+      "path": "cmd/regalia-kms/yubikey_backend_stub.go",
+      "digest": "903a3ef646a03280787b07c0669056825352a36f16470217d5a8524faa34d3e9"
+    },
+    {
+      "path": "cmd/regalia-kms/yubikey_hardware_test.go",
+      "digest": "9f5d7e09ff1fea7b4c983dc908c58c860b02bfc54f9b302ab341f723a353f291"
+    },
+    {
+      "path": "cmd/regalia-unlock/agent.go",
+      "digest": "8480fccaa428e4b75b896366ed50800d93ae4bc7c9d9ac977b31b24319578433"
+    },
+    {
+      "path": "cmd/regalia-unlock/agent_test.go",
+      "digest": "39692b3478e53d9ce2e475e307aff154964039277e318602eeb444efd1564f4d"
+    },
+    {
+      "path": "cmd/regalia-unlock/askpass/askpass.go",
+      "digest": "a3512d9aedda8ad186fa84a0b7571943b0717ba9790172dc8fcaa0fd7481607c"
+    },
+    {
+      "path": "cmd/regalia-unlock/askpass/askpass_test.go",
+      "digest": "176fbaac3b79d26b575bfee146711cf08e8e1a03cdce9f303d1ac0ad74d37986"
+    },
+    {
+      "path": "cmd/regalia-unlock/attest.go",
+      "digest": "d99b5cd9eeba505490602e52e4549697eb754e56332d29e8f50ce1b6f14b523d"
+    },
+    {
+      "path": "cmd/regalia-unlock/backoff.go",
+      "digest": "3d4901dcec955a03a2c58c9c132b483f4d51383fe8bca12e2ddb5bf81e4fddc3"
+    },
+    {
+      "path": "cmd/regalia-unlock/backoff_test.go",
+      "digest": "5d8567b406ffa2a265e145a3435d9d67963a6926d5bec47124df167797fc78ef"
+    },
+    {
+      "path": "cmd/regalia-unlock/bootcfg/bootcfg.go",
+      "digest": "4a42694115e458f84b3dae099e4dce2b214c5903feded78bc36e04966f9c12fd"
+    },
+    {
+      "path": "cmd/regalia-unlock/bootcfg/bootcfg_test.go",
+      "digest": "3eca795a3b4ce5411a071117417632ba09fb40332a391da63cd22330b25c10bc"
+    },
+    {
+      "path": "cmd/regalia-unlock/client.go",
+      "digest": "ad227cfcba3b34d81d71bf479e7cd9cf5fc89b1192dc4b51e53c35152dcb6b88"
+    },
+    {
+      "path": "cmd/regalia-unlock/config.go",
+      "digest": "02f2cb34b4a1462713f2b7baaddf09888c6874c6dfc00e4170d3d15a4ae14a1d"
+    },
+    {
+      "path": "cmd/regalia-unlock/disk.go",
+      "digest": "4b087343306185872927f17c47fd37be6d70ff2a8724b987ecc6f163399607e9"
+    },
+    {
+      "path": "cmd/regalia-unlock/main.go",
+      "digest": "cca86f3ae1868b7496a8cee0fd2ca16a2478bad20bf9825ba26e63a517014ddd"
+    },
+    {
+      "path": "cmd/regalia-unlock/main_test.go",
+      "digest": "a3b108868a5ebde089400e1ed4bfc34cb30e0d5d60ad3c27a7fff008c1606f8e"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/card_chain_test.go",
+      "digest": "9fdf4def6c59af4ed9b101fdba8fcbadecb6963b7f6df34a0fa467444eb076c9"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/highwater.go",
+      "digest": "85018b6f970faba4294616f803f92ecbd968e339ae26b2f7b3b796fe0b68bb7e"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/highwater_test.go",
+      "digest": "ce48f4a7c0e4bf7f0be67be44142d9a8270bfbf8a0fd871912c6fc7427a3458b"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/json.go",
+      "digest": "ca9b6c4728d2bcb4eac5ba2869da0987904a9c05f4a43348ded600f5a5ea9651"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/membership.go",
+      "digest": "7ed6209693523b8326747ceb42ee4a03fb7bbe705973806b6102ad944e762337"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/membership_test.go",
+      "digest": "a6fbab52428fe556cc1bc1943f11476f3619f18107a132bedf6790987ea9e034"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/pcrkey.go",
+      "digest": "ff821c11a6a1f468ed2c073bd0ee0035022bcdf9e1d6512fb7e749370c29e5fe"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/pcrkey_test.go",
+      "digest": "6279592ad3f515974364c220efbfabdc23816014de662de80c1b57bc40065cc9"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/typed.go",
+      "digest": "77452220b19e7f2ec2142bbc41d6e2bba8c941ab1a42e2a39a2c8cdd279abf3a"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/typed_test.go",
+      "digest": "4361a6f4f902d157e03a7a12ad0019e369ea69406d399a1b6944f4bbd812df8f"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/v4.go",
+      "digest": "1d977973e506d8aa0d768dd37fb9c35211ede9522e4720f7489cb28f2dcacc88"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/v4_test.go",
+      "digest": "bbf03ce5a6357798e7252fa2765e61ffc6619e0709dc1945559c4bede740d3ea"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/v5.go",
+      "digest": "c21a2837360d617ea1be12f95414dc9de1c860765433a37b9b07c0cadad5b3c7"
+    },
+    {
+      "path": "cmd/regalia-unlock/membership/v5_test.go",
+      "digest": "c00722c3f6a3fa68157b292abb3f431de991d03a0c23d9d686590cf77fdfae68"
+    },
+    {
+      "path": "cmd/regalia-unlock/nv.go",
+      "digest": "bda1e9eb9531e79ef0a9428d48c8b74580f014914f301bd14d7e7b5093997261"
+    },
+    {
+      "path": "cmd/regalia-unlock/nv_test.go",
+      "digest": "dcba75a6f07225170eb2e5bbb9e04c0b95999e1f6357508c0fb6bb2e56adceab"
+    },
+    {
+      "path": "cmd/regalia-unlock/owner_test.go",
+      "digest": "a413c99faa2335c02f073bb7bf2a0865e55725e1d7a771858f69941cda7ce961"
+    },
+    {
+      "path": "cmd/regalia-unlock/pregenesis.go",
+      "digest": "9b1134175700a8660748673465b16d4c317f7e7afc7949cedb1fb77237c9ca6c"
+    },
+    {
+      "path": "cmd/regalia-unlock/pregenesis_test.go",
+      "digest": "9dfd89328d143bb288648c757d0b840ee403be99048f518fb2d9b3c9e7067508"
+    },
+    {
+      "path": "cmd/regalia-unlock/render.go",
+      "digest": "ce6c1ee2c298cb24eb38ed6edc4f786f9819b2355ce43144b17b3e726e24717c"
+    },
+    {
+      "path": "cmd/regalia-unlock/render_test.go",
+      "digest": "06efef274647c9fa57ef366c436b60a325641a1c9185eb86083dc0bb360ad68c"
+    },
+    {
+      "path": "cmd/regalia-unlock/tpm.go",
+      "digest": "eb3a3c40224604fbb0accba6cca479eb3980ed1c053062238a2c8135d8750391"
+    },
+    {
+      "path": "cmd/regalia-unlock/wire.go",
+      "digest": "b5a29e044ddd5bf3ec00ca2b16e81f9b7d19129ed65e193412acd13f23e466cf"
+    },
+    {
+      "path": "config/REGISTRY.md",
+      "digest": "33a54c3ab8bd07c7e02fd181771e6c1964b08dc4537c6796b9921a472f964670"
+    },
+    {
+      "path": "config/approver-keys.example.json",
+      "digest": "c661d6dc50998c04cbe8473d643e7970a775d6e47ca23b6ad6ec54d5f1eff73d"
+    },
+    {
+      "path": "config/backend-capabilities.json",
+      "digest": "9db181b6959f5a0e64219f053f9c34c1b954818c76e9e117ee09cd5ba621a22a"
+    },
+    {
+      "path": "config/custody-manifest.example.json",
+      "digest": "90e39b7a2e9e6d2f1919189bd2f1a101f6a62799be092141c0593630521be4fa"
+    },
+    {
+      "path": "config/custody-manifest.schema.json",
+      "digest": "ea3c03b69f694a25912af675f2278e8a1de735b007ce115f9fe00c0675638b28"
+    },
+    {
+      "path": "config/daemon.example.json",
+      "digest": "d10386b4357000b7319714e6d5186fbb9d7c6c641c5baca85d5cc3dd4571a2b3"
+    },
+    {
+      "path": "config/policy.example.json",
+      "digest": "5303ae590440a7d2cf5f74e4c1af20005fb0e2ee6ec1555dfd27450571cb8e9d"
+    },
+    {
+      "path": "config/qualified-stack.json",
+      "digest": "31faf855783b26a4f5ebaeb15f31bc6b637b34deefc98d324c4ad5e27b16cb98"
+    },
+    {
+      "path": "config/rbac.example.json",
+      "digest": "4bead3ac7c4855d581ce64824e797a8d3b9808edf829f8ef6036ed354a11c641"
+    },
+    {
+      "path": "config/secure-channel.example.json",
+      "digest": "d31d962480c0a53dae1ac07a9df35cd8932294cd98f74203c2fc4d4eb0f21012"
+    },
+    {
+      "path": "deploy/__init__.py",
+      "digest": "b8804343baf039e632df8419ae51b5144db2f21db333d1bb3b5474f6f9751d1a"
+    },
+    {
+      "path": "deploy/baremetal/AUDIT-COLLECTOR.md",
+      "digest": "b37df339faaf02edfa44707c457086f2a4888a231d9256a5f64d1eb0c2eb205b"
+    },
+    {
+      "path": "deploy/baremetal/ETCD.md",
+      "digest": "1b10d8929e4612d38ffeb4d7e52a9684579b6faff2a8ec67313117aba3dfbb09"
+    },
+    {
+      "path": "deploy/baremetal/MEMBERSHIP-RECOVERY.md",
+      "digest": "250d9ce30280e5810d27109d6ae2b614b145de769b17df9ce5e6186304d40d30"
+    },
+    {
+      "path": "deploy/baremetal/MONITORING.md",
+      "digest": "56205fd412aa56d1825ec00c53adbdf2ec7ae87d8fdebb9bdca331e642cd875b"
+    },
+    {
+      "path": "deploy/baremetal/README.md",
+      "digest": "7f7ccb5f2689f7cca0b10f63c3b581489cfb345cbf69f0ee39a48714d2d12c43"
+    },
+    {
+      "path": "deploy/baremetal/RECOVERY-RECONCILIATION.md",
+      "digest": "dc9d7ad0c69df644d5378a7d677c36682c72a983a45fd01979d51de13c19defe"
+    },
+    {
+      "path": "deploy/baremetal/SSH.md",
+      "digest": "f555597c09c12db3adb8f70f326e65e7bc8c8ab139772114a2b7af5b233b1eb9"
+    },
+    {
+      "path": "deploy/baremetal/__init__.py",
+      "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "deploy/baremetal/activation.py",
+      "digest": "e586d5b71c77fd585d9592ebff89740b6319fa7bfb4e485a42836004f220b453"
+    },
+    {
+      "path": "deploy/baremetal/admission.py",
+      "digest": "3413ce918be273649a4233543236d8018f52d0b1b8f777fcdc6bb84375a9ce2d"
+    },
+    {
+      "path": "deploy/baremetal/anchorpolicy.py",
+      "digest": "261981706e72b86c4c9580d38158c5ff973e2407156c2649898f99e22366aab0"
+    },
+    {
+      "path": "deploy/baremetal/apparmor/local/usr.sbin.chronyd",
+      "digest": "77b0446b494a718607633f50d723fd1874d7f26221569f67063b9d7cb20db763"
+    },
+    {
+      "path": "deploy/baremetal/apparmor/usr.sbin.regalia-kms",
+      "digest": "8d36e6fdd3ccae3e309d3826023f2e3186dac3106c2dda520c5df09c80cb6ef5"
+    },
+    {
+      "path": "deploy/baremetal/attest.py",
+      "digest": "f69a6d39d35f459a1aeee8435748ecb853d48b3c16162546cdff8d5f218a207a"
+    },
+    {
+      "path": "deploy/baremetal/authtime.py",
+      "digest": "ef784afb8bd393e6fdf2511ab2c220191f5566544184805baaaea3ce6c612835"
+    },
+    {
+      "path": "deploy/baremetal/beat.py",
+      "digest": "009fb9f490385493a59ff44f912ebf6e4fef06beb175bc4391092b4a0b194812"
+    },
+    {
+      "path": "deploy/baremetal/bootcreds.py",
+      "digest": "f54139b05ae73f657e8f4befad2e77a755eb0a045a8fac0e83d408b11ea64b2c"
+    },
+    {
+      "path": "deploy/baremetal/bootnet.py",
+      "digest": "9cc96308d8bd7d7f37598f71ef3c4f827851557e2f9aede20a7877c3311316aa"
+    },
+    {
+      "path": "deploy/baremetal/bootnext.py",
+      "digest": "407b5806450d3465838a4f901eaa44856394582b87ceb5dbccf6fe59a5f1f524"
+    },
+    {
+      "path": "deploy/baremetal/cardrecord.py",
+      "digest": "e268f479cbf6dfc0f2a2a9b5cc53df55eb7d00d385cfaf8e7ccba2e3b1f6a015"
+    },
+    {
+      "path": "deploy/baremetal/convergence.py",
+      "digest": "e10f457f6fad8dabd9e3b20c956e91fa011d5884a18cc7aea9688cb5558eb049"
+    },
+    {
+      "path": "deploy/baremetal/debverify.py",
+      "digest": "3ce9e6e0c2a32075a942cc554fbd4e6de9e6c93ffff16a0f4add289134a8c0ba"
+    },
+    {
+      "path": "deploy/baremetal/deliver.py",
+      "digest": "c332fbc0be4200bc407947753c970e3287924ad3fe58f312946918f6dcce2db0"
+    },
+    {
+      "path": "deploy/baremetal/drill.py",
+      "digest": "5c3e7ea636d479446fa5711e0b4995b8baffdfc47d967deb1565b5a7681eecac"
+    },
+    {
+      "path": "deploy/baremetal/ekchain.py",
+      "digest": "a41f548f26a034a33211a3f8322daa5d52aa5dbdfe16bfaa6bd6932f64cca752"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/PINS",
+      "digest": "00baea523d16ab0c45e89e70e9fc79f6ae3155fbeedea5ac44ffa1497a09639a"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/SOURCES.md",
+      "digest": "e0a6a7ab21c67cacb0ff43b665c802995d7f03b6908f3f2f8f6e0bec6de6d816"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/infineon-optiga-ecc-root-ca.der",
+      "digest": "cfeb02fecd55ad7a73c6e1d11985d4c47dee248ab63dcb66091a2489660443c3"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/infineon-optiga-rsa-root-ca.der",
+      "digest": "899e35474c9807eb4c7f2f7a12da0028fb250cd02154d0009fca7d9c66574f3b"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/servers/server-1.json",
+      "digest": "5941a99f070894f38fca7cab332c3a82867db07104f3976b180243a9ebce5d0b"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/servers/server-2.json",
+      "digest": "2c760bb056139c188b086aece3fee97305d828ef864d3bbc927e8cfb7eb81bff"
+    },
+    {
+      "path": "deploy/baremetal/ekroots/servers/server-3.json",
+      "digest": "90b04be7faf6f61c5a6d6d5795b54b5ca8f36bd3c760a1fc7a6bed671f1c3616"
+    },
+    {
+      "path": "deploy/baremetal/elfclosure.py",
+      "digest": "cbebf0a07b98e546d2047f0a75e3e7c5ecba32f4a7343fa107591a06bd5e18e4"
+    },
+    {
+      "path": "deploy/baremetal/enrol.py",
+      "digest": "1875d4cbab230215113d50d2b6fcf2527cbb340528879e447cf60f1343712ef1"
+    },
+    {
+      "path": "deploy/baremetal/enrolpeer.py",
+      "digest": "0ef060ffe5b882d5bdb1d59c96c191ceed40a80bd1c7d5ab5ec28b5c08ceca40"
+    },
+    {
+      "path": "deploy/baremetal/espcreds.py",
+      "digest": "f5bb763620a13652a0696205451d351ae9be7e8c6ae2dfdb1f7ad8487e2cd512"
+    },
+    {
+      "path": "deploy/baremetal/etcdconf.py",
+      "digest": "e092e6564edeaa91f92a695a37c7e7dfe1182b7032cc584b9d5d566b8b922ae2"
+    },
+    {
+      "path": "deploy/baremetal/evidence.py",
+      "digest": "45e33afc0e4d10c0c20d9fbaa0dfdab192ddad342e0f7fce7c8d3033d879617e"
+    },
+    {
+      "path": "deploy/baremetal/fence.py",
+      "digest": "1b49544029cd04f36598a809dd829dc8631872969ee31e15972306009be169a4"
+    },
+    {
+      "path": "deploy/baremetal/firewall.py",
+      "digest": "ad877a70ef7acf5101667cc3be18e5a08d3acc05dc96c43f8069f388ea72841b"
+    },
+    {
+      "path": "deploy/baremetal/generators/regalia-boot-esp",
+      "digest": "ef8d0a0a7639baba4256b841cd233827686ea14e26f2cb80b56ac5683863af79"
+    },
+    {
+      "path": "deploy/baremetal/generators/regalia-kms-credentials",
+      "digest": "18f946cdf36f9ce8115578b14da1c1b26292f21dbbdfec017f3a9ecc5399690b"
+    },
+    {
+      "path": "deploy/baremetal/heartbeat.py",
+      "digest": "087f9bbfc0364abaee38529fe84e2c6afd33b3940294c12d7d0e6f8199aba700"
+    },
+    {
+      "path": "deploy/baremetal/heartbeat_watch.py",
+      "digest": "c807141a3a98a2d45e16f6253305c1b1f0879e7b3483cfc70df2fa178bf760d9"
+    },
+    {
+      "path": "deploy/baremetal/host_probe.py",
+      "digest": "e1419ad78526e9ec16154bc245250359d77a9b60fb4883842067a034587c38e1"
+    },
+    {
+      "path": "deploy/baremetal/hostpaths.py",
+      "digest": "5d3c5a5c4a7c1b1ef3bd086661dcf9119e79b3064fe053d79a9fd5c8ce7d5b8c"
+    },
+    {
+      "path": "deploy/baremetal/image/build-rootfs.sh",
+      "digest": "d3e04b2795d235849300e11d164784e3baef1e6415c7edf740c50f688af4f4f6"
+    },
+    {
+      "path": "deploy/baremetal/image/etc-inventory.txt",
+      "digest": "82563e6fef92f12780a1877ba22bcd0bbfc0763066d3bdda965fc754906b875b"
+    },
+    {
+      "path": "deploy/baremetal/image/etcd.pin",
+      "digest": "8334f612bac52f16a3f75a1f38dcd0b9c274b09e1a953fab1ba9a2cb9cab43e0"
+    },
+    {
+      "path": "deploy/baremetal/image/install-host.sh",
+      "digest": "87a0e7b7eaaa2c5fb02f417cede98c9462817331701940d1bc06dfaf0c569f74"
+    },
+    {
+      "path": "deploy/baremetal/image/packages.txt",
+      "digest": "0747609b3f056de4db296ff9cc47c3a105c26c4db14bd1f08bfd425931fbe3d2"
+    },
+    {
+      "path": "deploy/baremetal/image/regalia-kms.preset",
+      "digest": "6b5be27d6e0ca248fc669c723e4596e919f49727e7250a5877018034b95d1e21"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/banner",
+      "digest": "522365e20e762d861dc35969a2678383bee5ffa98a6c7f28901f55b2ad89e52b"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/issue",
+      "digest": "cc576b30fab5c39dc1fd16547a3c27822f39c7aabdcc7313d9ebc0abd6e47366"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/journald.conf",
+      "digest": "d2dddd0cd2736b770d43f1e5efb6462f7f0edf82f0de75233cb5e0279698071a"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/networkd.conf",
+      "digest": "c1eab62d43d90ea31b23a6fa6a09fa3c7a17cd8d4b6fbf52e8051438fe8af379"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/packages.txt",
+      "digest": "67a2bd7c13556f1b56d0ea6fb18a2dbc2db523407ca10bd0e276d9879f1ed3c0"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/regalia-staging-sshd.service",
+      "digest": "616e39cf22e54559e1a6b2f489d894a4e1c3fbfc1340ef09ece6d42b27c56108"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/regalia-staging.tmpfiles.conf",
+      "digest": "ec055ac13155de501d397292a7d086ff69865884600b38772baffe375963c41e"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/sshd-dropins-check.sh",
+      "digest": "c6e4a7f34a978d96463aaa67f237006bbbbeea96b03ec073c6ee779455a8a531"
+    },
+    {
+      "path": "deploy/baremetal/image/staging/sshd_config",
+      "digest": "947104dab583a0784cfd706088ca114b33e743a37792dc696aabe9a7beabf273"
+    },
+    {
+      "path": "deploy/baremetal/image/units-enabled.txt",
+      "digest": "68f574deb3d7d0a10dcc7196cd3423d91ebd50b0fb1f90a09d08ce9604bc764e"
+    },
+    {
+      "path": "deploy/baremetal/image/usr-verity.sh",
+      "digest": "56e140341850ff21c97ebf52ad8cd126936d44d13200cd8fe64760d5d3c9c6c3"
+    },
+    {
+      "path": "deploy/baremetal/imagevariant.py",
+      "digest": "2a8e7d32cbc24790d84564da5ce1495b11ab1fe665ce96feb867025aef33adbf"
+    },
+    {
+      "path": "deploy/baremetal/initrd/build-initrd.sh",
+      "digest": "0865d85b24b37ec243a52fb527af32afec7cea29c15a07ff46e2abf1e506e37e"
+    },
+    {
+      "path": "deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab",
+      "digest": "71ce00157d1a94a11ba7ecd31064ec77926aa804e866597412723a334b8912ce"
+    },
+    {
+      "path": "deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh",
+      "digest": "9fd6b5a3af34c52a813b1af5f2b86292d578c61476b8e32583a8e621499dfab2"
+    },
+    {
+      "path": "deploy/baremetal/initrd/initrd-inventory.txt",
+      "digest": "7c93b4c1630eeaa36524dc913b965229a54e187deb7e1a76780b1aab06d7e7c9"
+    },
+    {
+      "path": "deploy/baremetal/initrd/inventory-check.sh",
+      "digest": "028e3c9b73c3bf9987660c44df8fcebd543d01fae0f0c81e7377c9370d3183b7"
+    },
+    {
+      "path": "deploy/baremetal/initrd/regalia-boot-render.service",
+      "digest": "ee3f80862b52c8de60d912050166f6ecfe58919487b1e6b64388a9acebc4acd2"
+    },
+    {
+      "path": "deploy/baremetal/initrd/regalia-unlock.service",
+      "digest": "49ca760549d197ab1a4aed99ac4ed6100b6116837f001101c0a056f1c06267bd"
+    },
+    {
+      "path": "deploy/baremetal/initrd/regalia-wg-boot.service",
+      "digest": "e694637964649652c37b0ba5863bc5645ee91cc2e9ebccc92378c47fdcc1d896"
+    },
+    {
+      "path": "deploy/baremetal/initrd/repo-git.sh",
+      "digest": "cb02f5de6728f0f14d668f71a3b3619a7b9b43b5d0d3c068fd59e699a27378d5"
+    },
+    {
+      "path": "deploy/baremetal/initrd/tree-retry.sh",
+      "digest": "f32a049fc52cb3540ea5c46838a8062efe22cbe53d7ec9c9ed6da4ca24d3ebcd"
+    },
+    {
+      "path": "deploy/baremetal/initrd/wg-boot",
+      "digest": "46bba2722bf515a57754d72efdb89c5fe7b354e80a2414c69de277525899e275"
+    },
+    {
+      "path": "deploy/baremetal/initrd_drift.py",
+      "digest": "6a0a72ea91ac36a0367693301b6bcffff1d8be0b5e326f74abdc5498bb75c87d"
+    },
+    {
+      "path": "deploy/baremetal/keyfd.py",
+      "digest": "3d44859f387378192961442d188066f4f8e5900cb332d294bc701930d47b2a1a"
+    },
+    {
+      "path": "deploy/baremetal/lease.py",
+      "digest": "871bffb1ffc1c4049e81aed103308302beef5f0a2c80386dcb38f657152ea707"
+    },
+    {
+      "path": "deploy/baremetal/manifest.py",
+      "digest": "b24f3f4ca24dc0c175de100c2de72479c4bca1a4e420290376d097ace7a22f41"
+    },
+    {
+      "path": "deploy/baremetal/measurements.py",
+      "digest": "b89d44985e40657dc059f4b458d547d5a6925d94c4ec27264bd77b51522ceee4"
+    },
+    {
+      "path": "deploy/baremetal/membership.py",
+      "digest": "8727df0e0b751b1989f216beb1918a0591552ef23875ba21ec3b17cbcf8b61a3"
+    },
+    {
+      "path": "deploy/baremetal/metrics.py",
+      "digest": "6c0a3d4c77e04486fd211a111bfe33b785f292e363ba684cf22a9be4e2c6a512"
+    },
+    {
+      "path": "deploy/baremetal/network_probe.py",
+      "digest": "8a668551d47be7d72abe143725aecee2eb999870e4365dc6b1259c5ee1009657"
+    },
+    {
+      "path": "deploy/baremetal/node-exporter/web.yml",
+      "digest": "cc65f030eebabc539f48f0e4c0231a4908cb85984b7edc8e9b1179215a1c4ec0"
+    },
+    {
+      "path": "deploy/baremetal/node.example.json",
+      "digest": "6d9cdd217cd9ef35bb857f871d4d4b19d07aa68050987740e1327e577d2cdd8e"
+    },
+    {
+      "path": "deploy/baremetal/node.py",
+      "digest": "ba6e8a8a7590a74154295255e691ac2a6fcfd252cb7a890f4a53798ba2087f16"
+    },
+    {
+      "path": "deploy/baremetal/opstate.py",
+      "digest": "ccc562c64cac14f836519f16d33e9e5aa18de06bca20c688beb201a08f666e88"
+    },
+    {
+      "path": "deploy/baremetal/os_probe.py",
+      "digest": "38396fe15487b54d7c8868d4fd80a4d28b5a502788d538da71d3a80d58693dd0"
+    },
+    {
+      "path": "deploy/baremetal/owner.py",
+      "digest": "f971025d6aaca8508ba6ca0688bae4d4e5e5730cd8f7bc1bf68ff4caa164e97d"
+    },
+    {
+      "path": "deploy/baremetal/ownerauth.py",
+      "digest": "f2e953b212c43feb2e50209e9689223c4e148c9202760ab2e44322b9c493e979"
+    },
+    {
+      "path": "deploy/baremetal/ownerunlock.py",
+      "digest": "c103f477eaee1adb41bddfc2ed5d8bb3581dc549b836b021bb7d3bef9a453751"
+    },
+    {
+      "path": "deploy/baremetal/p11sign.py",
+      "digest": "373a5e712ecf8551ac20ccd611b9c5aca2a6e5cc9d549ba24cc19358c3f770bb"
+    },
+    {
+      "path": "deploy/baremetal/p11uri.py",
+      "digest": "91e67ebe617869a65130ef26336f0e676c1260556bb6b6d26c963a446c7d2557"
+    },
+    {
+      "path": "deploy/baremetal/pcr_survey.py",
+      "digest": "04f6fa39895c5a9a2258b7754c3a7e62bb6df5e4d2b0dd33ad1f7834937ab44a"
+    },
+    {
+      "path": "deploy/baremetal/reanchor.py",
+      "digest": "5f5134b0bb0afc7d2e3893e42897d49e33789d378fcc49d1e915bab2b2c506de"
+    },
+    {
+      "path": "deploy/baremetal/recount.py",
+      "digest": "9c6b5dd38e83dcbf9b9a07662cac8c0142e201705f5509f5de5376ccfb85b8ca"
+    },
+    {
+      "path": "deploy/baremetal/recover.py",
+      "digest": "87274373d8ae951eb9709f42a55cdd17e8de79cabfffefa9cf09f8fb829faad8"
+    },
+    {
+      "path": "deploy/baremetal/recovery-key.sh",
+      "digest": "6fdb4d05301565f9276cbcec0141d99800ebfe219fdbf477e08dd570863a55a5"
+    },
+    {
+      "path": "deploy/baremetal/recovery-reconcile.py",
+      "digest": "e1e710d13c487703ab798299d3954bc846e21e71ba34a289e34c6ce90282f4a7"
+    },
+    {
+      "path": "deploy/baremetal/recovery_state.py",
+      "digest": "a532d4a975baad11635ea0d31d34143502414f1d6893272c5d4ed9a464ad7e43"
+    },
+    {
+      "path": "deploy/baremetal/redfish.py",
+      "digest": "a655750553c6e6f680ee1157be205b1668d44e874bb5a4d35d684d12c1bf0293"
+    },
+    {
+      "path": "deploy/baremetal/regalia-kms-hardening.conf.example",
+      "digest": "0e403ef26d28b794681ccdab7aff5f582f5170d1a3c747e2b454ac6cf01ad836"
+    },
+    {
+      "path": "deploy/baremetal/regalia-kms.sysctl.conf",
+      "digest": "1aa0d1f10546ccce43e595358c3854c2325e56f482d8f1766034abbbca16206f"
+    },
+    {
+      "path": "deploy/baremetal/rejoin.py",
+      "digest": "ecb74ff7b206f643d9432c0be416357758d640d36de995bc8030ff600c31db1b"
+    },
+    {
+      "path": "deploy/baremetal/replacement.py",
+      "digest": "b7c72cd619b053044d8bff9517fc9a9c2befb7002e64c9385e1c6bea6e694211"
+    },
+    {
+      "path": "deploy/baremetal/restore.py",
+      "digest": "a1d22564ef8fad3c63559ada3ee9327b5aeb3c3ef3bb9d4910b8fa652d1462eb"
+    },
+    {
+      "path": "deploy/baremetal/revoke.py",
+      "digest": "bcd3b7db7c7a0bf519795aa93b2407da4b13bbc3d927511deee744a20419aa42"
+    },
+    {
+      "path": "deploy/baremetal/rollout.py",
+      "digest": "0cabdf9d34113c9c2d8d2ce4a1c9672ca5e4d7bb6159ba5d8e76a75afe136b0a"
+    },
+    {
+      "path": "deploy/baremetal/signkey.py",
+      "digest": "fdbee37c6be36849c224b019ead8e538612f52362421f1d85a4118b175e739eb"
+    },
+    {
+      "path": "deploy/baremetal/site.example.json",
+      "digest": "ba38762e959d5f46b1d0af32de744ea790b21f8b413e7c865c6b50b2967de8c7"
+    },
+    {
+      "path": "deploy/baremetal/siteadvance.py",
+      "digest": "6aeda0c13a1aa5fd9cde20abfbdddfdb8d05fc2028aecad0036936afaa46bd39"
+    },
+    {
+      "path": "deploy/baremetal/sitecfg.py",
+      "digest": "3d3772e238c347a46d3b765c001516cd98239dafdd01384d73dda852fb5ffb67"
+    },
+    {
+      "path": "deploy/baremetal/spendaudit.py",
+      "digest": "3506098805c5d55bb4b46ac96300a7c16e9509e05853c23201b23a83f1f3286a"
+    },
+    {
+      "path": "deploy/baremetal/ssh_trust.py",
+      "digest": "6ca9f0f1b487719425eda3205f8837d860468c909fab217319f50c98c0e6516d"
+    },
+    {
+      "path": "deploy/baremetal/sshd-regalia-kms.conf.example",
+      "digest": "f41bbd00860a775a9177e32f5c6085d7606c389e0a693e68b59635a57d31cdb2"
+    },
+    {
+      "path": "deploy/baremetal/survivor.py",
+      "digest": "5e619644782f73eac7af5b4710a50e4beba7d0bc9a0a94ae8d89d061d260fa06"
+    },
+    {
+      "path": "deploy/baremetal/sync.py",
+      "digest": "caf746db47c0966bd539172ea7b7afd3a01be95f2253a3201dc0a52165a77528"
+    },
+    {
+      "path": "deploy/baremetal/takeover.py",
+      "digest": "5d75f84e188575c883f772967121c3a5ac0ab5b2f975a2c97f5b863a4f627727"
+    },
+    {
+      "path": "deploy/baremetal/tpm-lockout.sh",
+      "digest": "ba6b06225bb7e9f71c9b7a78275787d783111493fb1878868c80d1dc2ac5eb1a"
+    },
+    {
+      "path": "deploy/baremetal/trails.py",
+      "digest": "58ea930cb1111286b92778fe5adaa8bb28db333cf14c73a24e3ce6b3b3da9275"
+    },
+    {
+      "path": "deploy/baremetal/uki.py",
+      "digest": "2765cacb5b00f8b5585cd019527a69f789b01cd2bdfe990cc6fde7c1ab26185f"
+    },
+    {
+      "path": "deploy/baremetal/units/00-regalia-etc.tmpfiles.conf",
+      "digest": "006561482cfd8c22eec8767f292b2436552f99206d0f47ca8764bf45ea86cb99"
+    },
+    {
+      "path": "deploy/baremetal/units/apparmor.service.d/regalia-etc.conf",
+      "digest": "b0399c1649abecde7d69326918a858d3c043a641575715422e94d276fbd316ec"
+    },
+    {
+      "path": "deploy/baremetal/units/chrony.service.d/regalia.conf",
+      "digest": "118887b822aa50171fcf8181d85c686e61c4077988e2bfb85ab3e3c45b827113"
+    },
+    {
+      "path": "deploy/baremetal/units/nftables.service.d/regalia.conf",
+      "digest": "468e35502829bcddfcf0431e9536722029909591ae4274e66f21d29caea1acce"
+    },
+    {
+      "path": "deploy/baremetal/units/prometheus-node-exporter.service.d/regalia.conf",
+      "digest": "5dd72ce81da99d2dcf73643324f7da86094c64b8dfcf1e284a583b352ac3403c"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-admission.service",
+      "digest": "0419967ba859b8d91e010fd3e026f32e0f488631176920fac34d47869cfed237"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-admission.service.d/per-host.conf",
+      "digest": "b87254ec6ee6de284ebdef8fc70aa5217332587e03ec7d48e009c404c97056b1"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@.service",
+      "digest": "fb4643317b1210813a1d054d8c59943936a7dc8d299a9781edfaa58fd9dca9ae"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@.timer",
+      "digest": "1b0696226cf2b4dd123c16bfb483b3880fba9daf757856503e330b30540196f2"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@.timer.d/per-host.conf",
+      "digest": "155c75ae0c30713cf203a0335cc90f7fd8291a52b0afc62e281e63fc23ef77f0"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@admission.service.d/owner.conf",
+      "digest": "0db2e6bc85d0486752e95d502aec1cc07c602116add1b845e0e956f08f0ba7ec"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@enrol.service.d/owner.conf",
+      "digest": "052c6e571af13d8ffdcd2b600a1db5ebc4dee788ea76e922f459800096e1ac41"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@esp-advances.service.d/owner.conf",
+      "digest": "cecdb8e1ca123a9925ac9049e2cdbd7c757e734d34b07c06d1e37e8a259049d6"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@reanchor.service.d/owner.conf",
+      "digest": "b170608c2e5c2d9cefa805a7972d5fb83b269a7fbfd753a6b4dd85879f467353"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@recount.service.d/owner.conf",
+      "digest": "5f0fd9915c6b6a34ea4dcf38b77ef85fcf679f2d0e8b8357a35e4f52a9d2e9e8"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@recovery-key.service.d/owner.conf",
+      "digest": "48906d3a1f3ddff1ad079acd16a6bffe31eef1af27c53205eb67f6a693ac08ff"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@recovery-reconcile.service.d/owner.conf",
+      "digest": "fffd4d2cff849c4e2ce7244b5c079df60244ad0d490027d7a82d97e137231237"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@survivor.service.d/owner.conf",
+      "digest": "159b88e6f2d94ff5492bdcf51bac237027e1a3bf599cbb6205f95aa5a8c914bb"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@sync.service.d/owner.conf",
+      "digest": "4f01fc1842ef4d97ae8b2912fd440696d514147808b287062c38c6a665006033"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@time.service.d/owner.conf",
+      "digest": "d2ceba962cad3fed19c4c1218a93868c01a66735bd325e2b8c363f67db0df7c1"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-prune@update.service.d/owner.conf",
+      "digest": "7bee133062c7b74508d76effecbc1da267f5d107ff5f9ea11402d69f0e9d232b"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship.sysusers.conf",
+      "digest": "668880b08bebff81221214aab6ee88dfa4c803df780ca667315fc322a00acd02"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship.tmpfiles.conf",
+      "digest": "41ff176a9bf236912bd6851a67abe808394b686cab4b9f06086d5e496d0d9982"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@.service",
+      "digest": "49077366ddf265d3049972d6a028c14704561ea97b2bc344ea1bbf7595d61eb3"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@.service.d/per-host.conf",
+      "digest": "5dcec36e5cb9060e6ae9b2e7de408c253077118b8705a06d0c6bfa01701ce482"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@admission.service.d/reader.conf",
+      "digest": "309aa2b8e28e919e4f9a6cb59734bd526fb8683b1e937c3431ba8cd132a3fed1"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@enrol.service.d/reader.conf",
+      "digest": "380e9bcab95152834c976826d0f12997b6dc77888869ecebd941a832146ed41f"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@esp-advances.service.d/reader.conf",
+      "digest": "14681ed03c11838ec50cf7099a1084e49c5175b24fc323a341e5ef6e8eb34e2e"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@reanchor.service.d/reader.conf",
+      "digest": "99c8724daf6b9467dfa79e3b2b7a7285fa14a14c20a81fc0a27a129732b79c61"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@recount.service.d/reader.conf",
+      "digest": "f86ed1e0696255ee62a92cee317b589a15f5e3603c00e2ed6a2b139187d15e6d"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@recovery-key.service.d/reader.conf",
+      "digest": "c02ea6f9e6017e93920d24715d1a58669ca224eaacea447bd84ebf88ae91afa3"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@recovery-reconcile.service.d/reader.conf",
+      "digest": "d2bd0dccd57ecefd55ed1dae55233a925add049352ce00bb676ce6e0804e41c5"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@survivor.service.d/reader.conf",
+      "digest": "18d1fdce62d4fe6f496293f59620849549d078e8443ca03fe34d0569b99efb40"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@sync.service.d/reader.conf",
+      "digest": "15e38b7ea21d8229b804542583a9a9224ab1f88eda77a740fe68d16cfaa9dd96"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@time.service.d/reader.conf",
+      "digest": "2bee27e9d02d316bc11b5a4050606e1dc42b9de9b17572562703f8bc73a1b040"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-audit-ship@update.service.d/reader.conf",
+      "digest": "88ae9bbc8fda10937e093e470080b92f61fd42f2011e87134e7a818fb8ac41d7"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-authtime.service",
+      "digest": "780bac91604f29bc4f90ad6b41a29ba45dfbd53032a7e5867573e3f81ea82c76"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-authtime.service.d/per-host.conf",
+      "digest": "4175c4112a4a78dc8b8ce845abc24f9e52df0f56c48f1472d39d601e9158e059"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-boot-session.service",
+      "digest": "8d846ba3ff3cfe62b02803f8d3c673429ce83a453798e4690b90e3171e371311"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-boot-session.service.d/per-host.conf",
+      "digest": "0620ac419624eadec50ce8affe15a35a7d7de8ee8007236a5adc788f53a90e98"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-esp-advance.path",
+      "digest": "a08615d4fc2e6193d189c863307c48a8aeb715d0787ff5a86cc0067bfbb3a9fa"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-esp-advance.path.d/per-host.conf",
+      "digest": "ce4850a0571cc5255edfdd741d1c26efca523a0774c9cffc77100bdc480b299b"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-esp-advance.service",
+      "digest": "e525ff2dbd42c2151d6cba6f233a805b4368e910ce2a05232d1cb6394c7b0c84"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-esp-advance.service.d/per-host.conf",
+      "digest": "5ffe18d627239efa08611bc0a19fdd9b2d65a916cc865690489e2b5a1a58fd5a"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-etc-factory.service",
+      "digest": "18ccb5bb23080f4ae151efa539ca76852b102a06492fc79c2fb761accea4f8d5"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-etcd.service",
+      "digest": "885ac03d4c27096b6d33a9f4782c99e43be544b112b425da014b8093337fdffc"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-etcd.service.d/per-host.conf",
+      "digest": "f310f93ffa973580617144ad4961439e97045129605b3d998de27145bdfebfd6"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-kms.service.d/apparmor.conf",
+      "digest": "ebec1e0d19d80fa1732492557c8d58be528661cbda8ba0295f4dbe1cc4cc95c8"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-kms.service.d/firewall.conf",
+      "digest": "68874a5181840b0a8b04154e929076f2c1785dd178b30834cfc7a561b0233219"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-kms.service.d/memlock.conf",
+      "digest": "00c621dfb153e56dbb537d96ed0e97e794f6ba3adccfff5ff6032eeff7dd564e"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-site-check.service",
+      "digest": "c98163979d1a175862c989bc0d878bad744f4351afb51500a52cbab8265f04fe"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-site-check.service.d/per-host.conf",
+      "digest": "513aaf708f3df1ef3d35846875fddcb665e7a154c200821c76bc7544a41bb744"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-sync.service",
+      "digest": "1b0371d9ca5b3fff170ad25127efc42ed5813496b14fd82602fc03ddc239a8c6"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-sync.service.d/per-host.conf",
+      "digest": "6017e929b7fcb9d8a08a83fb3fd05e593f35947b199ca7bb75c6e401720087fb"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-wg-apply.path",
+      "digest": "293cb0ad4ab09bf8a903eabeaa536fc892f7846d9b5dbb3ef69429d161ea4e91"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-wg-apply.path.d/per-host.conf",
+      "digest": "9ef015835e1dafe81b5c4373d5512292e232c38251570a2335a41aff05b5b339"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-wg-apply.service",
+      "digest": "e70d4ce87f39a1edb3026528d533334d8cc41fa720193ac81be814507f1be4bd"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia-wg-apply.service.d/per-host.conf",
+      "digest": "9c79340d85ff67b5c51ea16d8a73a4eaf389cb2a1c728081e143875e2be9450e"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia.sysusers.conf",
+      "digest": "76e53cfb93679a9b51f1f5f0079bff03899efa73fc4b7ca33d234ab75b0b875b"
+    },
+    {
+      "path": "deploy/baremetal/units/regalia.tmpfiles.conf",
+      "digest": "3470bb7873aca7bd69d82445f607171a6b19a995773364a99b00c3e05135d7c0"
+    },
+    {
+      "path": "deploy/baremetal/units/systemd-firstboot.service.d/regalia-etc.conf",
+      "digest": "e2554bd80fd5e6fe96fc9fee589b604ebcf8203976408a73fc4980e5beba4e22"
+    },
+    {
+      "path": "deploy/baremetal/units/systemd-sysusers.service.d/regalia-etc.conf",
+      "digest": "affbf784fa568fc09a44895bc8d386bc477c7f285fbc54e390c4d97e72089f9f"
+    },
+    {
+      "path": "deploy/baremetal/units/systemd-tmpfiles-setup.service.d/regalia-etc.conf",
+      "digest": "56a83bd6f4a47e450c97b00b4af1e41a21a313c2371876f3b963a18f81dcca58"
+    },
+    {
+      "path": "deploy/baremetal/unlock.py",
+      "digest": "3545eb8ecbe930984ec38bee8f57f99db584b054343efafd9360b1c782de1a4b"
+    },
+    {
+      "path": "deploy/baremetal/update.py",
+      "digest": "cfd84de1f072a00e9845cc8bfa4f3ef0f51785e84c8337e2f3be1e54b46a81af"
+    },
+    {
+      "path": "deploy/baremetal/wgsvc.py",
+      "digest": "8b85446b0b8030be6128e615c3b7952b695ab926eef9f7a97415e829a78bcb65"
+    },
+    {
+      "path": "deploy/monitoring/regalia-kms.rules.yml",
+      "digest": "4e12e4013afb696c08d25d3d02909221ca9dc3b6288071d99489b6ca2a5a0fd5"
+    },
+    {
+      "path": "deploy/monitoring/regalia-node.rules.yml",
+      "digest": "9d6ec14c830c54a2503f06696948de40397a2c3b0a48464b229c7bfe088b7d49"
+    },
+    {
+      "path": "deploy/opensc/ignore-yubikey.conf",
+      "digest": "eb7e8a0720d5aecb987d1e351f6e4e2e352ce364e041d29c25850b92447fda5f"
+    },
+    {
+      "path": "deploy/opensc/yubikey-openpgp.conf",
+      "digest": "627c5d13c2683588a14f6cdca82e6d9b253a21b553a1de110332ade17d497329"
+    },
+    {
+      "path": "deploy/polkit/50-regalia-kms-pcscd.rules",
+      "digest": "75d942b8a3d3c62be4082787eb1373504b09bee0fe0197541c910402a66eb55b"
+    },
+    {
+      "path": "deploy/seal-hsm-pin.sh",
+      "digest": "eeed623d5c50129b5141c782f60fc26df3d39e433de523c8f1ffef2b837e8847"
+    },
+    {
+      "path": "deploy/systemd/regalia-kms-credentials.conf.example",
+      "digest": "b8bdadd8008102dac2b00aff0fade66cf21078ca3e0e3c5fc07d204c6822a9e0"
+    },
+    {
+      "path": "deploy/systemd/regalia-kms.service",
+      "digest": "86ccec4707b300de14e01223678bba2d45961ef88c4e56b3c6fddea97e86b39a"
+    },
+    {
+      "path": "deploy/systemd/regalia-kms.sysusers.conf",
+      "digest": "d726e8a77c956d3ebcb50d4d2a6d786c49abd1cede25474a841e522caeb68177"
+    },
+    {
+      "path": "deploy/systemd/regalia-sops-kms.service",
+      "digest": "98d70cf5e39d1458150c1051cdb8252debbb4a81539450fd8f40a88ac232ba57"
+    },
+    {
+      "path": "docs/design/single-node-inventory.md",
+      "digest": "b646c6d33f049c7cb35a19cb7c5371407b1cd7fc3a6c7576658e6a792b605b9a"
+    },
+    {
+      "path": "docs/design/single-node.md",
+      "digest": "93350d17b2e93f3db4c11c76f7ba07a57ad877d10f03fb470b1b43dd3ba18f89"
+    },
+    {
+      "path": "docs/single-node-limits.md",
+      "digest": "5a496c71c57747ff86fa3596244a581fc401d6f0caf30a3cc31ae43a64885f54"
+    },
+    {
+      "path": "e2e/COSMOS-HARDWARE-RUN.md",
+      "digest": "87ade33b742ede590e85fb2864c24374b40e030ace319476280b5cb519aaff43"
+    },
+    {
+      "path": "e2e/DUAL-YUBIKEY-QUALIFICATION.md",
+      "digest": "6e700990aa8072cf60ef28960a669566d5588a2ddbb7331cc21fe5448c3a7534"
+    },
+    {
+      "path": "e2e/NITROKEY-QUALIFICATION.md",
+      "digest": "4369c5435a5b7f4d89452d0fd593134011774d7992eab6c92dd013299cb11176"
+    },
+    {
+      "path": "e2e/README.md",
+      "digest": "5475b26ea47d3bc5984da6dc871f6dd5cb0cc8768b77f0a9b4acb6218c6bdedf"
+    },
+    {
+      "path": "e2e/YUBIKEY-OPENPGP-PKCS11.md",
+      "digest": "9db3fd6ea165849493048f623671c32d140cd92a71ac3592a67de9f3fbe80c8a"
+    },
+    {
+      "path": "e2e/abrmd-probe.sh",
+      "digest": "2b1ae3b1bad534123ecb2742aa71ebdf3b6180d45764a31786e4bd9be4d33210"
+    },
+    {
+      "path": "e2e/audit-ship-systemd.py",
+      "digest": "436b9434b4489c82535f9b06ede44abfd590f5ab3f5fc9963a7de424bd010cc0"
+    },
+    {
+      "path": "e2e/authtime-chrony-nts.py",
+      "digest": "10f8e79afabcbfebc75d9c697a00468e7eede52239fdae8b554d574ff504080c"
+    },
+    {
+      "path": "e2e/baremetal-firewall-netns.sh",
+      "digest": "9dff27bf618c6359b35b5faf68535236a03e0f19a0e627816badbce7a33a1c64"
+    },
+    {
+      "path": "e2e/control-plane-restore-drill.py",
+      "digest": "cce5bb06b9ab391eda3e6bb45f3737f20a7df8a149fcc36b71b3cb3d692916f3"
+    },
+    {
+      "path": "e2e/convergence-swtpm.sh",
+      "digest": "8bb94f7ce8854d7d085a7f212c833263a1e0a25b1f6640e7d983bf8ce81de1c7"
+    },
+    {
+      "path": "e2e/cosmos-hardware-sign-verify.sh",
+      "digest": "b05fd020edcd55b73fb69ed06d6c5f4bdc78394f16a4a8219d0632a15e27eb41"
+    },
+    {
+      "path": "e2e/cosmos-simapp-kms-tx.sh",
+      "digest": "f8e85f8b1d76b1459455559e999bc731b81cd3bf14720ab80655b2a81c8a0c5e"
+    },
+    {
+      "path": "e2e/cosmos-simapp-smoke.sh",
+      "digest": "7c70d08cc4247d0429e693c9f9e582e86cb856cb773f05b358f0c1ef669516a8"
+    },
+    {
+      "path": "e2e/cosmos-simapp-tx.sh",
+      "digest": "0c1352f6a5b65fdc683a103abbddc9e005c594df290ff2d71587cd0b7ae54a6a"
+    },
+    {
+      "path": "e2e/cosmos_kms_tx.py",
+      "digest": "ce1804e9a9baa7b76b592a97111da4186bfd2ae7f0a3757d88c072aa26f6a920"
+    },
+    {
+      "path": "e2e/etc-factory.sh",
+      "digest": "14ff66da4b5bf3e8f45ca2295743e828f65cbf2409b7a470aef5f5101321c2eb"
+    },
+    {
+      "path": "e2e/etcd-unit-sandbox.sh",
+      "digest": "ef53a595e905d1673daa74b4ad2a6d6f4880331b19a2607521512896344b1225"
+    },
+    {
+      "path": "e2e/heartbeat-swtpm.sh",
+      "digest": "269e6d1e04c7d492ce4d859cb72a418f8dacc7d23352b560ef4c80d01dd4107f"
+    },
+    {
+      "path": "e2e/hsm-gate-drill.py",
+      "digest": "4008e5a01b840b6cb24d5308dfdb63ed6077890b7e6c4cf068c3e6956ecda692"
+    },
+    {
+      "path": "e2e/initrd-drift.sh",
+      "digest": "1a24dc4986d4ea36ef18b9eaf654e36a5a56f0ae1ed7d2c681cd05248d029594"
+    },
+    {
+      "path": "e2e/initrd-reproducible.sh",
+      "digest": "5e7e1c3de4d159d41436c03ab962d5d06413c901d2bdac4c59bbedd6057bb925"
+    },
+    {
+      "path": "e2e/install-host-loop.sh",
+      "digest": "6a2d31a9d74faca176cef7bc591dd4fc4b02c0339d41f7226bbed84f88489d03"
+    },
+    {
+      "path": "e2e/kms-hardened-serve.sh",
+      "digest": "a2b30b9c6f8601a55b3e3624288112f6235664945c0539094688b1a6b6667612"
+    },
+    {
+      "path": "e2e/kms-sandbox-negative.sh",
+      "digest": "a3b4d6aa364f9165bb6c749c61d0949e6186f9225390482b5c7baf84a6e43818"
+    },
+    {
+      "path": "e2e/kms-two-token-systemd.sh",
+      "digest": "875a55f3fa1db2ac1c7241596c871ed14ecc8ace8a4d1021d3f65004c437c9f6"
+    },
+    {
+      "path": "e2e/lib/apt-install-netem.sh",
+      "digest": "32037518c25bb0f1140de90893965422d2cf8c08a19580fa0edca2c58dd90d5a"
+    },
+    {
+      "path": "e2e/lib/bench_cards.sh",
+      "digest": "a162e4caa4a3965e948aaf1916036f3b274aab02da3413c9365864db870f4963"
+    },
+    {
+      "path": "e2e/lib/boot-guest/e2e-addr",
+      "digest": "70bc4949b0272fca86709efeff932c006447765b328ce7bf9ccb9f4fdcfb581c"
+    },
+    {
+      "path": "e2e/lib/boot-guest/e2e-enrol",
+      "digest": "e7f14540e50987351ad77e3a7deda1497fac64da631aa5f764987e293f7c687f"
+    },
+    {
+      "path": "e2e/lib/boot-guest/e2e-probe",
+      "digest": "f5612ce90cfcc01b53002aa6b141321c928116803f70849956dcfd80d990f1f2"
+    },
+    {
+      "path": "e2e/lib/boot-guest/e2e-report",
+      "digest": "587c923000ebebbd0ab8cb00a0889f55545986806cd44925004812ca359ef791"
+    },
+    {
+      "path": "e2e/lib/boot-guest/regalia-e2e-addr.service",
+      "digest": "6122818dbdc25957cb43041f66ef3e4bd4888a7aa13e6c0fb23542cd4510981c"
+    },
+    {
+      "path": "e2e/lib/boot-guest/regalia-e2e-enrol.service",
+      "digest": "f891ab47a050146e3f835b67efc369c917a2db082e1af1469947a3bb6a6f8770"
+    },
+    {
+      "path": "e2e/lib/boot-guest/regalia-e2e-report.service",
+      "digest": "bc07fbe49cb0587f6a2076c63295e08ae6d65ccc060f1b4bf9a4abcd6fdbb612"
+    },
+    {
+      "path": "e2e/lib/bounded.py",
+      "digest": "264ce2e588e73d7d26a0388fe3045c27161d3b8ddfb7bda6f54cfaff4fb9496f"
+    },
+    {
+      "path": "e2e/lib/debian-keyring.sh",
+      "digest": "c13e4bfe93f44d42386dbcb14918d65d79309f85b17e206751b4b1ab586f6f3c"
+    },
+    {
+      "path": "e2e/lib/dracut-module-check.sh",
+      "digest": "f5850f272a124e83ecf3c200c5a31a95387017174227549cafea814d91b8e0e5"
+    },
+    {
+      "path": "e2e/lib/initrd-cpio-diff.py",
+      "digest": "f3bade3a61e0e7760dd9009391c1a1a78024bb824868a6e1d44f7eac10b7141c"
+    },
+    {
+      "path": "e2e/lib/opensc_isolate.py",
+      "digest": "268eda3c8b51e356991b86ffd46e674b9521ad7a34afb2c6d0f319dde2ee9be9"
+    },
+    {
+      "path": "e2e/lib/p11_extract_probe.py",
+      "digest": "58004843de0c26f4c339e1fe248cf834d40ca58ccbac97c06746cd8b1292b3b1"
+    },
+    {
+      "path": "e2e/lib/pin-blob-v2.sh",
+      "digest": "a2ccb6724e23941df0ff01f3005aaee2e5d76ac0c93c3b44d27a2440175458a2"
+    },
+    {
+      "path": "e2e/lib/sandbox_probe.py",
+      "digest": "c7d9fdfee914091b4a4d67ccd91e2a58b176357f42722be0deb6761bd58cae4e"
+    },
+    {
+      "path": "e2e/lib/sc-hsm-pty.py",
+      "digest": "dc320407a9871f7af222fc4de3863e17bad741918db48c2f9d1ff827b691bf52"
+    },
+    {
+      "path": "e2e/lib/signed_boot.py",
+      "digest": "fb1f2b493ffb9dc16e5fd32a06cfe17b617a8d6eae44c35ea6e5954939981739"
+    },
+    {
+      "path": "e2e/lib/threenode.py",
+      "digest": "04dbc6ecd64d04d7967ca4f53411e6250e7aa32da88c820a38f552b79c4ec597"
+    },
+    {
+      "path": "e2e/lib/tpmdiag.py",
+      "digest": "69e45c328a0d15655f5fce7055190decd371d64db2fc6e084c78c8569fde6dd6"
+    },
+    {
+      "path": "e2e/luks-recovery-key.sh",
+      "digest": "d293bb4a02c80768adbdd38ff8448b4287edb677977adf3d4f4f86d8fdae0cf0"
+    },
+    {
+      "path": "e2e/nitrokey-cross-card-restore-drill.sh",
+      "digest": "8a5aaec01034982013cbd194d06de534bac3874499737ae1cd02580b4d970ac7"
+    },
+    {
+      "path": "e2e/nitrokey-envelope-restore-drill.sh",
+      "digest": "8b115273e338dae8dc09f64475fc6dbbcdc2aab79b73a2e7c2763b74f487d0dc"
+    },
+    {
+      "path": "e2e/nitrokey-pin-custody-drill.sh",
+      "digest": "f534f668c3f15ca4deb1e544a4d3be854e97d219ed5439804b5b65ce0e205526"
+    },
+    {
+      "path": "e2e/nitrokey-pin-import-drill.sh",
+      "digest": "a7c6881d1d0241a81586dee58c886248a6a2b89ab653a5fe746d4f5d90eee50b"
+    },
+    {
+      "path": "e2e/nitrokey-token-swap-drill.sh",
+      "digest": "1b97c2afed938a1eea74d8efbc41e344b73ccd614ba6bfd01e8ea93f15bf91d5"
+    },
+    {
+      "path": "e2e/nitrokey-two-site-failover-drill.sh",
+      "digest": "424e1c8d83bf7d1365e5d85d75fe21043cb3d562d59e3fff4d5344a2797cddc1"
+    },
+    {
+      "path": "e2e/node-replacement-swtpm.sh",
+      "digest": "9ff99d4a795bae73908295d642d6d9fbeaa3ed9214a4f4a5b9391bab227c4a97"
+    },
+    {
+      "path": "e2e/node-units-systemd.py",
+      "digest": "4e97bc1d0f533a31fafb4a145d3cf135f6010207283ecf12ed911d1d78a62cc2"
+    },
+    {
+      "path": "e2e/one-node.py",
+      "digest": "40a046fdc06c731779a4e68b9b3d79b0387a204a46c1c2338a82319e98b201cc"
+    },
+    {
+      "path": "e2e/pcr-signed-policy-swtpm.sh",
+      "digest": "fdcad7cc09a2ed3a1e37c17d6c6d91e9b4d02f9ab4e91db943d9d809d045f0f0"
+    },
+    {
+      "path": "e2e/pcrlock-luks-swtpm.sh",
+      "digest": "a373381a5c7f6d1e1858dd5fc2cef6a3f05ae0cadae3d57e191dbed47d597621"
+    },
+    {
+      "path": "e2e/peer-unlock-swtpm.sh",
+      "digest": "eaf2bf4213e3ba89f8ab6952637d3800dbccd721d8b2e6a3b6419fec4d72e7e2"
+    },
+    {
+      "path": "e2e/pin-import-swtpm.sh",
+      "digest": "8346888421275a2969fb1d6e2b05a59f44e8546e4b5899b4bc2a68c0e596c55a"
+    },
+    {
+      "path": "e2e/pkcs11-contract.sh",
+      "digest": "56880b7ca28d14e7549f2f2cd320fb05a76a35e93cd29cac7fba1e9d0a14e287"
+    },
+    {
+      "path": "e2e/pkcs11-removal.sh",
+      "digest": "98750f6f5b918c3988ec03694f1bc7fdbd0495d3fcbedeaf9f37b4eb87c6edd3"
+    },
+    {
+      "path": "e2e/regalia-sync-netns.py",
+      "digest": "625db5adc18ea401ccc48dd365ef4a0c8aa5b470c4250582e2b70bde40b8f462"
+    },
+    {
+      "path": "e2e/rolling-policy-swtpm.sh",
+      "digest": "95c1fe161ecc9cfae180dbcf42a1537f2b4a881dce69b98ac309b80bfea7abd6"
+    },
+    {
+      "path": "e2e/rolling-threenode.py",
+      "digest": "4e158ca8a703c03cbbf8987a7311c4c4bb54ef849cc1886e90bb8fd6073b0a97"
+    },
+    {
+      "path": "e2e/rootfs-reproducible.sh",
+      "digest": "ba7403947f4c92a71c83f551844b1453b444a209318f9e80d4c23136d1e49586"
+    },
+    {
+      "path": "e2e/run.sh",
+      "digest": "e11ba5d1fb67be00754c3200b734f6842e6d7320bfa98d34a981b9bfcb5a88a7"
+    },
+    {
+      "path": "e2e/runtime-admission.py",
+      "digest": "081a596f93a7ec59a7d2511cb7fb6c7c8f825ed26ca7dde6f3586fd077429252"
+    },
+    {
+      "path": "e2e/runtime-lease-swtpm.sh",
+      "digest": "73e5a7c050f67a3aae7d540827846d34670277dfbb4e7d98c2aea42bdbfa079b"
+    },
+    {
+      "path": "e2e/slb9665-pin-import-poc.sh",
+      "digest": "128e5f9d35965b16eaf788574d56be1088ffbba967c133aec4b4d71d5b9a7f27"
+    },
+    {
+      "path": "e2e/softhsm-pkcs11.sh",
+      "digest": "fade3b1bbd38b83ec3dcce449a31d130c6b9aae9029ab1a9829de96c0813fb55"
+    },
+    {
+      "path": "e2e/ssh-trust-sshd.sh",
+      "digest": "8b5c1bbd2abf5e2000821a93aa717b84e35e6b249c742467505dd758296b2904"
+    },
+    {
+      "path": "e2e/tests/image-esp-content.py",
+      "digest": "0f3e4b4cb3f29e8b90d36aa24f5053d2377d456e3604cb17016afd2842a05f99"
+    },
+    {
+      "path": "e2e/tests/test-evidence-classes.sh",
+      "digest": "3d3b9080a85314d11ee70b2b48a1dcd422aadb406712548075b7c598b00053dd"
+    },
+    {
+      "path": "e2e/three-node-leases.py",
+      "digest": "dd384cad431401ea9ff1a95a8cd683325db46593260c351f8687c31fe976444c"
+    },
+    {
+      "path": "e2e/three-node-netns.py",
+      "digest": "b04ac338b723935f9be4b7fcaf1931da18aaf98bba6638027c879ea99c8e422b"
+    },
+    {
+      "path": "e2e/three-node-outage.py",
+      "digest": "3cdaeea15b76899758da7cee130457f7b2334017f197d5428cf3a72f1d1f32cc"
+    },
+    {
+      "path": "e2e/three-node-reanchor.py",
+      "digest": "14e6b4277a320b51de0c37b0c454af5bfa7ba56b2ea9e352113c31cce32e0a8b"
+    },
+    {
+      "path": "e2e/three-node-recovery.py",
+      "digest": "5f89d5bc038ec4a139360bd1e7ddd86e7158b6aec9b8d45aabe5959ff9a74a96"
+    },
+    {
+      "path": "e2e/three-node-replace.py",
+      "digest": "510981ce15fcbac0d41886f76f0e55fb9a9edf15640f93c34fedd9b2de9a2258"
+    },
+    {
+      "path": "e2e/three-node-site-advance.py",
+      "digest": "e6ba19133802e6e9a1f7d5b2f318e0e8e2aade11ac5d99c004a72f5ca090e84b"
+    },
+    {
+      "path": "e2e/three-node-theft.py",
+      "digest": "a9e8dde57e8260074577baf5fa6ae7aaeb74c17f4627b25f1b19e9db75d3168c"
+    },
+    {
+      "path": "e2e/three-node-wan.py",
+      "digest": "4fbc37e9aa85311bbea33ab414a12d753865a93be401c87ce75b1a5a8ae3da47"
+    },
+    {
+      "path": "e2e/tpm-attest-swtpm.sh",
+      "digest": "b471342045709d7f92ae7d82c5315adcc59f7485e6b7befb292f0c496f47b527"
+    },
+    {
+      "path": "e2e/tpm-lockout-swtpm.sh",
+      "digest": "7d4756fe14f4b904f2a09e9eaa83d329615907486867677f9fbc758ca2b99517"
+    },
+    {
+      "path": "e2e/uki-build.sh",
+      "digest": "2276c3accc4255d5396923e9365c50b7815a6650295f9cc1df629e3440ced451"
+    },
+    {
+      "path": "e2e/unlock-boot-qemu.sh",
+      "digest": "1462e1723197d61b2308d5007c83a952fed4ec9eeca7a6e39c7766e8b20bbbcf"
+    },
+    {
+      "path": "e2e/usr-verity.sh",
+      "digest": "01d6a865d4927f7e1dfe44d81a90b66139d5dae9a534c0b49eecb6525464a8e5"
+    },
+    {
+      "path": "e2e/vtpm-proxy-probe.sh",
+      "digest": "55fca87b21dac70513ea3554c26381f554a55a774fed1080725337aeba38fccc"
+    },
+    {
+      "path": "e2e/wg-boot-netns.sh",
+      "digest": "7ea97104c4b0bb3f52efe4aca2a0c8096b3ba400de5bba2628a1858f848074f2"
+    },
+    {
+      "path": "e2e/yubikey-pin-custody-drill.sh",
+      "digest": "3efe1a5576a5a3bdab83c5ad6d43f0f23a4dd593dfa2d67364a6b819e6961c18"
+    },
+    {
+      "path": "go.mod",
+      "digest": "9f397a37ace3690f11dbad61dfcd8c737fc265eaf910b5997bd9ed31b546f528"
+    },
+    {
+      "path": "go.sum",
+      "digest": "f16c30a6a9ca463928b89868b3219293bca66600f3870cc88c2fa6bbebaf2877"
+    },
+    {
+      "path": "internal/admission/admission.go",
+      "digest": "7ee01c2157e6c8576602782c3a630ee3c7c783d26655c6460535154905e2de90"
+    },
+    {
+      "path": "internal/admission/admission_test.go",
+      "digest": "4775a3c840875797ef5b11ea19d95445e9c0945f2d0eff596a4285759c7d3c25"
+    },
+    {
+      "path": "internal/admission/chain_tip_test.go",
+      "digest": "d2c436a92040cb9a317ae157cfb86c31f2d21f16a6f632b78b3e3c36e8b4b384"
+    },
+    {
+      "path": "internal/admission/directives.go",
+      "digest": "55a4a59a9f30fc20da41eb134b8421f8cf86a5d20deb709fccd49047cb0068fb"
+    },
+    {
+      "path": "internal/admission/directives_test.go",
+      "digest": "6d56aac6e019645d4b339a1d51aa3447a96d905e1d46a8cc63434045bd4d5944"
+    },
+    {
+      "path": "internal/admission/single_test.go",
+      "digest": "74c6ab8fb068a37a8fc4543a33ca9eb6b7588055beef667bbbb97c196e72355a"
+    },
+    {
+      "path": "internal/api/capabilities_test.go",
+      "digest": "2c99653a11cd37e688a70ee7f78bd9a4717784dda567957d54133cb680c40c28"
+    },
+    {
+      "path": "internal/api/compatibility_test.go",
+      "digest": "20680dfc4a917c3e741bb2c5edbbb9ffa2b32abeb2bcac419dfab5c0ec2f8e86"
+    },
+    {
+      "path": "internal/api/guard_coverage_round2_test.go",
+      "digest": "3d80f6674056fa471f9a9ee8b0ebb58416b33d1d4ed764db5b2c55191997c15b"
+    },
+    {
+      "path": "internal/api/guard_coverage_test.go",
+      "digest": "44420d57a4390c47c25e22b1c3c471c04e70654623556cdbd5baa4127c4b3e67"
+    },
+    {
+      "path": "internal/api/handler.go",
+      "digest": "a3ee5966fe1c2ca7744188b1295e9a3d7a9c6f68b6072803f79ba486b872a347"
+    },
+    {
+      "path": "internal/api/handler_test.go",
+      "digest": "23bb8a246bf48ca3a0bcf7dbfb3d6b279003126d3c92eec8e1e159ad9ddcaff3"
+    },
+    {
+      "path": "internal/api/release_secret_test.go",
+      "digest": "2d26ef764094705ae0debb1841a9c05d505cbe93da5647cd7436afe4b3f6cef1"
+    },
+    {
+      "path": "internal/api/result_zeroization_test.go",
+      "digest": "53be8a9782dbf55b723621b8d49d0ccf59a5ad2019b940f6c0b34f78e95e5178"
+    },
+    {
+      "path": "internal/api/seal_data_key_decode_test.go",
+      "digest": "d38e76225c8af3e4ab5cbacba8939ab1c7b1899129033e1099db98a0b3d09cc6"
+    },
+    {
+      "path": "internal/api/validate_request_test.go",
+      "digest": "5b6ec397ab4a24839a034b588e75e475a5f15143819c4eb6633ec165dd91908b"
+    },
+    {
+      "path": "internal/approval/approval.go",
+      "digest": "be8426cfbcc6e8617b62e653367691171dacf206c6d838cb70ccc0369f5d75e0"
+    },
+    {
+      "path": "internal/approval/approval_test.go",
+      "digest": "cffff6e56cae89df17e6d683d0a3e7c0fe71b13fa87cc38ea8cecc3554719863"
+    },
+    {
+      "path": "internal/approval/deterministic_order_test.go",
+      "digest": "8974eec82d78925a1b67a6a1f1595c952f95f53ba1955c939f9588563b3b526f"
+    },
+    {
+      "path": "internal/approval/guard_coverage_round2_test.go",
+      "digest": "654fb0aa4767dbe9f2ad948d4ba0e7b6dc210c273356158a791306fabd031c25"
+    },
+    {
+      "path": "internal/approval/guard_coverage_round3_test.go",
+      "digest": "f10b537a68a34f2ae415f121856b39774778d223e6a7ad2d8ed9175805d0438b"
+    },
+    {
+      "path": "internal/approval/guard_coverage_test.go",
+      "digest": "2d58f7f9a9751f0a569d1adc9823d502d627bc65b0566c526d729217bbcea84e"
+    },
+    {
+      "path": "internal/approval/opstate_vector_test.go",
+      "digest": "a056bda4e5758549669d4736852e599de07320040d6d665ad2d742cd7cfda7f4"
+    },
+    {
+      "path": "internal/approval/trailing_bytes_test.go",
+      "digest": "fe7f801e192f3282fed722a9e00360da711d24ac4a941709feb38601fb6d7239"
+    },
+    {
+      "path": "internal/audit/audit.go",
+      "digest": "a07e990ab109351cd9154eb4a0af8e89f2fc935caa062da447ca477a08610af8"
+    },
+    {
+      "path": "internal/audit/audit_test.go",
+      "digest": "914a3b9fc8588cfc4e384ef0d8a472148b316e09ca8e41db67e7f1521d096b73"
+    },
+    {
+      "path": "internal/audit/chain_rewrite_test.go",
+      "digest": "29403970cc6146aa03d7099d995b92b6b0b14d2a08e3fdec233b3ce74a93dcd6"
+    },
+    {
+      "path": "internal/audit/collector.go",
+      "digest": "89070badbde56e562c05f9b0f1dbd55f5f1a603b4ef65f9e33b235c672ca8918"
+    },
+    {
+      "path": "internal/audit/collector_test.go",
+      "digest": "aeddb2ce77b95b94c1f044415538fc918d7b28ad4976ff578ec9ef753b0f312b"
+    },
+    {
+      "path": "internal/audit/conformance.go",
+      "digest": "69577e7ee26560be9986e82b8ce26cf438116abd98cddbb25929b33cffa7acd0"
+    },
+    {
+      "path": "internal/audit/conformance_test.go",
+      "digest": "fd24b05fa9790a39786e4dad0e97a4eb77e23084af835cb520c44ff70aa80285"
+    },
+    {
+      "path": "internal/audit/draft_validation_test.go",
+      "digest": "c995510312a356442cfe883596c7b12e2550f76472536db98e1b60fc85526b07"
+    },
+    {
+      "path": "internal/audit/file_mode_test.go",
+      "digest": "e228faa543a4d6509164bb946d74f31cedfb8c194f83100169bff511bd2a14bf"
+    },
+    {
+      "path": "internal/audit/guard_coverage_round2_test.go",
+      "digest": "291e0a7b228447d5840ec663929ffaf24c2161694b461999f977deb3e844609a"
+    },
+    {
+      "path": "internal/audit/guard_coverage_test.go",
+      "digest": "223efc978ca05ec6cb382ab5c8b48c905af519115c4a8318ce0555d518e5b12e"
+    },
+    {
+      "path": "internal/audit/handover.go",
+      "digest": "ad7c1eff53790ad4befa9aeb341b3860222561eb8314e8a7cad40ff82227c76e"
+    },
+    {
+      "path": "internal/audit/handover_test.go",
+      "digest": "a3d0aa2efe7f6156ed5cf1f3e65a939c5b260053aeeb328d80b1bdf7e0d3cb9a"
+    },
+    {
+      "path": "internal/audit/history_mark_test.go",
+      "digest": "0230ae95151881701aeafdb30c2d4ef1819536c257320fe64d465802ef3f718f"
+    },
+    {
+      "path": "internal/audit/httpsink.go",
+      "digest": "9a46b13070d60a0fa78bd141846276b16347022240d791e32d8a3f1d2ccee8f6"
+    },
+    {
+      "path": "internal/audit/httpsink_guards_test.go",
+      "digest": "84c4c3ceea029bffbe7b506921e96773454c37cce10f8148a79d066490929183"
+    },
+    {
+      "path": "internal/audit/httpsink_test.go",
+      "digest": "b6cf6cb233738ede8513e9fc49e0dbb8a854108adbe53258ae71c24670ea4ac0"
+    },
+    {
+      "path": "internal/audit/journal_compat_test.go",
+      "digest": "607de7a58e545f12efc4e1545c19115ba19ce42162a97275c9ad724e42b2e54d"
+    },
+    {
+      "path": "internal/audit/ledger_test.go",
+      "digest": "23177d6c8341b97e8b3dcfbe049804a3f213eddd583392aae2ef332126029ba9"
+    },
+    {
+      "path": "internal/audit/mark_readability_test.go",
+      "digest": "8532202a3e825210606f2d9dd55b3926aa07ee1fd764afaf53f731cc6c3088bb"
+    },
+    {
+      "path": "internal/audit/mark_required_test.go",
+      "digest": "c1c09423bf6b3ddf504676ecb68e2bd66eef42e86e04fb592f3d49c68b436722"
+    },
+    {
+      "path": "internal/audit/origin_test.go",
+      "digest": "4b37ffec4f10da42c12235ac0d299213d3461f6eca98ad75747b90c931d7aa7c"
+    },
+    {
+      "path": "internal/audit/policy_position.go",
+      "digest": "49d1338e2f11838d90b3fd73512671fd999f01317b56e8dff224257963b554a7"
+    },
+    {
+      "path": "internal/audit/policy_position_test.go",
+      "digest": "b7cb17e0ea4e76953be2ae4dd951f808d1d4df172ce3635f958aca7e0cc6cb03"
+    },
+    {
+      "path": "internal/audit/range_bounds_test.go",
+      "digest": "ffe0743a1440bb8df140b4a3d0e8603d52c235e5b5987b126bcb0e14bf149272"
+    },
+    {
+      "path": "internal/audit/reconcile.go",
+      "digest": "a34dd35023b8ce700e79b5151bd1883d656ec836d34f77ec6efddf9e193c65e2"
+    },
+    {
+      "path": "internal/audit/reconcile_test.go",
+      "digest": "d932a20bc60df61e452d32a47590b038338d4315cab61eb645a8241e0884d21f"
+    },
+    {
+      "path": "internal/audit/required_metadata_test.go",
+      "digest": "f7dcbc31076cac082cdbfff660fbf91a55376b704b3dba824db8289bd1ab111f"
+    },
+    {
+      "path": "internal/audit/round_three_survivors_test.go",
+      "digest": "21ab3464a34d5409530284a22f531d1abffcb38ececaac5691ea589abf3bde31"
+    },
+    {
+      "path": "internal/audit/shipped_mark_test.go",
+      "digest": "7bd7f46bdca526e33c2173fa25addde67eeefdfb38f8b65e771e259faa96431c"
+    },
+    {
+      "path": "internal/audit/shipper.go",
+      "digest": "aa8c9d7b2ddf911ce8aeb0df222be1e9f47441590b709c1ba5625578be619543"
+    },
+    {
+      "path": "internal/audit/shipper_test.go",
+      "digest": "5706f19c74d034d2f30bda40a36194521374aaa9f68c2702dbdd3384bca4adfd"
+    },
+    {
+      "path": "internal/audit/shipping_readiness_test.go",
+      "digest": "3e7b1785ecf268f782aedd5f5b791da9b19d6d281ea13308f1360d274535f5e2"
+    },
+    {
+      "path": "internal/audit/trail.go",
+      "digest": "d067ed048f2d9e302a96f5423389dc73945738424f87dd2e3d2640e90fe593cd"
+    },
+    {
+      "path": "internal/audit/trail_test.go",
+      "digest": "5e0d9d50effa58dd942fd12ffcfc782df228a162bc39b322b1eb9c451c48d29f"
+    },
+    {
+      "path": "internal/audit/transport.go",
+      "digest": "e6598ab0b6861a66966e4b118ff6f113f907d244c62a69ace5f688c199f9de2c"
+    },
+    {
+      "path": "internal/audit/transport_test.go",
+      "digest": "11282883012445002969d941c8d35880982dea5967dc4e850ff686771bf836a7"
+    },
+    {
+      "path": "internal/audit/truncation_test.go",
+      "digest": "3d1c1573954e45d931093e19edc4ac28b02f384b9879bcb969be9114f5ca0348"
+    },
+    {
+      "path": "internal/audit/unreadable_mark_test.go",
+      "digest": "5978005107be541495ced2702beeff8f60ec5e2cf035e9b7cb711a63f27656a3"
+    },
+    {
+      "path": "internal/audit/verifier.go",
+      "digest": "0ae112edc1567abb786522691aa1785a7efc487295c5bee08d4d94c1d22a455e"
+    },
+    {
+      "path": "internal/audit/verifier_test.go",
+      "digest": "7c842c736e1ac39127c45d7cafc43d63cb977154f75f4ed80d9971e5fa443579"
+    },
+    {
+      "path": "internal/audit/wait_shipped_conjuncts_test.go",
+      "digest": "b59686837af5ce00acf5bf8f599993ed2775adbd3914ca6ea4c0735f94072966"
+    },
+    {
+      "path": "internal/auth/agent_principal_test.go",
+      "digest": "fb848dd5a0ae396a042bd88e9eaa30551a1ae18a1c1b9e3ade339e24126715a8"
+    },
+    {
+      "path": "internal/auth/auth.go",
+      "digest": "02f2027c2a5b99698bae74eb2604b3c9e83137f9d0902de2dbe0fb398c4ad368"
+    },
+    {
+      "path": "internal/auth/auth_test.go",
+      "digest": "56b31e09e5b9ccfd7002ddab3b2fcb1ae491630bd14fc80706f0aee94bc05732"
+    },
+    {
+      "path": "internal/auth/canonical_uri_san_test.go",
+      "digest": "16c7fd97f62d3041dcf3325f1fda236f7377eead7bb2c6955e257ee49f18bef6"
+    },
+    {
+      "path": "internal/auth/grant_document_test.go",
+      "digest": "2a8e79efd8b00b58402accba620efa9bf94def50257de8ae3bcfad0604cc6e55"
+    },
+    {
+      "path": "internal/auth/granted_order_stability_test.go",
+      "digest": "3a54f5ffd7b93fbcce56a3085a521624edbadc69db44e64c56381ed6ff9765b4"
+    },
+    {
+      "path": "internal/auth/guard_coverage_round2_test.go",
+      "digest": "be13fe3c78bd69afd33d559fe030396487d7f09007d24d2f6d3f7745a3ed2025"
+    },
+    {
+      "path": "internal/auth/guard_coverage_test.go",
+      "digest": "3bc194d976f938f20bbfde4bbbe5281b6c9a7c25488051bf53fd1b373f9ed04f"
+    },
+    {
+      "path": "internal/auth/policy_read_failure_test.go",
+      "digest": "2bb3c894a3351d5ef6c9d9e3183059ddbdd857d387e86daff366a031c3cb3124"
+    },
+    {
+      "path": "internal/auth/principal_refusal_names_test.go",
+      "digest": "c2979f8757efebef7ac6ffdf273947f0bad2ade3d92b9be4c0490cb95a9485b3"
+    },
+    {
+      "path": "internal/auth/rbac.go",
+      "digest": "ef2f27170748455eee029cbf4655aa82016c676cae2217703df446735bfd15be"
+    },
+    {
+      "path": "internal/auth/rbac_surface_test.go",
+      "digest": "1f4aaf68a073ae07ea13af3d1f34e29279d66fc75acc56b8b8f1b046d3ecf06f"
+    },
+    {
+      "path": "internal/auth/rbac_test.go",
+      "digest": "d635e7fdd51391643a91e060759c0b3cfb578abb7e8aafc959f9d1415fbc3e43"
+    },
+    {
+      "path": "internal/auth/revocation.go",
+      "digest": "d1a3e8b4c15d4ebaf18284fc5937999412358494868409b4a23b35e4d448b809"
+    },
+    {
+      "path": "internal/auth/revocation_operand_isolation_test.go",
+      "digest": "e9e46617914ad839c8cbd589959d0e67b31683d056fd91af618e420ff1167777"
+    },
+    {
+      "path": "internal/auth/revocation_test.go",
+      "digest": "4b1b16bc003db7d2d32aaaf440fd1ac3b82fda875f1c99ef9402858126621a06"
+    },
+    {
+      "path": "internal/backend/manager.go",
+      "digest": "9e0ab279cd591b21dc0d21889abf9e48132ef4b412cbc4fed84c557c767d1745"
+    },
+    {
+      "path": "internal/backend/manager_test.go",
+      "digest": "e752dfd133b2ca3ef50949dabbe9fea24917a83deeba7ad10fd9590d875718ea"
+    },
+    {
+      "path": "internal/backend/nil_manager_test.go",
+      "digest": "f1a3179901bdbcb1ea70db1d9e333a0579ee38b2fca5772856ca864966dfded6"
+    },
+    {
+      "path": "internal/backend/nitrokey/agreement_test.go",
+      "digest": "27a8c228316a50da0f51ffc6c9c568c42966acdac04628c9b874e27bb49b89f7"
+    },
+    {
+      "path": "internal/backend/nitrokey/attestation_identity_test.go",
+      "digest": "162882a7abe5c9ed7149935c120a05b81ac4845785149a4d7791c91a3d989d21"
+    },
+    {
+      "path": "internal/backend/nitrokey/binding_guard_test.go",
+      "digest": "9aa4f540da382c03721454b791edb57d61cf2ff70f30663920ac10d975bd7b35"
+    },
+    {
+      "path": "internal/backend/nitrokey/capabilities_test.go",
+      "digest": "a0307a50264d5a430774c677f9986c5f931e801473cef92b6471063c0778dd69"
+    },
+    {
+      "path": "internal/backend/nitrokey/construction_guards_test.go",
+      "digest": "0d0bec561438b2c5bd5b65be2f28e59acd5ef2a8961bea7ec150d00ba3081c68"
+    },
+    {
+      "path": "internal/backend/nitrokey/derive_execute_refusals_test.go",
+      "digest": "78c3de13a7666ea8af13f863d3ded9c351e076c0b3937f422751ce8f7f3547d2"
+    },
+    {
+      "path": "internal/backend/nitrokey/devauth_hardware_test.go",
+      "digest": "19ce617eb00a5abbaf2f0df06bf1fa68fcbc1a37e77d4a22b121d21376e57c8c"
+    },
+    {
+      "path": "internal/backend/nitrokey/devauth_pairing_test.go",
+      "digest": "53ed5f23cce9f1b3ebf44a085f431be915c4b0fbbe0f8a1d5fc979d0c3d8f783"
+    },
+    {
+      "path": "internal/backend/nitrokey/driver_ready_test.go",
+      "digest": "be9f9c1271497aeb70266e3b5a3e86c506788beb275399a661e2c1221c209939"
+    },
+    {
+      "path": "internal/backend/nitrokey/ended_request_hardware_test.go",
+      "digest": "bd347297b1ed3a112e5b4340270840f6bf142c142088a1c09a1424e1d3c8b82b"
+    },
+    {
+      "path": "internal/backend/nitrokey/ended_request_test.go",
+      "digest": "c07856c758cbbe68b2dde5db58a48d14b2cee703fee4d040ba7e43d339eb959a"
+    },
+    {
+      "path": "internal/backend/nitrokey/entry_input_guards_test.go",
+      "digest": "b06601322fa0630394b155a8cd50aee589dc132d00225e324bf6ea9861d4ed3e"
+    },
+    {
+      "path": "internal/backend/nitrokey/evidence_custody_test.go",
+      "digest": "e87193aa6714fa56a7b1f31bd2af21eb077df91181bda31fa02cd475ffe6cef3"
+    },
+    {
+      "path": "internal/backend/nitrokey/healthy_close_test.go",
+      "digest": "f21310cb9c0b05637c5e2f5b559e5daa395ab3ebf77ccf85d77402093c415f59"
+    },
+    {
+      "path": "internal/backend/nitrokey/hsm2_qualification_test.go",
+      "digest": "8a4b04d95c7320172da915c673f62f0a8af7476d88c1df8fe3ea141b323973c5"
+    },
+    {
+      "path": "internal/backend/nitrokey/identity_pin_test.go",
+      "digest": "2b9ca0c61b32b02a577e79cef04decc4bf4bae6286733631d15659de6f601384"
+    },
+    {
+      "path": "internal/backend/nitrokey/kek_attributes_test.go",
+      "digest": "28a9ad6c74cb86d577bca2c882f78849416bc05be448853a66b4d407b18214d1"
+    },
+    {
+      "path": "internal/backend/nitrokey/kek_provenance_test.go",
+      "digest": "d0fedc6b3968aa2f8500dd075c76765bb8859f8d74de1c9bb445c1f81fc074b2"
+    },
+    {
+      "path": "internal/backend/nitrokey/local_tokens_test.go",
+      "digest": "1473067bad2e02efdc6a9502b13dd44d8f657c40ba7d1c043f5352f7d2512ec1"
+    },
+    {
+      "path": "internal/backend/nitrokey/lows.go",
+      "digest": "7eea80c90c1a1fcc9700a13ba7dc3befde368fab31d2011bd7be1f6b1e243912"
+    },
+    {
+      "path": "internal/backend/nitrokey/lows_test.go",
+      "digest": "c8a2852375c39df573c8d8a30e3b65bbd5e5039d81baa4ec71bc225c3eb5df09"
+    },
+    {
+      "path": "internal/backend/nitrokey/marshal_public_key_test.go",
+      "digest": "9fd97e28875e3370d23f470ad2d62b7529f3919aeb395bf5b5aaf800efea5e78"
+    },
+    {
+      "path": "internal/backend/nitrokey/matrix_converse_test.go",
+      "digest": "6c2c218aa0cc0a9e090a9f0a14e1e5ef6951a1b2bbd027b621898f79b5081b01"
+    },
+    {
+      "path": "internal/backend/nitrokey/mechanism_test.go",
+      "digest": "85e2483f82f81b72eb049a5f5003739b82816644884efe42d899e0ce07437b65"
+    },
+    {
+      "path": "internal/backend/nitrokey/oaep_test.go",
+      "digest": "3cb7dffe42c451ec2c363be49149bfe08f66331375fd56b06899d6e0ebab5a72"
+    },
+    {
+      "path": "internal/backend/nitrokey/observability_test.go",
+      "digest": "6693aeb841af56351aff23b07762b1943b5e37468fce40c11bdbae2163de67c6"
+    },
+    {
+      "path": "internal/backend/nitrokey/openpgp_applet_hardware_test.go",
+      "digest": "4950213a0af9f89085f01f0601aad0d348efa834d2644cec8570b690371805e1"
+    },
+    {
+      "path": "internal/backend/nitrokey/peer_key_test.go",
+      "digest": "ffea3e54a37f228f38c9fdf65e9d45fae818d59053dd02ea232c74c18bf7599f"
+    },
+    {
+      "path": "internal/backend/nitrokey/pkcs11_driver.go",
+      "digest": "4a15498d2c646e02e24bc7c25e3084ab088847e996f8cb2b35ce9deac6d3a518"
+    },
+    {
+      "path": "internal/backend/nitrokey/pkcs11_driver_test.go",
+      "digest": "61acc6a72eb08ead5200f116218b6c3d312a627f2cdf10828db148cb565d4824"
+    },
+    {
+      "path": "internal/backend/nitrokey/pkcs11_ed25519_integration_test.go",
+      "digest": "3c687d7b529c101e2a52449530ab290839e9993d55c239ff18aaf8e4d7ec592c"
+    },
+    {
+      "path": "internal/backend/nitrokey/pkcs11_integration_test.go",
+      "digest": "3220d42a7ac62fbea43002743644cf41f1f5346605f3e7c2c45050db1b2fe0a7"
+    },
+    {
+      "path": "internal/backend/nitrokey/pkcs11_pin_test.go",
+      "digest": "1636e658c2c74e42f3aff488c2e9a205b5217fe26acfd2d85e2fcb1f6baca454"
+    },
+    {
+      "path": "internal/backend/nitrokey/probes.go",
+      "digest": "cdb965e25e5d6d0a2f79972c729d61630a2abac2cdf19467be0dda59a96f59cb"
+    },
+    {
+      "path": "internal/backend/nitrokey/probes_test.go",
+      "digest": "72264fdd069584903b60c23b57e2f35cc4baf4d30b767e4c2c13b088aee11fa8"
+    },
+    {
+      "path": "internal/backend/nitrokey/provider.go",
+      "digest": "17474a3179af00d413e0aa75a93ddc41561e13befae916909a46098f009f1107"
+    },
+    {
+      "path": "internal/backend/nitrokey/provider_test.go",
+      "digest": "2a9d1563b37228e8d29f8052bda19d79eed31ce5ec0f076d0f0d3718af48728e"
+    },
+    {
+      "path": "internal/backend/nitrokey/readiness_operands_test.go",
+      "digest": "d6a42ca072309e4f93238904c0bfea8a5bd5f3c34b3e32f41b99a365bac9847d"
+    },
+    {
+      "path": "internal/backend/nitrokey/reauthorization_test.go",
+      "digest": "9ef64db991009aa35329530570f8125489ce083c48708019cc75c33ae99f72ed"
+    },
+    {
+      "path": "internal/backend/nitrokey/removal_test.go",
+      "digest": "d569783986d013ccad0ca88726c116bb6f357185c7017ad13b3a0b85ca61c03a"
+    },
+    {
+      "path": "internal/backend/nitrokey/secure_channel_refusal_test.go",
+      "digest": "edea7c53557da8593d309fee1f51c655ced5fb19af9e323c69d8ce6735bfbbc4"
+    },
+    {
+      "path": "internal/backend/nitrokey/securechannel.go",
+      "digest": "d528392eab1c8d119ef9871ac6a30a88caefefad7c44d38fcf75bcf66baf7e56"
+    },
+    {
+      "path": "internal/backend/nitrokey/session_lifecycle_test.go",
+      "digest": "dcd85633d9d2e2fb95bcfd9f62d722132dc1e8cb73438f22644110cd2d8ea38d"
+    },
+    {
+      "path": "internal/backend/nitrokey/session_order_test.go",
+      "digest": "a3f664aa03bcf544d6108554e5d9cecc0ddea836c38532d70cab80ba7ec52828"
+    },
+    {
+      "path": "internal/backend/nitrokey/swap_test.go",
+      "digest": "b60e86cd8fdd0a21d77581516974f4f297d410105510219e1e788399864ee6ec"
+    },
+    {
+      "path": "internal/backend/nitrokey/token_failure_test.go",
+      "digest": "01496b4bcc81d2a359c2e95d59d8e2401f2605659df00296fb142cad8df8ffb4"
+    },
+    {
+      "path": "internal/backend/nitrokey/token_selection_test.go",
+      "digest": "61d75632cc8339304aa45b162cc92c1ffc979aa041e3775be76c1cd2f7642f3f"
+    },
+    {
+      "path": "internal/backend/nitrokey/wrap_rsa_success_test.go",
+      "digest": "8a6c3ac684ea637e6071059338edbc3d43a9c8aebb353e141c3166cbfaa4aff4"
+    },
+    {
+      "path": "internal/backend/nitrokey/wrap_unwrap_refusals_test.go",
+      "digest": "9be92a4fec3787e1d1d4486a67ab00e37796a68729aee1f5aaa8f226eca30ce1"
+    },
+    {
+      "path": "internal/backend/openpgp/admission.go",
+      "digest": "e56cd8848a01b18c44021118a51db93df4c93b0e6654fbcea83de0c1e7b70621"
+    },
+    {
+      "path": "internal/backend/openpgp/admission_test.go",
+      "digest": "74a10324d4209e284777ac61cfa3e4384b81507234fd791d5112d1616a0d4072"
+    },
+    {
+      "path": "internal/backend/openpgp/driver/driver.go",
+      "digest": "92abbde276151a7c8f40db50ecf2629c81f3c819a20c167af23c66d940b0e49d"
+    },
+    {
+      "path": "internal/backend/openpgp/driver/driver_test.go",
+      "digest": "520f0dc997b2cce3987516a8a21f008019fdde2957d5d8b22358f60491c25ae4"
+    },
+    {
+      "path": "internal/backend/openpgp/openpgp.go",
+      "digest": "cb3a223ab2616e3c7c248cbacb7d2cceccdfc4fe0e030036248c46263eeb94d3"
+    },
+    {
+      "path": "internal/backend/openpgp/openpgp_test.go",
+      "digest": "c7682c07ff37344a1744d579a50a241c6e058fc2b39ee0365c16ae32de0bed01"
+    },
+    {
+      "path": "internal/backend/openpgp/pcsc/pcsc.go",
+      "digest": "4e5e8d7e865ea422db2469a3037519895d66e24d053f2364e2f45dbc56c4fbc8"
+    },
+    {
+      "path": "internal/backend/openpgp/pcsc/pcsc_physical_test.go",
+      "digest": "6df68a23a1562853874a13f24b4a1556df4a442f4e19e54e8d92e04ce3d61b16"
+    },
+    {
+      "path": "internal/backend/openpgp/provider.go",
+      "digest": "fa8884f19edddb617e9861f32849155afea042039989f6f6e8a0e4ffd3971b4c"
+    },
+    {
+      "path": "internal/backend/openpgp/provider_test.go",
+      "digest": "31fcba564034f04f53535eeb056dcc54dbcbba91f4237a28ace62aa9712af67f"
+    },
+    {
+      "path": "internal/backend/pcscwatch/pcsc_cgo.go",
+      "digest": "33185afbe610d4def3e639dba7c4445f19d403a63207cfa586bf6d19d4f5c76f"
+    },
+    {
+      "path": "internal/backend/pcscwatch/pcsc_stub.go",
+      "digest": "89d76c74652c98db5ec2343e6d06be8229d94970ee2956985515a694e3144e23"
+    },
+    {
+      "path": "internal/backend/pcscwatch/watcher.go",
+      "digest": "8a587023beddacfbaa603db8c6882b7ed4a333e4d16cddcf9018c73848d7bac1"
+    },
+    {
+      "path": "internal/backend/pcscwatch/watcher_test.go",
+      "digest": "7705d0e5623ad0c30d74b27ffc446492cb9d1ceb438078518198110463703547"
+    },
+    {
+      "path": "internal/backend/reauth/gate.go",
+      "digest": "1419d3e5275d2da12d6a45e02059c0c50d5a7fb56889e528f06addab7edaf836"
+    },
+    {
+      "path": "internal/backend/reauth/presence.go",
+      "digest": "6fb2a7e177eaeccc2e8218832f7f6bde14ccda42835b05e4ba1ec316bcb2289d"
+    },
+    {
+      "path": "internal/backend/reauth/presence_test.go",
+      "digest": "c4d4b2d70076bb10e0192a1b08ee38af25ed5d5b745aa755b9b3abdff2ccef0b"
+    },
+    {
+      "path": "internal/backend/reauth/tracker.go",
+      "digest": "aeb6cc57fb2d49c3b453aa17c87c486bbefb24ff6d87275b7106406cee9d05ad"
+    },
+    {
+      "path": "internal/backend/reauth/tracker_test.go",
+      "digest": "f4c079347af37eedc8a9d6af6c87e8e63bb58d505b6300c54a72217787ea795f"
+    },
+    {
+      "path": "internal/backend/yubikey/execute_test.go",
+      "digest": "61a67924cc5e3130d24494cd8c4cfdb3835e41f1598b7a447fa1b143e64a8fd3"
+    },
+    {
+      "path": "internal/backend/yubikey/health_test.go",
+      "digest": "96a5e71f0ffcd6b0c3cc26a3a64958fd5c96c72c4b646446b10d134357a0faef"
+    },
+    {
+      "path": "internal/backend/yubikey/matrix_conformance_test.go",
+      "digest": "a6b0a3cf27770a945208073b55a75fed599199ee0790f67fec37ac108b3b00df"
+    },
+    {
+      "path": "internal/backend/yubikey/no_parallel_test.go",
+      "digest": "b21ea3e99a403645d8ea72ed8d99a9ed111765486e1179887a74cbb1c9b56dde"
+    },
+    {
+      "path": "internal/backend/yubikey/pin_latch_ended_request_test.go",
+      "digest": "60f9f2f4ef99d03bd463292c327440c8028648c1c14b65c9262ce7c31e4fe4b2"
+    },
+    {
+      "path": "internal/backend/yubikey/pin_source_fit_test.go",
+      "digest": "5552c38f1127111fe2533c5f3a1d155dffdf84c664d663e9d5a41f2621cbd507"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_driver.go",
+      "digest": "ba675ad7d1f09b6a6e41f83d1ff6c44cea6ca3cb8d69b275a55a079bc1de3d6b"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_driver_seam.go",
+      "digest": "2bb4f059f1375caf16d793a9478e09d5c4fa51dfc9ab13a03144c942ac599331"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_driver_seam_test.go",
+      "digest": "53a033534257a021df416d52b27407c7f63e3bfc01e2826d365b22fbb8f8b688"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_driver_test.go",
+      "digest": "af1e8b1175a83840ced955ee3c5488317d7dde06935a7c778cb01baf65295440"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_login_not_presented_test.go",
+      "digest": "e26ac6d75677ba35c5742660be13a64a213b374b7da8a2df3b764dbafb3a4148"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_ed25519_test.go",
+      "digest": "461f5a81db758a13384c201dc6a82fabb55476fe4495be14256eabfc57082ded"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_latch_test.go",
+      "digest": "9f878aa41ba9bef832c3bae140223e542c152bd6b1e9506801ec864db8d4bddd"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_pin_latch_test.go",
+      "digest": "7bf83166135365da2752f37a5455dd3478bf596aa4435608d9bce6775214cd6e"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_removal_test.go",
+      "digest": "1caa0b3fa3c042f814822a314fe1210999099d6d6a60543a0de0734bc01da33d"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_session_state_test.go",
+      "digest": "8c71480cfd423b331718ded8851c86362045193f67ce8ebf385a1518ea552ec7"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_physical_test.go",
+      "digest": "be2b1ebd283e0c67f21a47dd284f5fe2dae9c79183b2cb26b382174c8b7e3ce4"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_reach.go",
+      "digest": "21595b2ff7f005d6bbc06374f8a3669f5fc5509353d4f0d725dba6dd86fb180c"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_reach_test.go",
+      "digest": "aeaeaa34abe3841ffba2b7f09b8b855ad3e87e93cffdefdfdfc2750b0877d6ec"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_retry.go",
+      "digest": "51e5696d8a47a7bdcc0cf6041817da2f932506005eae78a66685bb9094af2fde"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_retry_test.go",
+      "digest": "7308eea6320bd530337b3449545021d05b891e7edefbc81caa39de143e58c270"
+    },
+    {
+      "path": "internal/backend/yubikey/piv_session_boundary_test.go",
+      "digest": "5bdfb7adf9b22ce4b66d8080d878ceedcf9d5efcc03ede200ed0db237ecd35b2"
+    },
+    {
+      "path": "internal/backend/yubikey/provider.go",
+      "digest": "88703d5591b088ab6fc25b98cbb2cfc42280476d374c4bb2ad0bf77fe41c4e9a"
+    },
+    {
+      "path": "internal/backend/yubikey/provider_boundary_test.go",
+      "digest": "764710370d024ba0427e84538baddb819f7fa08d1cba1e2af72b9541a9a5f44c"
+    },
+    {
+      "path": "internal/backend/yubikey/provider_test.go",
+      "digest": "a1a9f4d89b349d8aa0fa09e958b61e9751c9594af5a8911d42ff3d88af04af3e"
+    },
+    {
+      "path": "internal/backend/yubikey/reach_test.go",
+      "digest": "6cde5316fdfd031c5dca845b269374838e8e191d43b89c5299467a4d5422fd4d"
+    },
+    {
+      "path": "internal/backend/yubikey/reauthorization_test.go",
+      "digest": "741870fdb9fb48fc941c83768a1e765d0f916291a9b08c0803b54ca427dc8460"
+    },
+    {
+      "path": "internal/backend/yubikey/sign_contract.go",
+      "digest": "a02cebe0132ed46ca409cc4decb1390518d5e4702a7ba862c47a06a7fbb7a9c2"
+    },
+    {
+      "path": "internal/backend/yubikey/sign_contract_test.go",
+      "digest": "258f753e7684e3d47652a1df5b7f5a4dd2b0081a49e1137212217c7763ccf596"
+    },
+    {
+      "path": "internal/backend/yubikey/sweep_survivor_ledger_test.go",
+      "digest": "e55c053b390c40146e655a6e3e2e2d940861188ed36f0180f18cf8c2e5ae2f1d"
+    },
+    {
+      "path": "internal/backend/yubikey/sweep_uncovered_test.go",
+      "digest": "f14c73af12c0b82910442ee8720f0705ef292c118b2b35dc21ef9b9f48a9076f"
+    },
+    {
+      "path": "internal/backend/yubikey/turns_test.go",
+      "digest": "b86201a3de5a2a5021a6d83f6df45797b062ca03832c67005598534102c1f643"
+    },
+    {
+      "path": "internal/backend/yubikey/v1_frame_test.go",
+      "digest": "bfe48606f1e08c74c16f1fab070b428c67aae7339d73973dfdf6b0ef02934001"
+    },
+    {
+      "path": "internal/boundary_test.go",
+      "digest": "ebb9087869cec30d9dbe19f929a2acc4f44e9d917300d760050c9e8ff59bbfdf"
+    },
+    {
+      "path": "internal/certs/certs_test.go",
+      "digest": "56143a19640a61117481ae9280791329325c57d835ab603dcc225de900e84963"
+    },
+    {
+      "path": "internal/certs/duplicate_names_test.go",
+      "digest": "dadb5bc2c5d454f03c2b4c52c8de116ba6964af0ea0d3c02b864c26e00ccfaae"
+    },
+    {
+      "path": "internal/certs/guard_coverage_test.go",
+      "digest": "4116a12508e33dc0cc7756b98ff2f6f9bb6305dfeaf3e4b82a159314fd7c89dd"
+    },
+    {
+      "path": "internal/certs/issue.go",
+      "digest": "a66ca54942f633b7bdc372f004b7894572e94115aa048b4680d95b7ab4f3a079"
+    },
+    {
+      "path": "internal/certs/issued_constraints_test.go",
+      "digest": "ec24290319d010172cf9ba1bf51a996ff69246ab7fbd56cbd2ff37d71bea7fa7"
+    },
+    {
+      "path": "internal/certs/issuer.go",
+      "digest": "54ef08af889aff6d17029d1d0bf73bf427839b181586d54ebccc3fe42ef22fd5"
+    },
+    {
+      "path": "internal/certs/issuer_key_match_test.go",
+      "digest": "7be1244f7a2ac1990624a53335e530c30e16f1928e12ef20f199809b9e52ec43"
+    },
+    {
+      "path": "internal/certs/issuer_test.go",
+      "digest": "122aff8057cc70f682b27d321b526c35237442bc80a2920e6fe8f5f0a0715c3a"
+    },
+    {
+      "path": "internal/certs/issuer_validity_test.go",
+      "digest": "9cf0d105c04ed7864bd8324de9c1a717f53b002b3ec50c6a2f39987362880a08"
+    },
+    {
+      "path": "internal/certs/namespace_boundaries_test.go",
+      "digest": "9f434f47272f803365f3e546769e46107a9d5d42cd25757881eb26309c2c0dcb"
+    },
+    {
+      "path": "internal/certs/refusal_surface_test.go",
+      "digest": "978d2b56f1e131079e7f22a8eb744745aa641a8e3fa6c75c9f7b75de4ac4a266"
+    },
+    {
+      "path": "internal/certs/refusals_test.go",
+      "digest": "38c3256f86a2c6a95ad4e7f07e693035849aa932e6f238a1b8200e46f716a426"
+    },
+    {
+      "path": "internal/certs/signature_hash_test.go",
+      "digest": "13ad3537548897dc612fcea9232e51a977dd67255cba83039de083c624cc96aa"
+    },
+    {
+      "path": "internal/certs/signer.go",
+      "digest": "d92fe4d89faabf52f1cb0ba0333b68403e26d44a024e1ee61203646b1edac597"
+    },
+    {
+      "path": "internal/certs/subject_key_test.go",
+      "digest": "f73b3f81b3af900317c25d60be4bc050bbd9ad10f228e34f669d0cd8c7f25a88"
+    },
+    {
+      "path": "internal/config/config.go",
+      "digest": "e939710f5611d55e8bb077cea3abe08ecfcbb09fd1315a76f52c9588c11bf2ec"
+    },
+    {
+      "path": "internal/config/config_test.go",
+      "digest": "4983c30ed39a8362e46394c06a2460525c25ff4170a511b82181e025d37af2bd"
+    },
+    {
+      "path": "internal/config/document_fields_test.go",
+      "digest": "aea9f3a46c73003d37099f81e3ae012506981db0553c49008cc66af47ab4a9cb"
+    },
+    {
+      "path": "internal/config/example_test.go",
+      "digest": "ba668268a4e9003526d593a76ac9c2f80f7bd6344119267d7ffa9006a719c5c8"
+    },
+    {
+      "path": "internal/config/guard_coverage_test.go",
+      "digest": "a682da31a17b1534523b8d6b0c138df8aa994d689187dec0b53e71b3434cb207"
+    },
+    {
+      "path": "internal/config/partial_configuration_test.go",
+      "digest": "aa1f4ae01f1057667be87c7dfddddd16ed7112c2ded1e181b890b56722b2d38f"
+    },
+    {
+      "path": "internal/config/runtime_admission_test.go",
+      "digest": "a78296237783dbfa8538c7c93d2508a37c2613a97657b97ac4086b35fff3d5ca"
+    },
+    {
+      "path": "internal/config/tls_test.go",
+      "digest": "ef4ba0920321a5d809ed20a94a0092b3f51b5c325265f5674e777ee3892b9c0a"
+    },
+    {
+      "path": "internal/controlplane/absence_fields_test.go",
+      "digest": "dac91a2ed6650d20a6598c8a286df9af744e55ddd07a1bf3795a3d2e9b9de49d"
+    },
+    {
+      "path": "internal/controlplane/controlplane_test.go",
+      "digest": "9255dee3688fb5f6463cddbb4f84c59fd50dc98fbae136e324f5119ccdcf6261"
+    },
+    {
+      "path": "internal/controlplane/entropy.go",
+      "digest": "4d0525a7d7b3a591507ea50b04c190cc195130537ab2d6005efae2d7a0ce8874"
+    },
+    {
+      "path": "internal/controlplane/entry_path_test.go",
+      "digest": "6c2640fba25ca57f00ae51d47154732d2f24e40cf4f501a601e65b49ded65f64"
+    },
+    {
+      "path": "internal/controlplane/envelope.go",
+      "digest": "6ac4e32b864ac1271ab955c438a2eaf7dd90ee55341ecd2030a8b840a198b179"
+    },
+    {
+      "path": "internal/controlplane/envelope_inputs_test.go",
+      "digest": "bd931e26653e17e23fdb3d520965f0ad5c22580e24a6eeed93b552f126bbe5ba"
+    },
+    {
+      "path": "internal/controlplane/export.go",
+      "digest": "a7633bec563715e4a95d1af4126beb19625c629dc5cba5b9ded3933d673cad4c"
+    },
+    {
+      "path": "internal/controlplane/guard_coverage_test.go",
+      "digest": "a93a7801d56db5ea359ea0754fb082427a27397362c2975163e419ae859b4920"
+    },
+    {
+      "path": "internal/controlplane/key_parsing_test.go",
+      "digest": "e8e753f4ce83aef8d414dc20c43bf0a7630814db6e9e1ae4544d727713e57dd0"
+    },
+    {
+      "path": "internal/controlplane/restore.go",
+      "digest": "5b1e004e1796d62a31e68e1a8dc918a9f34566f2d11cdcdf36cb4cd7ab3d166d"
+    },
+    {
+      "path": "internal/controlplane/restore_test.go",
+      "digest": "af04521aeb73cbcf5844cc1c3af993a73e60a4525b427efb09ae26328c2c3f5f"
+    },
+    {
+      "path": "internal/controlplane/scan.go",
+      "digest": "ed8704e5ba963638861c89d195c095139d068fff65b635aaa9f8059c55c454f2"
+    },
+    {
+      "path": "internal/controlplane/scan_reach_test.go",
+      "digest": "a84988c7f97f725cfcbe5abfb879d785e147f91e87389758482d906401dff097"
+    },
+    {
+      "path": "internal/controlplane/sorted_keys_test.go",
+      "digest": "0c6ec589929165638c104ea579836ef591a2dba3bafe113561349606051f1811"
+    },
+    {
+      "path": "internal/controlplane/survivor_pool_ledger_test.go",
+      "digest": "3f76cc84f9af0abf7ea7c7bce8fcbaf5733600dd334dac03554574f72471021f"
+    },
+    {
+      "path": "internal/controlplane/survivor_pool_test.go",
+      "digest": "f2e7562c380a3392cffca9915a6f5e117516248257d931473e6663861b9a38dc"
+    },
+    {
+      "path": "internal/controlplane/trailing_bytes_test.go",
+      "digest": "495e47c9651e519d49f2a6c401b26a0cdbd8477e0cd33f11682ab0b0df5d23ec"
+    },
+    {
+      "path": "internal/envelope/card_key_length_test.go",
+      "digest": "8eb5b642c6317dd1fd429aca4a6042d933c79441956c930b8d0326025291f8e2"
+    },
+    {
+      "path": "internal/envelope/context_digest_hex_test.go",
+      "digest": "da3ce386aed2b28ae9ca00afa52248e5dafeefe39725c74b2f0b41c79e979c66"
+    },
+    {
+      "path": "internal/envelope/data_key_zeroization_test.go",
+      "digest": "5ca844f164791de37f564ce72acf83fa83078b845738c38740f5478a45f8efa9"
+    },
+    {
+      "path": "internal/envelope/envelope.go",
+      "digest": "d9ee49c598bf3c802106a4228c214f4e92ef19edad0756ae31b2b5bf08cca1fa"
+    },
+    {
+      "path": "internal/envelope/envelope_fuzz_test.go",
+      "digest": "e2f754a77139dc725e25fbe72fbeb152b899692877588de845857beb2754ebdf"
+    },
+    {
+      "path": "internal/envelope/envelope_test.go",
+      "digest": "d445227f612f0e7e1b8954cee7f6616b5b44daaca77de63595933ec18afe6e9a"
+    },
+    {
+      "path": "internal/envelope/guard_coverage_round2_test.go",
+      "digest": "563e65b3d8b905bdf3c1c891d2feaff624207869262811b2f48bf81385826c89"
+    },
+    {
+      "path": "internal/envelope/guard_coverage_round3_test.go",
+      "digest": "44d3c5f21b97c207a0071992fb44237bebe5a34d9d0bf1f478cbe1a4bb036e1e"
+    },
+    {
+      "path": "internal/envelope/guard_coverage_test.go",
+      "digest": "4948779be7609df2b21ba984020ba2850c038b796982fac316ffebef0269227a"
+    },
+    {
+      "path": "internal/envelope/metadata_leaves_test.go",
+      "digest": "1cb16d4cf97b48a4b0ccc689d5ee5c8c14984762789f5926553e625568b891b5"
+    },
+    {
+      "path": "internal/envelope/peek_context_test.go",
+      "digest": "98e3554cb380f36ce2c306b8b8a6c134cb28a1f273f1b0df3073f0167445e11a"
+    },
+    {
+      "path": "internal/envelope/peek_parse_error_test.go",
+      "digest": "59b9cdb7ee2305345331bb77d46364ca5ba56aa9cca341e73b651608ecc49265"
+    },
+    {
+      "path": "internal/envelope/published_vector_test.go",
+      "digest": "da5b06674bfd1a571aadc3139b8c27b6bfaa6c88276734127f385c3e09e59d7f"
+    },
+    {
+      "path": "internal/envelope/rewrap_test.go",
+      "digest": "cdf758ef1b5244e3a65eade02c712beb6375b3b56cedf627c55872eb9d2c8d8e"
+    },
+    {
+      "path": "internal/envelope/seal_assembled_test.go",
+      "digest": "0a01af328a4e5500c54a0ab5db880823439e1829d9b5437daef3f6df155f4f99"
+    },
+    {
+      "path": "internal/executor/admission_test.go",
+      "digest": "4be846dd632a9c8011539e6b9cbab9f94526151d70a3ff4ec7b4553b6a171cf4"
+    },
+    {
+      "path": "internal/executor/error_surface_test.go",
+      "digest": "f8b63c860928aad37c670db51bcdea86a165ad3be93ed091e0eaebcf5dfd9238"
+    },
+    {
+      "path": "internal/executor/executor.go",
+      "digest": "76c305e42b97db53534f3333c248767d50544c5134aad85bd02090f8a6d581c4"
+    },
+    {
+      "path": "internal/executor/executor_test.go",
+      "digest": "bf57fa0678acabd0bfc500cb4596dfe49fcbca390c451ab5dc02f0c7f2aae2d0"
+    },
+    {
+      "path": "internal/fencing/atomic_write_test.go",
+      "digest": "3c53e6bbd186f6669809cfb9e26bb5d78e7f4735b8a32468cf960c386ea6dc79"
+    },
+    {
+      "path": "internal/fencing/authority.go",
+      "digest": "b88362d71d08c2ea19f820815e08c666d0b4a14565e62f378060983aa8eccdf0"
+    },
+    {
+      "path": "internal/fencing/authority_input_guards_test.go",
+      "digest": "af24b0beb9cbae27f56a60d870ad111df815493aa5422d56504c88bb312b2bc8"
+    },
+    {
+      "path": "internal/fencing/authority_test.go",
+      "digest": "cfd2c9c3419897c569c4f175408bfb7eb503d97bab74a4a89d9f79936f85d7bf"
+    },
+    {
+      "path": "internal/fencing/chain_binding_test.go",
+      "digest": "e88d20b9de2825a1224dc4f28aaa1ea8680411855eb9bfeb786ee5206e294a57"
+    },
+    {
+      "path": "internal/fencing/gate.go",
+      "digest": "4afa5ef4fc05c6398a3e0da16ee49a252ceeadf51d78ff04206ecf20189358c7"
+    },
+    {
+      "path": "internal/fencing/gate_261_test.go",
+      "digest": "56293f6ac0e289a77583429a3eae4440a7eb0ffe1a3e16d1272a4b90134f0312"
+    },
+    {
+      "path": "internal/fencing/gate_test.go",
+      "digest": "27e2b667fd5fd6a80428fe1fdd0c361a67c65775e601b424ffcd844f83efeaea"
+    },
+    {
+      "path": "internal/fencing/issue.go",
+      "digest": "0c83fa304a0bc95290106314afdd1734c4f0e85481b06845b5b876973ddd55c0"
+    },
+    {
+      "path": "internal/fencing/issue_test.go",
+      "digest": "49ca7927df6e1310a659b8eecedbe32a853244cd34371aa77caa2029ce426be7"
+    },
+    {
+      "path": "internal/fencing/runner.go",
+      "digest": "2f33bae94b974ed045e97041e715ac5a06553ed6e827cc44d43a1697a8b281df"
+    },
+    {
+      "path": "internal/fencing/runner_error_test.go",
+      "digest": "400e66fac14f37303355be62e6be1f1b0b08cf94c278a49f5820ae39532d7966"
+    },
+    {
+      "path": "internal/fencing/snapshot_test.go",
+      "digest": "5eb6bf45faa3455bfcd51f0b994197f86efba73e3612adb05d0dcdafc27bb90b"
+    },
+    {
+      "path": "internal/fencing/splitbrain_test.go",
+      "digest": "2bbaf0432f1b84b98a094da1e3739de34b46ef904287eba3bde28c43c4bb65ec"
+    },
+    {
+      "path": "internal/fencing/standby.go",
+      "digest": "72dd8985f686dda358102d08878544cfe03371e81104a08f2d3f6d6ac8e75ba6"
+    },
+    {
+      "path": "internal/fencing/standby_test.go",
+      "digest": "3f47050e2c528ecd64de9335fa1279415ddde401b81ac999e978b0f8f7160970"
+    },
+    {
+      "path": "internal/fencing/sweep_round_two_test.go",
+      "digest": "737270c959666b0c8b2f10774093f6f3bde1582df626a8e62ef91ba53ea9df81"
+    },
+    {
+      "path": "internal/fencing/sweep_sole_detectors_test.go",
+      "digest": "8d155830a1d700d720ccd3a17c7e8472cc9be4066bdcc61905753af78663988d"
+    },
+    {
+      "path": "internal/fencing/sweep_uncovered_test.go",
+      "digest": "ced952bc40eef76ee637a105b26f6b4c549d0bc169ae5205bdb63fbbfe4c088f"
+    },
+    {
+      "path": "internal/fencing/tempdir_test.go",
+      "digest": "5d82957216e48a1b56e7ef88630182d1c5bc6c513fdf22e1a3bfabae58cc3f29"
+    },
+    {
+      "path": "internal/integration/cosmos_node_kms_test.go",
+      "digest": "a4cf3165092c9377b07826dc903e62a6ca7beb363fe91a3a960c6911b75a66a8"
+    },
+    {
+      "path": "internal/integration/cosmos_pipeline_test.go",
+      "digest": "648618a065586592b19fb03cda500c55e1e5977ca02a43c903f6b46113afe1ee"
+    },
+    {
+      "path": "internal/integration/cosmos_promotion_hardware_test.go",
+      "digest": "943ce81b547f6b4a77778209a3ef815e28458ef74f1c9b14153b4d841b40208c"
+    },
+    {
+      "path": "internal/integration/cosmos_two_site_hardware_test.go",
+      "digest": "1d53b4cc95f5d9961264437eb83aca167c043b7444ffd4a0cca30adb5d3c2c00"
+    },
+    {
+      "path": "internal/integration/dual_yubikey_piv_test.go",
+      "digest": "248008d169e750094d30c8fe3baf8f1dbe282e294a487d201b07dc9c2d392425"
+    },
+    {
+      "path": "internal/integration/dual_yubikey_service_piv_test.go",
+      "digest": "eacc819b96180ae5bc4e87f74ec8fc313e384aa1b8f32833ada963293dd1f48e"
+    },
+    {
+      "path": "internal/integration/envelope_restore_drill_test.go",
+      "digest": "9d8137f6f61345aa7072a17a179ee68988ac460d0223298fa08681d4d857cc20"
+    },
+    {
+      "path": "internal/integration/failover_drill_test.go",
+      "digest": "e2021614285de8bfa9ea88b0534286a2a0f1beac5d4bf5e628519f73b1c2da13"
+    },
+    {
+      "path": "internal/integration/gpgsign_executable_test.go",
+      "digest": "c48ed2e0912bcef389f808f84e52bcc1b85da4399b0a954244eda4f96cccf8b2"
+    },
+    {
+      "path": "internal/integration/identity_public_key_pin_test.go",
+      "digest": "acd4d7d427cb97a589883e2b4b189a2472e92ef70ccaa44018d600a5839354ea"
+    },
+    {
+      "path": "internal/integration/kek_hardware_rooted_test.go",
+      "digest": "1181337783e03372c1684776ecb415e8b30943fd120fc18c7861b9effe2111f8"
+    },
+    {
+      "path": "internal/integration/key_agreement_pkcs11_test.go",
+      "digest": "9e5ea5980eb3951259ebf79e583b2add295a81f5058dde6c537b8ae35191923f"
+    },
+    {
+      "path": "internal/integration/nitrokey_pin_custody_drill_test.go",
+      "digest": "4d20603a1fe19105796f4366f6bda80e4a6796d1f6035014a1772f884c2feb25"
+    },
+    {
+      "path": "internal/integration/nitrokey_token_swap_drill_test.go",
+      "digest": "524bfa46933dd3c2b91f0a916d8e5588f916b0bd177ae45901431014a72f9a3a"
+    },
+    {
+      "path": "internal/integration/no_request_logging_test.go",
+      "digest": "a2204b2b14f4285d80b6c09516e9955647a437c2e46d07591f975ba98b24dd57"
+    },
+    {
+      "path": "internal/integration/operations_http_test.go",
+      "digest": "fceb364cc2b9d4021c8e6469c82335e159f6b377c3eb78f1fbba6e6623871478"
+    },
+    {
+      "path": "internal/integration/piv_signing_contract_piv_test.go",
+      "digest": "0ce84e2af98aed3774e98df4e395ae499e7c11dcfa82969e66a1991faa524d07"
+    },
+    {
+      "path": "internal/integration/pkcs11_http_test.go",
+      "digest": "d820d328ec6ba47aeb71745bb254ef54389d9181eee66598091d27d9c7edfa28"
+    },
+    {
+      "path": "internal/integration/pkcs11_pin_test.go",
+      "digest": "f9bfbaa2a881c89558bfcd3496ae261e59d755ea853047c93846e04ad1650ae8"
+    },
+    {
+      "path": "internal/integration/readiness_token_mismatch_test.go",
+      "digest": "d0e198d88ad9dc688f501386e664c3f7c10f246d87904cc7f30a0d871156fa7c"
+    },
+    {
+      "path": "internal/integration/revoked_principal_test.go",
+      "digest": "9605b32baf71690445c2002f622a141b8050e7849ee99d2bf24c04064bec378e"
+    },
+    {
+      "path": "internal/integration/seal_release_pkcs11_test.go",
+      "digest": "37cecb803e5e5ac1862773f79c5609587e1a79e16e4aab96112a73fe17d3235b"
+    },
+    {
+      "path": "internal/integration/sops_executable_test.go",
+      "digest": "08d1bf814a751a5e2978d407202e40858b641ad891758758b17ca6ece9e94419"
+    },
+    {
+      "path": "internal/integration/sops_pkcs11_test.go",
+      "digest": "835d2b8280f846549ddfb1a9fb99964513cdd4ce75fa6dea2029a78fd1960851"
+    },
+    {
+      "path": "internal/integration/yubikey_openpgp_release_signing_test.go",
+      "digest": "0976f39e76ed8b46c4d55c2266f3982ea3dff97ad11beab10d3f2f4c1070dbe2"
+    },
+    {
+      "path": "internal/integration/yubikey_pin_custody_drill_test.go",
+      "digest": "2cc7143d6caa5306f25ed3bd36c74228b490d35d356e800b2994d2748c063c0e"
+    },
+    {
+      "path": "internal/keywrap/guard_coverage_test.go",
+      "digest": "c2fd9383aaa88e92c2da497d155305236d58cc34e2dc93c55339a7f3943cbfae"
+    },
+    {
+      "path": "internal/keywrap/rsa.go",
+      "digest": "0e232d6b17df9f275f8eff265e85275447e4219f12c3639b1123d146bed2a6c3"
+    },
+    {
+      "path": "internal/keywrap/rsa_test.go",
+      "digest": "985b632b4fa7b0b0b9c6012fc76ed5b41a85a116582d7ce107c68b040b751334"
+    },
+    {
+      "path": "internal/keywrap/size_binding_test.go",
+      "digest": "222acb788385eb443ec9afb78f28338bf3b1b70865beea774d2afd41da239ab9"
+    },
+    {
+      "path": "internal/operations/admission_test.go",
+      "digest": "aebb94966b79f5e3576f8699c568b6f35c6fe6d334e54a063bd264eb60cd0ffb"
+    },
+    {
+      "path": "internal/operations/agent_release_test.go",
+      "digest": "c53043fd95b3dc857afef2776fdeef1451d0e9a1e10439a83e520e46eed08a77"
+    },
+    {
+      "path": "internal/operations/approvals_test.go",
+      "digest": "f2f68db9cecdd613b0e201e44a1d2e890591a1c94816dc827fcbe56390f7a20f"
+    },
+    {
+      "path": "internal/operations/authz_before_policy_test.go",
+      "digest": "65766ba4396ddb4d534d76ffab626627b7420aa66521ea42912151ccaeea5f90"
+    },
+    {
+      "path": "internal/operations/backend_error_audit_redaction_test.go",
+      "digest": "dd4bf4b3479116b2140be99aa9cc659f5da48e46b90d94887775c1ccf117decb"
+    },
+    {
+      "path": "internal/operations/classify_test.go",
+      "digest": "47506fddaf91c45494e15a91b938ccd0d30b69e4fdf2072bf0a0df5d1279d67e"
+    },
+    {
+      "path": "internal/operations/content_type.go",
+      "digest": "9daca7559a3804c68ca445297faf3cbacb52a412c6f7117c4e91ae59ea034205"
+    },
+    {
+      "path": "internal/operations/coordinator.go",
+      "digest": "6077e4ae6bf22ecde5b0350e1b823a0d2875a04dede500355de32e6b9d1cfea0"
+    },
+    {
+      "path": "internal/operations/coordinator_bridging_test.go",
+      "digest": "f74e14afdfccaa1d4e2ca61ddd749015c774c28efbd22c3b6a109b2bcaadde6c"
+    },
+    {
+      "path": "internal/operations/coordinator_revoked_test.go",
+      "digest": "df8b7870dd7f13f5695509b75d5ac674463e1796a57fad2150358f831700e698"
+    },
+    {
+      "path": "internal/operations/coordinator_seal_test.go",
+      "digest": "ee820c05fba37316cf7c0a677a0ae4a28049445693d65e6677a9c5fdb505aaf5"
+    },
+    {
+      "path": "internal/operations/coordinator_test.go",
+      "digest": "ef8fd195561e2439ee1c2054183e67480c9594060aa55e7d614e052268298d41"
+    },
+    {
+      "path": "internal/operations/dropped_audit_test.go",
+      "digest": "6e34744e4eeb4a830ec41abdd7a4d6e01fcdb874fff7ff6c34bd470cca700dff"
+    },
+    {
+      "path": "internal/operations/envelope_age_test.go",
+      "digest": "65008b8f3b7c5b7b1647c6ecd031304da71fe29348656f81613ab24ac9cef088"
+    },
+    {
+      "path": "internal/operations/example_policy_content_type_test.go",
+      "digest": "8d4f5d939b7622031802b7e7b78d55fc062eb6fc16d26bd72edd9f6f6c13c246"
+    },
+    {
+      "path": "internal/operations/guard_coverage_round2_test.go",
+      "digest": "bf24decaafa4b93525f78e4c7abd75e28715252f5f09a5f7725d17051900116f"
+    },
+    {
+      "path": "internal/operations/guard_coverage_test.go",
+      "digest": "2cb3f02c8d4b30849f3f517c8440cd8ffef4a13d30a681814057c284b9fc30c4"
+    },
+    {
+      "path": "internal/operations/no_logging_release_seal_test.go",
+      "digest": "48692295e7fd398901674f93e63112254e074738c3a03bd37f14426a37e4a930"
+    },
+    {
+      "path": "internal/operations/policy_anchor_test.go",
+      "digest": "0be31827ad91ced3c121b77aa96e914e87c00c818990f75e109b7b205f698389"
+    },
+    {
+      "path": "internal/operations/policy_reconcile.go",
+      "digest": "b05c01163c5a4954ce3a47930a299d3a21df0719f495aca55948b49887b56750"
+    },
+    {
+      "path": "internal/operations/routing_outcome_test.go",
+      "digest": "100d2faf1ad9a6acafbf426bfebe777ab0445130d6f02cfedbea75e40047d920"
+    },
+    {
+      "path": "internal/operations/seal_approval_test.go",
+      "digest": "d1d5ad95665ce562c2abf00bcfcefae5968258da52bf1dda13788c963d9abb65"
+    },
+    {
+      "path": "internal/operations/seal_separation_test.go",
+      "digest": "af78f38c4414be75f01fee79c6d9e6dbaffd36de4cbca57305b77a7c01987bd1"
+    },
+    {
+      "path": "internal/operations/survivor_test.go",
+      "digest": "7a79135260d0a666cef7c774c09133d1c4bfbcbe96f0b5fdfe7c3633039a7b7d"
+    },
+    {
+      "path": "internal/operations/sweep_execute_guards_test.go",
+      "digest": "e248acbd5b09ac5ecc2d768986209623b0e3176dfc8e834db475b65d5bb449e1"
+    },
+    {
+      "path": "internal/operations/unwrap_route_test.go",
+      "digest": "2864dd4b44e04b56ff41c4374bbb505d1b4e307a657f547d0252d75e1b5d23c0"
+    },
+    {
+      "path": "internal/opstate/cache.go",
+      "digest": "26fe387e9581be3d29865d97717784438a3e78f15e6a94b761a06679e1247b5e"
+    },
+    {
+      "path": "internal/opstate/cache_test.go",
+      "digest": "0ae23caf0b73fc8be14fc72646f2d018ae3253771261f3ba85abcaea685b9cc6"
+    },
+    {
+      "path": "internal/opstate/etcd.go",
+      "digest": "c8381372fa6f79e5d2f1a7d7ef3563c9fe6dd270d4cb745d557fa7bb4f174875"
+    },
+    {
+      "path": "internal/opstate/etcd_test.go",
+      "digest": "15103c5faa79e02f48c74cde43f98dce3e8c9bfdac7b0c8050688594828f7e31"
+    },
+    {
+      "path": "internal/opstate/forcenew_test.go",
+      "digest": "95ddeabd45ead0329ac520572b6f798bff838d52c19c98c26f5316b9c97cd147"
+    },
+    {
+      "path": "internal/opstate/gate.go",
+      "digest": "7a962ab836badcf036877fafc9ad63ee319b8960ac698175bbfb3b046466f1a8"
+    },
+    {
+      "path": "internal/opstate/gate_test.go",
+      "digest": "491bac0008a178de6d5f0763899fc359afa8175a9a9be0a3add3f1d350ebcb90"
+    },
+    {
+      "path": "internal/opstate/judge.go",
+      "digest": "57cd04b2ccdb423d627dd6d4e0e386dd7c2796d3d6d8171380f8bdb2f90494ba"
+    },
+    {
+      "path": "internal/opstate/publish.go",
+      "digest": "b7845c257c143f638616c9c52a54ccb7489065105f118e22751cb302bac23e58"
+    },
+    {
+      "path": "internal/opstate/reserve.go",
+      "digest": "0397fb652dd3f565495be4bf9559a3b5878cf87d154160ed9a83b238dd0576fe"
+    },
+    {
+      "path": "internal/opstate/reserve_test.go",
+      "digest": "169f631ae7b39b1f2cf3cc85b956d88b58ef07d24c0ed8f3c698945a205d1b0a"
+    },
+    {
+      "path": "internal/opstate/sequence_cases_test.go",
+      "digest": "dbbbabc0ffc14b9bfb02edd6caa0487d68a7107b55eae7fac17972932ac19384"
+    },
+    {
+      "path": "internal/opstate/session.go",
+      "digest": "3ad082bd1f7fa7280da16ca3ebc44b7ac04656aaed0650b5f49972f861273f1c"
+    },
+    {
+      "path": "internal/opstate/session_entry.go",
+      "digest": "cea16cae6cc5c8cf336a0cdf1766c233c2b5225e28b35547d5f26c303c41e9e5"
+    },
+    {
+      "path": "internal/opstate/session_test.go",
+      "digest": "2340d88e3ec701840ce0e14e576203da3bca7d76c411e3e743535ccfedc0d679"
+    },
+    {
+      "path": "internal/opstate/single_node_test.go",
+      "digest": "a02ab01f8867e8656199f3c901493cd03755e81d3d61ca35d1883de6267f62f7"
+    },
+    {
+      "path": "internal/opstate/state_epoch.go",
+      "digest": "f696bca975da21710a80a8461e1d1d56457d26063b7d8e2756043c1d7f746015"
+    },
+    {
+      "path": "internal/opstate/state_epoch_test.go",
+      "digest": "cda4992ae7ed0e0d7221b5b5f61cbcff0c34fb25c0c3a8ad0c7b68932a5aa6c0"
+    },
+    {
+      "path": "internal/opstate/twin_coverage_test.go",
+      "digest": "842eeb48e5ed175971b6f9f829085dc747465c55955133e0c04905457b56dca5"
+    },
+    {
+      "path": "internal/opstate/verify.go",
+      "digest": "db59b865051de7c976adbb00119662b37b546bb221ad54d1a0be4c6371a8b976"
+    },
+    {
+      "path": "internal/opstate/verify_test.go",
+      "digest": "7251f1c122d4b1104115119a50cf878dc08078b18b40f1e0acefe5677d8c640f"
+    },
+    {
+      "path": "internal/pin/acl_test.go",
+      "digest": "32e2a2465612bcf3669e85ce675fa863f26bc3d1d624dfdb79375ec2c3594cf1"
+    },
+    {
+      "path": "internal/pin/charset_bounds_test.go",
+      "digest": "2e760d38ee6340489919309e87715d0e7965257ef3c98cbe1bb5ee1f73cf900e"
+    },
+    {
+      "path": "internal/pin/custody_test.go",
+      "digest": "b87caadee1ded6c6e5f3592b6791c5ced09692586de5e241df868bcac4c54224"
+    },
+    {
+      "path": "internal/pin/foreign_owner_test.go",
+      "digest": "b8e3548453b5a3c6e77582fc4d7d1638b1449c89348661c899d07c77cc3627a2"
+    },
+    {
+      "path": "internal/pin/mlock_refusal_test.go",
+      "digest": "e5004b0bddc5b3d04553e277ad5af7b416036ec22ecbdb39137c6b7cdd6cf8ae"
+    },
+    {
+      "path": "internal/pin/source.go",
+      "digest": "87845c3e4c3dc8b7f0dd668435805d6995a67bffbc3d7f49ed10cc49cfb626a4"
+    },
+    {
+      "path": "internal/pin/source_test.go",
+      "digest": "f09e1a5cb5a46482e7b789460084e9461fbd320b5fc74999593dcece66936ddb"
+    },
+    {
+      "path": "internal/policy/compile_guards_test.go",
+      "digest": "2aa8dcec32bb1e76559856e13538979915c9264ddecc56db8e2d8d242be99d19"
+    },
+    {
+      "path": "internal/policy/cosmos.go",
+      "digest": "52abbf282f4c155b0572b4ddaa28b415037a2f645463496112f012d38eb3b5ae"
+    },
+    {
+      "path": "internal/policy/cosmos_fuzz_test.go",
+      "digest": "55045744a74969ce4b20bb1ca580ea8bdaf7ea46b492fba5f3a592f798bd4782"
+    },
+    {
+      "path": "internal/policy/cosmos_reference_test.go",
+      "digest": "93f058ca4e6d6012d7c4ea749927610cf99c98ccbb1f48d6a69028ab6cedbf84"
+    },
+    {
+      "path": "internal/policy/cosmos_test.go",
+      "digest": "b38fcf7b5809d2b3d2a67c76badc04b9d792faf9e3adfdbd480f255eef307f8c"
+    },
+    {
+      "path": "internal/policy/cosmos_wire_refusals_test.go",
+      "digest": "e63d14803fdd16b934c4088aa8ed771bcedc10ddc1dce41fb6ddb19a7b1140a4"
+    },
+    {
+      "path": "internal/policy/duplicate_scalar_test.go",
+      "digest": "63b13d4b926fe264048535e75938beb927117fa92625b6c3d87edc27fc780533"
+    },
+    {
+      "path": "internal/policy/durability_test.go",
+      "digest": "d115af79a9a9b7fc0828e0df5e3a2084b2161334b32fd75a287f63b65f3f0efa"
+    },
+    {
+      "path": "internal/policy/fault_injection_leaves_test.go",
+      "digest": "447f362998789f753fe49962e61610c4304ab19b497ee05de12da003a8611e79"
+    },
+    {
+      "path": "internal/policy/fault_injection_test.go",
+      "digest": "574357e788d813e55dc1baf25ee93c514aa793c7d857a43ecf78e1a2b2b2b8ed"
+    },
+    {
+      "path": "internal/policy/file_mode_test.go",
+      "digest": "031989980f78ba3ab0eae6487d26a2c293909f65cbe4d455c9a6ea0f6436a9f4"
+    },
+    {
+      "path": "internal/policy/guard_coverage_test.go",
+      "digest": "49b7c70ef97379a26d3ad46872df4771a38f1ae80fd0212b25b17ecf51fe6cb8"
+    },
+    {
+      "path": "internal/policy/load.go",
+      "digest": "a56fba3523da8dfe6a4689cb377bc1904c0f7e1f9d54a8e1841c0df086ce16fc"
+    },
+    {
+      "path": "internal/policy/load_test.go",
+      "digest": "780572b156e88e9a447520a664ddf52a8a627c7fed1ee9ce0faa532f746ce7ba"
+    },
+    {
+      "path": "internal/policy/mark_required_test.go",
+      "digest": "2f24af3ea8081fec6f7864c4fc8434b8c24709beaa3eec66dae3ec708234d94f"
+    },
+    {
+      "path": "internal/policy/operand_ledger_test.go",
+      "digest": "145d3a26f9940dfca3b0d52159c500dbb60d6267e0176013fc8733ef672518fd"
+    },
+    {
+      "path": "internal/policy/parser_boundary_test.go",
+      "digest": "04a9378c050898ecd59ebf021d74013d86351f13658f13e83ae2e826fb112125"
+    },
+    {
+      "path": "internal/policy/policy.go",
+      "digest": "fcf9943c8d931c6a8092e88270c3d0d54655618144929c946fe61a47fceaf4f9"
+    },
+    {
+      "path": "internal/policy/policy_test.go",
+      "digest": "29f6bc2d4991c92564b84a04c4f35326965b91f6ec4398275c665f09875daec7"
+    },
+    {
+      "path": "internal/policy/quota_observability_test.go",
+      "digest": "378c55f3d3b2f29d1853e5943790d4b86b8cbe83c4ef8cf2b1b016b4cbdc6eb2"
+    },
+    {
+      "path": "internal/policy/readiness_test.go",
+      "digest": "0a37af40b9cd4cd368c2af51df7aec8f301b80502a3160867600946027305c7f"
+    },
+    {
+      "path": "internal/policy/replay_decision_test.go",
+      "digest": "913cda3af0961e9660d0bb59c2dffb0783a7d06fcac317d93b3cedad96e06b5a"
+    },
+    {
+      "path": "internal/policy/reservation_test.go",
+      "digest": "95d90f4362dd7a7e34907a7ff6c1ff196cea5d805ddc6cfd044c6259692e28f5"
+    },
+    {
+      "path": "internal/policy/sequence_cases_test.go",
+      "digest": "50cc9257394abd514d5744a0e1cac9b8e9aaab4893fbfa935b375cdf98fd1de2"
+    },
+    {
+      "path": "internal/policy/signdoc_duplicate_test.go",
+      "digest": "1f4161a453180a7054108e22f372a092cc7bc2542681da0f34d5405163e6cdff"
+    },
+    {
+      "path": "internal/policy/state.go",
+      "digest": "9c8948cd71ab8a3da5ca3bc31dbd1629cc264b3f1f78a2aaee9db1be0a7b9909"
+    },
+    {
+      "path": "internal/policy/state_epoch_test.go",
+      "digest": "6a1c4a6e63f95b5ddef1ccdcff02dd556abf316b4e4d12fbb5380a7c2dc271f1"
+    },
+    {
+      "path": "internal/policy/state_test.go",
+      "digest": "4f7de9814c54bc6234a9eb3a1d769c82cb4ac81849704f099f7c03aab56b472b"
+    },
+    {
+      "path": "internal/policy/statement_ledger_test.go",
+      "digest": "26775d0980ea7ea5f261a0e3586f026146753ef4915795fb79ae8762a4f16012"
+    },
+    {
+      "path": "internal/policy/testdata/README.md",
+      "digest": "2b3470c59ef329a5f762d9c52af3cc534d6c2fdbcf448c944f1b49df3af8e1b2"
+    },
+    {
+      "path": "internal/policy/testdata/msgsend-uakt-1000000.bin",
+      "digest": "4b9afd6b9e9df5bed906a64b1a4cd63ac846fd336e8b35c379e9b3ed43adbb4b"
+    },
+    {
+      "path": "internal/policy/testdata/signdoc-akashnet2-msgdelegate.hex",
+      "digest": "47c8a422d538e501df64fe94d04b356d3e01b8c24681f68981a92e6be77ea8f9"
+    },
+    {
+      "path": "internal/policy/testdata/signdoc-akashnet2-msgsend-account0-sequence0.hex",
+      "digest": "2fc16a425aaa94ad86cf504438431035c32a1f1700d6cab6a6188b92a90c431d"
+    },
+    {
+      "path": "internal/policy/testdata/signdoc-akashnet2-msgsend.hex",
+      "digest": "8a5ec862d7ffd178c1a71ca31bbf620e99e0baff758e3b5b5ec317fa7e1e8558"
+    },
+    {
+      "path": "internal/policy/varint_bounds_test.go",
+      "digest": "e9299673623382532af80f12ceed1db9fa9a869ab9f364986cb699e71b5fb806"
+    },
+    {
+      "path": "internal/policy/verify_state_test.go",
+      "digest": "b8a79489e75646743493e6b7eea6c76456913090c0dfcbc86da51c9df8a68ad5"
+    },
+    {
+      "path": "internal/policy/wire.go",
+      "digest": "1a6b5905378d77cf4f7f0f57585b4ebdf1de60e70d7858f86c091d6ae2907a6b"
+    },
+    {
+      "path": "internal/reachability_test.go",
+      "digest": "6cfa7bf7563df782489f007d1c262b2048aa872a8b6d4b3e3d269ceb6360709b"
+    },
+    {
+      "path": "internal/registry/binding_coordinates.go",
+      "digest": "9f3e15514076dbd4dbaab39ccb69a7a2d86c7fa1379be5615269c9d2bbd67de7"
+    },
+    {
+      "path": "internal/registry/binding_coordinates_test.go",
+      "digest": "0b506b596ac84433ad65c92c740200723d4614e8953b099fb8c444fa248986b8"
+    },
+    {
+      "path": "internal/registry/capabilities_export_test.go",
+      "digest": "01d27f4c4d42b1d20c79b640d049d5c58f64f8bcec64005fd1c4dd7c1602b90e"
+    },
+    {
+      "path": "internal/registry/commissioned_pinning_test.go",
+      "digest": "7b3bc9963296be81bf0dec3f12046ffb3b047014cd1ff5c901e9f44e6e2abaab"
+    },
+    {
+      "path": "internal/registry/custody_slot_vectors_test.go",
+      "digest": "0d9ff58e35707916057442adb7bba2e78a38ff8e8a0f948187ce9c4391d1390d"
+    },
+    {
+      "path": "internal/registry/custody_test.go",
+      "digest": "337511d9c6396dcc29cc173188038de348918961d5d191baec0c7fe7aa102a8a"
+    },
+    {
+      "path": "internal/registry/envelope_max_age_test.go",
+      "digest": "2348fa6bf7c4b5011e4caf56ec41aca8710fce8c16180aa7a4c720000c94f190"
+    },
+    {
+      "path": "internal/registry/fido_continuity_test.go",
+      "digest": "e8b71576d51a09bcd199374b68ca8df0387a0cf8f195c33d7de3b819c06ce35f"
+    },
+    {
+      "path": "internal/registry/file_gate_test.go",
+      "digest": "de35e8ed10c1b9cd886a105b7cb5c2fa171507a0e53484bf6bde3c0ea9f81f78"
+    },
+    {
+      "path": "internal/registry/kek_algorithm_test.go",
+      "digest": "760de602a262bc8535479ff8e51b15ba6da0ecba006a5741b3022d7aca73a3ee"
+    },
+    {
+      "path": "internal/registry/mutation_sweep_round2_ledger_test.go",
+      "digest": "685e8a943fa4e8c95fc9ac42ae7ab5cd1e246a238e1562f20f2a92b9502fc086"
+    },
+    {
+      "path": "internal/registry/mutation_sweep_round4_test.go",
+      "digest": "1f17e7d92aea606549807cc76824d7e4622d8627c2293af8a47944088840ee44"
+    },
+    {
+      "path": "internal/registry/mutation_sweep_round5_test.go",
+      "digest": "4c251499316e06cfb5ea2e13d291c59ac10c123a590bae419054516c647d77df"
+    },
+    {
+      "path": "internal/registry/registry.go",
+      "digest": "869513dba871e9d5ccc3dadc2efab44aa083727c9471841ddf8d91ad7ed879b7"
+    },
+    {
+      "path": "internal/registry/registry_load_file_id_test.go",
+      "digest": "832126d17279d7a7b072b1f3c3bafe20a6895fa53fc37a979ffbfe2506172bb0"
+    },
+    {
+      "path": "internal/registry/registry_sweep_gaps_test.go",
+      "digest": "5de63339ded6a7a5086d4539c44c888f64a3cfc6de416bc28c559de26fba59fb"
+    },
+    {
+      "path": "internal/registry/registry_test.go",
+      "digest": "2378b8e78d81eb91c405c09cc097099714a909800651316a20eeb572fab9fa8b"
+    },
+    {
+      "path": "internal/registry/revoked_state_test.go",
+      "digest": "5e2f473ccd04d5ef81803ac5f228e0b67569cc23971adb18375e5b0c8d6bd479"
+    },
+    {
+      "path": "internal/registry/rotation_test.go",
+      "digest": "3e61c7391cc906c2479d31fcc022b587ae8d10ecd7e8dde2d060cf8a475095b7"
+    },
+    {
+      "path": "internal/registry/seal_route_test.go",
+      "digest": "55c4fac9b094d65e42d9857534e3cd4d3ef1010851cc07a1ebc664f0de387607"
+    },
+    {
+      "path": "internal/registry/secret_kek_unwrap.go",
+      "digest": "719c9c4ac9a87e267332c07e25a5e2b333cf7fda0d2504cffd9b5ed130232269"
+    },
+    {
+      "path": "internal/registry/secret_kek_unwrap_disjoint_test.go",
+      "digest": "a339ce8205ae64f4247a409fe7ebf8c483c5bee0cf9207b7cafb9667a3d5b23d"
+    },
+    {
+      "path": "internal/registry/servable_operations_test.go",
+      "digest": "14db6763442c948fd5ddfb3ba3570c8711002ced0a0bc516ec872628da36e787"
+    },
+    {
+      "path": "internal/registry/symmetric_key_aes256_test.go",
+      "digest": "f5c6f7790b62faa6c0d4f140991157906569557ae356d424175b463f54fc0464"
+    },
+    {
+      "path": "internal/registry/token_label_test.go",
+      "digest": "92b20449d8606823828758cea9c3c1f659b4c88dfb4f3abd372562e1e2f84e03"
+    },
+    {
+      "path": "internal/registry/unwrap_route_test.go",
+      "digest": "b51c9c25f9632c095a4fbbbeac6878f23b24417347285eaa6f623cd1a0b4c009"
+    },
+    {
+      "path": "internal/secrets/binding_context_test.go",
+      "digest": "67a42ce571306811e17b7ae6097756803d1f21e9971f6c79e4fe73031dc01766"
+    },
+    {
+      "path": "internal/secrets/guard_coverage_test.go",
+      "digest": "3cb1fd5b66f1c206bacc20817caa541c4a87ebe8f66bc89e0f10094fc39bbc24"
+    },
+    {
+      "path": "internal/secrets/kek_algorithm_test.go",
+      "digest": "a71c27a4f55a831dad05fda4642056be3ccf814e647cc79392a4fea3abfcdb53"
+    },
+    {
+      "path": "internal/secrets/kek_identity_test.go",
+      "digest": "131956319cd0a9e75543d87a83f47e66acaaf1637d3f293096b98d210f73af08"
+    },
+    {
+      "path": "internal/secrets/kek_version_test.go",
+      "digest": "29bb32e0af1670763458db81216845cae95c29077e28bed830be084e996ecb1a"
+    },
+    {
+      "path": "internal/secrets/releaser.go",
+      "digest": "6261dbd45507a248ff45ceb952c5b93d641ff419fa211bb5e6c0bd70ee30e9e4"
+    },
+    {
+      "path": "internal/secrets/releaser_test.go",
+      "digest": "ab9d6a97932dda12ed9f0d0c6bfad4a0fe3874c0a386b6b03d2b84d664bb7ae2"
+    },
+    {
+      "path": "internal/secrets/sealer.go",
+      "digest": "d71f60dff0d301f9609432d50596ca320b75383c117be0809a2befe5375221a0"
+    },
+    {
+      "path": "internal/secrets/sealer_construction_test.go",
+      "digest": "f4a1e185ffe9e6239113da3a8dd75b534c8d94c8f12f919a756c089add720006"
+    },
+    {
+      "path": "internal/secrets/sealer_wrap_test.go",
+      "digest": "75ca6541b1a200c3b55c1f8ecc9872917733c265dd6851928cab55d426fbf23f"
+    },
+    {
+      "path": "internal/server/guard_coverage_test.go",
+      "digest": "c2d941e8da73381777fa0fba18cd2765ec34d0be42be14060bcf4e469c4b6ac9"
+    },
+    {
+      "path": "internal/server/health.go",
+      "digest": "a7ea223ee35ae42d2f8273e4a2dd885838624cfc0682f8df22ae4859e46f2e09"
+    },
+    {
+      "path": "internal/server/health_test.go",
+      "digest": "f5c420989b399f8d39e8ba3f3af1eaa1fd75ec946f4aaf8a8ea3fa348fcc0252"
+    },
+    {
+      "path": "internal/server/readiness_record_test.go",
+      "digest": "7404c6bfd49a2bedd4bff46a8e4e2e1d9bc0ab8270cea7fb8f28f70f16485ab1"
+    },
+    {
+      "path": "internal/server/readiness_stats_test.go",
+      "digest": "de3169508397b8342a7eccf56a523165402a19cc196b25053ecec9daa59ca201"
+    },
+    {
+      "path": "internal/server/readiness_wiring_test.go",
+      "digest": "697e77ebad09e4d41aabdf223d3cca9157249b8e6cfccfa68f4e279aa6e10d40"
+    },
+    {
+      "path": "internal/server/require_all_test.go",
+      "digest": "1d1f33684aad53d152c580f131c74b1a373f843bdcafa1de88a5688c5d41a1a7"
+    },
+    {
+      "path": "internal/server/serve_test.go",
+      "digest": "65773bd5b96fe63b81297e4ddeeaf9d72aedaae76196c71a38632ac7a26f089d"
+    },
+    {
+      "path": "internal/server/service.go",
+      "digest": "53168b0751e9e85799b325c29570ff1ead0b114d2dcf396085d6d0e16d58f538"
+    },
+    {
+      "path": "internal/server/service_test.go",
+      "digest": "874580a1eddce74355eff154f3ab5678204f4fa908f2e7ba85a087a6165e0b1e"
+    },
+    {
+      "path": "internal/server/shutdown_grace_test.go",
+      "digest": "d4eeff52c498125e8a2d92b855496d1d01723ecae71320b3074bd18f2b3b5275"
+    },
+    {
+      "path": "internal/server/surface_test.go",
+      "digest": "f8a1c8c41732ce548f4c104c479863be0c30db9de38e86f542e9a1bc441e491f"
+    },
+    {
+      "path": "internal/server/timeouts_test.go",
+      "digest": "6ddacd936907e60341101699decbe1a299570949ea7473faf303bb94bd691611"
+    },
+    {
+      "path": "internal/sweeptext/citation.go",
+      "digest": "32445d8b22a136d630525f3a29b59d920a92a8b750f91fee65f6ac762d520917"
+    },
+    {
+      "path": "internal/sweeptext/citation_test.go",
+      "digest": "8dcd333e030aef6262b3f1c741eebbe625b907c5f1265a58fbd8accf5aba999b"
+    },
+    {
+      "path": "internal/sweeptext/sweeptext.go",
+      "digest": "441744a405cac26bc5799cf9fc8109fa62d44912f1aa076f1f785fa2c742327d"
+    },
+    {
+      "path": "internal/sweeptext/sweeptext_test.go",
+      "digest": "5caac4ad7a06d92b04bfd8110aa65bc53b4531ca78f522a7b5d46b672ba03071"
+    },
+    {
+      "path": "internal/telemetry/absent_values_test.go",
+      "digest": "367bd620bf626351d36af6358ac49156f32fdf595f24e26a8bcf51bc3e009e78"
+    },
+    {
+      "path": "internal/telemetry/observability_closure_test.go",
+      "digest": "383252c775eb87668f0176a4a420d17af45007df12fd15498ebb49e5b7627254"
+    },
+    {
+      "path": "internal/telemetry/telemetry.go",
+      "digest": "d40ec61292c12ae70493612c6f67da326bef8524b972772d602b1f92b78b0123"
+    },
+    {
+      "path": "internal/telemetry/telemetry_test.go",
+      "digest": "74857ea959fdf98de43eb48b2484af51b337f24a52bee8fc5b1dfc091cb64cc8"
+    },
+    {
+      "path": "internal/telemetry/unauthenticated_test.go",
+      "digest": "ba8bb3d675e6fb6fe9e03ba07bf9b4c85841a4e7df27cc617f26614fc77c7177"
+    },
+    {
+      "path": "internal/writeonly_test.go",
+      "digest": "59de196c13e50ae22aa73377c5dd882a033eebe5c2cd520259f40e0f6566bd50"
+    },
+    {
+      "path": "lab/recovery/README.md",
+      "digest": "431f1cba896be4095ce82fab1696e28c916de758694d76bda9c4726cd43aa8c5"
+    },
+    {
+      "path": "lab/recovery/RECONCILIATION-VALIDATION.md",
+      "digest": "6c689f17009544d7ee04f86e05ed7175c69477b195617bc833047b8ee3b83db9"
+    },
+    {
+      "path": "lab/recovery/VALIDATION.md",
+      "digest": "3e8ac0aca87ab45757b964850e84440aee6760d327de989d4b6423e81c6dcc08"
+    },
+    {
+      "path": "lab/recovery/matrix.py",
+      "digest": "d98729d3a967c27a5b9f1cea4ad84ac157475c2084eff238cd2b5b31151dc2d8"
+    },
+    {
+      "path": "lab/recovery/merge.py",
+      "digest": "803e983294ffbf617aaf786ae8fca51942bd855fd2bba6078728699cdd9dffb0"
+    },
+    {
+      "path": "lab/recovery/reconcile_matrix.py",
+      "digest": "1c2abbbd604ae77e4872363c86a353f15abbfa9009223eb7aef9c3e0fb340d09"
+    },
+    {
+      "path": "lab/recovery/validation-summary.json",
+      "digest": "01bbcaea64aa6d3ff222f2ee10193a274eadd8eded5d3ebfcef464e8f1fce4ed"
+    },
+    {
+      "path": "tests/etc_writes.py",
+      "digest": "2f5f12aa17028d648f53bd467e67845a9bcc77ba9a622c5626081aed1c818819"
+    },
+    {
+      "path": "tests/falsify_boot_render.py",
+      "digest": "4713c70fcd239724321e390a37b08ee68cff2eff31b9d09a9341db057920e6fe"
+    },
+    {
+      "path": "tests/falsify_bootcreds.py",
+      "digest": "8b93f4cf9fc2f55a4c4e3d6cecde454cf25f11b49fbbc3102af7875a479fe68a"
+    },
+    {
+      "path": "tests/fixtures/credentials/host-pk-7-11.cred",
+      "digest": "26593dddcbcfe98915761870ad0003613b2a159776feef7addb9aad0829de03d"
+    },
+    {
+      "path": "tests/fixtures/credentials/host-tpm2-7-14.cred",
+      "digest": "ea66e96d91ba0dd44b6613bc729c6b135c9d0df5ac8c08f81ffeb2d0efaf5d09"
+    },
+    {
+      "path": "tests/fixtures/credentials/host-tpm2-7.cred",
+      "digest": "179ef50716608c8a7cf4d48a55d4ffab7ce992e1106979eb6c826e47c4462614"
+    },
+    {
+      "path": "tests/fixtures/credentials/host.cred",
+      "digest": "28986eb2fd87c36d58e063e682c4c20dd854f103251c5d8e35dc849ab1f41470"
+    },
+    {
+      "path": "tests/fixtures/credentials/pcr.pub",
+      "digest": "52308c4153dc8c57ed0989868ebe013f317cbf757d12dae09bd94107156bf1e1"
+    },
+    {
+      "path": "tests/fixtures/credentials/pk-7-11.cred",
+      "digest": "5c68208c364e856d6421dcda51d48185f18d0ff7b953ff42530d1c355b521136"
+    },
+    {
+      "path": "tests/fixtures/credentials/tpm2-7-14.cred",
+      "digest": "7733a489e89fd36dfd889bfb13a5eff56f373a9f59d93dc715fbfc74587b449a"
+    },
+    {
+      "path": "tests/fixtures/credentials/tpm2-7.cred",
+      "digest": "19758c7115b377594d050d4d32b265d3bbc5f3cf25956d751dbc7d961554de32"
+    },
+    {
+      "path": "tests/fixtures/ekchain/ek-other.pem",
+      "digest": "52de90935a58cba986642caf843fe72024cb9a68049238f681dc66f96fc1a6cd"
+    },
+    {
+      "path": "tests/fixtures/ekchain/ek.pem",
+      "digest": "bfb7934727d7913072360596a6e76e8a5b449b1ab05e34b05f5b81ca8aee234e"
+    },
+    {
+      "path": "tests/fixtures/ekchain/ica-2017.pem",
+      "digest": "0d6c375e44d18cd0b16e29c61786e580c60effb5fd7faebed63e929b9c850c87"
+    },
+    {
+      "path": "tests/fixtures/ekchain/ica-2023.pem",
+      "digest": "97d1afffa7a80920fe9bbc09a6037428fd02d4d604c6bb9ed7a51e74869af8da"
+    },
+    {
+      "path": "tests/fixtures/ekchain/ica-other.pem",
+      "digest": "08acd12b8adf8bba3843902f5eb5d96cb93f3d7cceffdcc08b381dba10e0dc7b"
+    },
+    {
+      "path": "tests/fixtures/ekchain/infineon/ecc-ca029-2017.der",
+      "digest": "de999c113baaed11133feb7731898c1f43dedbd5a75bb65d1662df46d5568acf"
+    },
+    {
+      "path": "tests/fixtures/ekchain/infineon/ecc-ca029-2023.der",
+      "digest": "766507db64abf98e14d1c3c754d09d480b981c0f782a2f397e58811808b9d759"
+    },
+    {
+      "path": "tests/fixtures/ekchain/infineon/rsa-ca029-2017.der",
+      "digest": "26203ada09d6b70ac18ab180c30dcda8c1292d89a435eaa56e1d822b1f598764"
+    },
+    {
+      "path": "tests/fixtures/ekchain/infineon/rsa-ca029-2023.der",
+      "digest": "fc7160eaa18a03722b534aeaa4167fee44555a9f1d8e4d725d1b69cafd280946"
+    },
+    {
+      "path": "tests/fixtures/ekchain/make-synthetic.sh",
+      "digest": "f0b89ecf5b696d13ad8114b34e89ccb915e8c5dafb34a53e033b5bb628a6a13d"
+    },
+    {
+      "path": "tests/fixtures/ekchain/root-other.pem",
+      "digest": "022b60eb9bbea5cc9a641933a8afaa060f2aa4a55baff1e82896494656190d59"
+    },
+    {
+      "path": "tests/fixtures/ekchain/root.pem",
+      "digest": "84059b05eb7f3687810484e5c360c9e28e14e1dd726cdef9378946467bde3d1b"
+    },
+    {
+      "path": "tests/fixtures/ekchain/swtpm-ek-rsa.pem",
+      "digest": "ba7ef667938520e8796586a58445d8bc0037b9c87e105f8020e083e19fabb9c7"
+    },
+    {
+      "path": "tests/fixtures/ekchain/swtpm-ek-rsa.pub",
+      "digest": "cf00e696bba54b87da937ed047cc5049b4b6ef654175904bb0aacbca781f0f61"
+    },
+    {
+      "path": "tests/fixtures/pcr-keys/system-1.pub.pem",
+      "digest": "f4496ec5b4936c561db128cc2d69adb195cd93d4d577377c2e425bf06d28a403"
+    },
+    {
+      "path": "tests/fixtures/pcr-keys/system-2.pub.pem",
+      "digest": "e64ce91e0176d46c9f8ddae7e7376451046ac6c9996d0ada58d1c451241a4b6c"
+    },
+    {
+      "path": "tests/fixtures/pcr-keys/system-3.pub.pem",
+      "digest": "cadc340c302217a0dc30d224bb8a957e6e089a27110cd4214b039c49438cb237"
+    },
+    {
+      "path": "tests/hang_guard.py",
+      "digest": "ce1eb851bcf4f87f774c4d85c8d5974b79b87f09225420caa1e892f1589ba965"
+    },
+    {
+      "path": "tests/source_lexing.py",
+      "digest": "d4334cfecc33480a93dc58949203734d28ba855fb4ea830ab1147904f0d5c8b4"
+    },
+    {
+      "path": "tests/test_alert_firing.py",
+      "digest": "7f4f2fcd9e01fb93668a036847988fc52c30a7679717f46a41f4e274499ec025"
+    },
+    {
+      "path": "tests/test_alert_rules.py",
+      "digest": "6717119dc6392ca53d8b57a4202c8fc107463cd5b0d951663923e2dfb94d3c36"
+    },
+    {
+      "path": "tests/test_apt_install_netem.py",
+      "digest": "5cb1c130bdcd220ab9a79d8107fce291425da0f2f388cf2ff79a35223527d042"
+    },
+    {
+      "path": "tests/test_baremetal_activation.py",
+      "digest": "cddc5a09ec90d8dd5b7e6ed625e6133367d596ddd97e6576abdb478010a753a0"
+    },
+    {
+      "path": "tests/test_baremetal_admission.py",
+      "digest": "e5e3741bd9da619bb57a0411f485ba55f4ae2194c53bcd0f09c35eac2a2673fe"
+    },
+    {
+      "path": "tests/test_baremetal_anchorpolicy.py",
+      "digest": "f9ebb6f5766202dc378bb7a2b9f6439d8d354d957ceec0f976d6e6f4e57047c3"
+    },
+    {
+      "path": "tests/test_baremetal_apparmor.py",
+      "digest": "724da2393fcd0f8f319beaaa2e54e9724318fd5d3fc8711a23ebc114afdd729c"
+    },
+    {
+      "path": "tests/test_baremetal_attest.py",
+      "digest": "e66827265ab59c095a589fcf1a797388e5db9359ba4ec1f9717692d30e4dec3a"
+    },
+    {
+      "path": "tests/test_baremetal_attest_kernel_rm.py",
+      "digest": "56264937b49398bfa569cf9069c0410ae862cfc9bbc5074f4234a6ed76ce4a2d"
+    },
+    {
+      "path": "tests/test_baremetal_authtime.py",
+      "digest": "5e8cd133f8dd977d423af7791cfb218c5b81c9dd529d14c58adf7997fc3d528c"
+    },
+    {
+      "path": "tests/test_baremetal_beat.py",
+      "digest": "f9a29229980b21e4d0cddaba01042b4d3a675104cf1875c6c667f9f2841cc075"
+    },
+    {
+      "path": "tests/test_baremetal_boot_esp.py",
+      "digest": "210edc73cbb53c88238438732f7d7cbe6c055f1d0b840f39417cc15cb7a8af29"
+    },
+    {
+      "path": "tests/test_baremetal_boot_render.py",
+      "digest": "1442785e5e5e54fe4b7e797bf14810f146f27455e3a52250778a847b3d3fbedf"
+    },
+    {
+      "path": "tests/test_baremetal_bootcreds.py",
+      "digest": "080ffdee920480dc3448e10bb5e4cf570be7f65b4661542d3f977449fab5e411"
+    },
+    {
+      "path": "tests/test_baremetal_bootnet.py",
+      "digest": "3d1c77a83f1f0861294a59b30722d1c27fe639494aad4c2ba3fe5fc2a3f6768c"
+    },
+    {
+      "path": "tests/test_baremetal_bootnext.py",
+      "digest": "7caca56d489545bcb41a01b24a6fd7a563f467fa96ff8007d88ade441c37aca5"
+    },
+    {
+      "path": "tests/test_baremetal_cardrecord.py",
+      "digest": "f4ce1ab962475bd2e8f27fbf439f39cbd320dc565d4705b2a84b579a8d4f42c1"
+    },
+    {
+      "path": "tests/test_baremetal_convergence.py",
+      "digest": "bc368fbe861c9d66517b84fa39b9343da40989411c924ae41b3849edd571c150"
+    },
+    {
+      "path": "tests/test_baremetal_deliver.py",
+      "digest": "9fd1f937b15f3903875180b168182e06b21b30e2ff73dab8b67f8fe308a667fb"
+    },
+    {
+      "path": "tests/test_baremetal_drill.py",
+      "digest": "9de7aa4f617f2b8a65e7d4d16cb76c183e5c5b485fe1f0933ad6f4963b9150e8"
+    },
+    {
+      "path": "tests/test_baremetal_ekchain.py",
+      "digest": "15bc26dd866dd7650a5e0db1e507511a5975208ff921c0e9ecee944b0ca29ab2"
+    },
+    {
+      "path": "tests/test_baremetal_enrol.py",
+      "digest": "14dfa0b112b0cc2b0e93e3ab2de501e418719dacf741693004c8380533acc8ae"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_anchor.py",
+      "digest": "abacb9dee31e96277ae86285fc847eba7b4f4ce39cec6c0e213989102c781830"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_check.py",
+      "digest": "6295bc1e1acc9ab19865744e4dfb8618971bf5f69ef946873e6df08af73608ce"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_config.py",
+      "digest": "cee54817ec729f7ec9af8620206207a9117c667af1cf1667176612b49390091e"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_first_heartbeat.py",
+      "digest": "cc90d78c3f65527257f4a2b24ca5f603955a1c4b9941844a1dfc69cc9e4ea59c"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_paths.py",
+      "digest": "1620408ce24fe1b912a0a8a08011caacdae8ace6ce846bc6b5a7be1aaeea0848"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_record.py",
+      "digest": "e0284e138b44bfa139128540d57b0d0a389e6401c9be1bc4b97d3da7c3a7fafa"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_render.py",
+      "digest": "d3e986199ac44f5117f04b27975c3b396d1ad391f82f7d33cf596b204c9b835a"
+    },
+    {
+      "path": "tests/test_baremetal_enrol_seal.py",
+      "digest": "3ba71f482099865097ecb32d3381b26e540ad0b217a16e3bf1a1be9badd79938"
+    },
+    {
+      "path": "tests/test_baremetal_enrolpeer.py",
+      "digest": "05a4e11632b7ede53683dafb504d4a7f1df6d661a6f6351666d1d4c55c28d7b8"
+    },
+    {
+      "path": "tests/test_baremetal_esp_advance.py",
+      "digest": "1ad636b2de596d586872e806e8b7134bb0f447ff334fb526ee3b6594d78d0ae7"
+    },
+    {
+      "path": "tests/test_baremetal_esp_chain.py",
+      "digest": "92033ba8e224af9dd078cb642a4d755ca9054d5de3f7e6e3664017a7ad458c8d"
+    },
+    {
+      "path": "tests/test_baremetal_espcreds.py",
+      "digest": "de43a5c23493cf8de5b839550024de63af5671fcc5ee38e83c5a4d1f36962e41"
+    },
+    {
+      "path": "tests/test_baremetal_etc_inventory.py",
+      "digest": "49d79adeab1a31718219e55de0d18bb2df43145cbe6d045405c5f3a67698b52f"
+    },
+    {
+      "path": "tests/test_baremetal_etc_writes.py",
+      "digest": "e21e3ea97d624609ea25ba42f0dc1606e29c2bd99aeaa7de2c63736354ad2b04"
+    },
+    {
+      "path": "tests/test_baremetal_etcdconf.py",
+      "digest": "49d266571aa548f55a529004cd5edfac670b29622e4a423056421d495a974a42"
+    },
+    {
+      "path": "tests/test_baremetal_fence.py",
+      "digest": "ca2dffa8bc7f318867f1edff6348d2b854dbda4f0b9cf7a136625a2242d328e3"
+    },
+    {
+      "path": "tests/test_baremetal_firewall.py",
+      "digest": "1e5c80fc4f6da92525babd06c6e6261596461ead73f6f4199aadada1ab1285d0"
+    },
+    {
+      "path": "tests/test_baremetal_floor_sampling.py",
+      "digest": "2926af75ee622f57127ea49c1c8f846de96b0dd1b61e2444980d6168ce7a7f19"
+    },
+    {
+      "path": "tests/test_baremetal_genesis_topology.py",
+      "digest": "42b811aaf697f63fe4b17d173429f706030dd38d5fc91c826849c15dc93b9583"
+    },
+    {
+      "path": "tests/test_baremetal_heartbeat.py",
+      "digest": "f4837028b921ce56e215aa9f5c8d372d86d5de7cee311fa7a293e4f26d48c1da"
+    },
+    {
+      "path": "tests/test_baremetal_heartbeat_v4.py",
+      "digest": "8f2b8a9be88549528f2cfbc758999f32356c44a485f759f23ddd3355359ea2a8"
+    },
+    {
+      "path": "tests/test_baremetal_heartbeat_watch.py",
+      "digest": "bcb31a6ed1d81f1039b33e1290f74f17dd7ac27cdc79d5c732d962c9e6ab1c23"
+    },
+    {
+      "path": "tests/test_baremetal_host_probe.py",
+      "digest": "70348e3d1e7b4e65922afda374bedfc949c405531748edbf75bffd20bc7abf00"
+    },
+    {
+      "path": "tests/test_baremetal_image_policy.py",
+      "digest": "646c6ab136da03e36bf98ff44bdae682551b5df9fdd5d88ab55063d685623253"
+    },
+    {
+      "path": "tests/test_baremetal_image_variant.py",
+      "digest": "fc33c4c6a54056d8d511ce2d998f9cd5af5d4aeceefbe7c92725c028865149e3"
+    },
+    {
+      "path": "tests/test_baremetal_initrd_repo_git.py",
+      "digest": "97431fcd7ddc9a31431320e93b7497096bcca66e919fbd9a2664bde27648fe46"
+    },
+    {
+      "path": "tests/test_baremetal_initrd_tree_retry.py",
+      "digest": "43eb714625d0048c67dc659931ef970e431e575ea034e60ed46fc50e92d17b03"
+    },
+    {
+      "path": "tests/test_baremetal_lease.py",
+      "digest": "606314138984430263e063a807dfb5e66b16b3db06e9913891ef17bcbaf69eb6"
+    },
+    {
+      "path": "tests/test_baremetal_local_lease.py",
+      "digest": "adc60f8520b4c0a0ba4b15ee31d944b4da9435b6f81dfc3669df03bcd2eb8bb9"
+    },
+    {
+      "path": "tests/test_baremetal_manifest.py",
+      "digest": "5910d51233ccd0ceb5b3f74c510f42dcd5f2ea64f48f15f184cef10dffaa9103"
+    },
+    {
+      "path": "tests/test_baremetal_measurements_store.py",
+      "digest": "d957de64ac9dc37c50ec9da69b34c93273d27c781ec870f20ba8bbf68728993f"
+    },
+    {
+      "path": "tests/test_baremetal_membership.py",
+      "digest": "04395f90e0a1d7a578d08772da5fef787b8557708c72f371ef0fa3272fe3c00a"
+    },
+    {
+      "path": "tests/test_baremetal_membership_v4.py",
+      "digest": "d28be9a23e4f551f3e6bb1000c1fd81eb9528dc9b4c8508c16771bcbb4f3a6f7"
+    },
+    {
+      "path": "tests/test_baremetal_membership_v5.py",
+      "digest": "996f7346054a90df2610c62f7d0ae99f6cf5a9c4a6a625a6ed110f7e8a3da19e"
+    },
+    {
+      "path": "tests/test_baremetal_membership_vectors.py",
+      "digest": "3605c4b6e9d1fe83bc68bff671c60b9094cd9d6b511ac0adacc22b3a38a78bea"
+    },
+    {
+      "path": "tests/test_baremetal_metrics.py",
+      "digest": "e37fff27d67240a62c386950baaa51fd35bcf9ee8fbde934643176d8963740c7"
+    },
+    {
+      "path": "tests/test_baremetal_node.py",
+      "digest": "f4a8a70db3fb02cdf73ef7faa6d6e82ec0f6b16eb11b80b828c422361fca9575"
+    },
+    {
+      "path": "tests/test_baremetal_opstate.py",
+      "digest": "b602008f7115160842212c1e6ca970dbc48dfb06a5247c51832c23aae236108f"
+    },
+    {
+      "path": "tests/test_baremetal_os_probe.py",
+      "digest": "eb9ebce722182b81365cd668f81f7c409280ecd18d0a0530a2b46242900eaa58"
+    },
+    {
+      "path": "tests/test_baremetal_owner.py",
+      "digest": "73bf5ed68e33a547834741d958eeb3160e2986480c11a0a028d91df5cc3abcc7"
+    },
+    {
+      "path": "tests/test_baremetal_owner_calls_in_root.py",
+      "digest": "a5642d311bbab730837e89891b1dc10a11720b2c78591b5f58f0793f92a54797"
+    },
+    {
+      "path": "tests/test_baremetal_owner_unlock.py",
+      "digest": "370dd5290eba39e9b3d698dae3686a8ddb0e4cc119c559865eafacee1e85de82"
+    },
+    {
+      "path": "tests/test_baremetal_ownerauth.py",
+      "digest": "44c1640d5b20c2ec93cd6e122b22f1443d6e2cf01070136b13da4bb9d86366db"
+    },
+    {
+      "path": "tests/test_baremetal_ownerauth_tools.py",
+      "digest": "e1861c13fb1a50612920f0d7c14c12d824240dcbe3a442025158e03e8c558765"
+    },
+    {
+      "path": "tests/test_baremetal_p11sign.py",
+      "digest": "fc7b2164ce9e60642c7c2085e84f97af804b933eea86607ac95baec6203a8f5c"
+    },
+    {
+      "path": "tests/test_baremetal_pcr_survey.py",
+      "digest": "0ea9a2349725c423a01da4b3c160c4e1a388bf11fe890bfb1eddf8f2909b25bf"
+    },
+    {
+      "path": "tests/test_baremetal_per_host_units.py",
+      "digest": "5e988c463b711a035bd6f76877fc1850574d35da5c36ca601e66a92b329f9a93"
+    },
+    {
+      "path": "tests/test_baremetal_policy_writes.py",
+      "digest": "7e7b7b9c3d42fd22c9f8e58f59bf58b6b0f58c8421a3803f5910ccabfbab1e21"
+    },
+    {
+      "path": "tests/test_baremetal_reanchor.py",
+      "digest": "6f7ae86986b81f2696f0a79fe76fb664e91ee6b0598d5bde23d61ab0221000b3"
+    },
+    {
+      "path": "tests/test_baremetal_recount.py",
+      "digest": "6999c3f1002383acb6c8db39e34fd8d93cc0db4ec488d6c205651ab3eac9f311"
+    },
+    {
+      "path": "tests/test_baremetal_recover.py",
+      "digest": "fad8043c8818e22b7852f3a8888cf26a2221c6bf5ef1242267d85886e878ed95"
+    },
+    {
+      "path": "tests/test_baremetal_recovery_key.py",
+      "digest": "de4ace2c97de8f485e0988788632dee9fd9ca7e47707195bb40d8ce4aecf1379"
+    },
+    {
+      "path": "tests/test_baremetal_redfish.py",
+      "digest": "17520e1b449d70d2cb052ac4df9992e75f8af9cd41f46ffcd0aa544c904843f8"
+    },
+    {
+      "path": "tests/test_baremetal_rejoin.py",
+      "digest": "a031b8cbaf7191db2994b4685b11809ff0d6fe6cc024839e9dcc3293bc9c8b92"
+    },
+    {
+      "path": "tests/test_baremetal_rejoin_etcd.py",
+      "digest": "91d2d3a80f7fca1a0633207164de0237a7f48c7e687257981073bbda3544a6e5"
+    },
+    {
+      "path": "tests/test_baremetal_replacement.py",
+      "digest": "3b47e3c13ff4aade66fecd324e6b6621dc01c7e922f37d049d6e57f8468804a6"
+    },
+    {
+      "path": "tests/test_baremetal_restore.py",
+      "digest": "edafbe4820ade4c5aa1ffbae6dbd19a266f280b8f2c81a1d57047b03f65a155a"
+    },
+    {
+      "path": "tests/test_baremetal_restore_etcd.py",
+      "digest": "c2cf9485649582e3688ab5e6d9a16615655097d7418b9e3b2ed4edf16cffa419"
+    },
+    {
+      "path": "tests/test_baremetal_revocation_keys.py",
+      "digest": "03ac34b1f1192a4c5be70b5bd0606c1e5ae7bc356420f6b4b69096e8edfd1b79"
+    },
+    {
+      "path": "tests/test_baremetal_revoke.py",
+      "digest": "a0546c1680c88551e65426709a035940b50b6a542b8b2d3063a69d2ab450a7ac"
+    },
+    {
+      "path": "tests/test_baremetal_rollout.py",
+      "digest": "b88b5656680b411aa794e884af3f0c299ad6a032893dea0efa864538e3ba6ede"
+    },
+    {
+      "path": "tests/test_baremetal_rollout_cli.py",
+      "digest": "1436732d8cfe1dd860ebb7dbb238685cb4bd947283fe6b80377f6a73fb39ce84"
+    },
+    {
+      "path": "tests/test_baremetal_rootfs_packages.py",
+      "digest": "6503670de9e07a0106bc6f089b6391b2a7cba6305515b5e905cd094aa4b6757f"
+    },
+    {
+      "path": "tests/test_baremetal_signkey.py",
+      "digest": "8e162ec470a0ffb8a0bfdbd75733df69c6624cd39964e4440a240ab970b8328c"
+    },
+    {
+      "path": "tests/test_baremetal_single_node_enrol.py",
+      "digest": "a4b1f11fc2928051a83a73eca5224a75683a3f5fb832e67e8f917c99f00530e1"
+    },
+    {
+      "path": "tests/test_baremetal_single_node_network.py",
+      "digest": "d54c847790a6c91a413a0c1ccb50047a65339eb0d9b1cdce34dd00c0fbcdc670"
+    },
+    {
+      "path": "tests/test_baremetal_single_node_serving.py",
+      "digest": "e0980e92fb14e37205e9304f22189eb79ac3510987118cb7ca1185215032b0e1"
+    },
+    {
+      "path": "tests/test_baremetal_site_advance.py",
+      "digest": "ae7b39f29ab8485a69cd59bcd26b81fbe7a266dc9e0ad25f1ad5219e185c341a"
+    },
+    {
+      "path": "tests/test_baremetal_site_check.py",
+      "digest": "4963929577adbc7b57034b334f7212d2c01955ceb0c73d3dadbb25fb7926dd74"
+    },
+    {
+      "path": "tests/test_baremetal_siteadvance.py",
+      "digest": "1b7dbbc6807d9e04bddecf42905cb63dabe80422296ac4d7ce85dbeabb44d025"
+    },
+    {
+      "path": "tests/test_baremetal_spendaudit.py",
+      "digest": "98ca33c6748f49ec0487377c14607394a82b758cb4d509664834b78335670dc1"
+    },
+    {
+      "path": "tests/test_baremetal_ssh_trust.py",
+      "digest": "5ffdefa1ad2ffe4c237acceaf4e2a033f6cbc1ef42e0335fad7122155a41cd65"
+    },
+    {
+      "path": "tests/test_baremetal_store_anchors.py",
+      "digest": "e5a5f873f34ced2e969fa938378d3abbee7f5829b27bb66652cced10305e752b"
+    },
+    {
+      "path": "tests/test_baremetal_survivor.py",
+      "digest": "17330a3500b406426532a033ddfe41802a061d05c479e78fa057c3fe6ff48927"
+    },
+    {
+      "path": "tests/test_baremetal_sync.py",
+      "digest": "6fef015236705a405ad6bd19aceb217d321224cee55969656b24d73a405affdb"
+    },
+    {
+      "path": "tests/test_baremetal_sync_journal.py",
+      "digest": "290e96ca5589702ce1ba908287ef404278a9cbb6e121195f8eb3d95e111bdf8b"
+    },
+    {
+      "path": "tests/test_baremetal_takeover.py",
+      "digest": "101a4ccf771d0c5250fd98846b3052f17e45dbbbc7bb664cbabc0a67db497caa"
+    },
+    {
+      "path": "tests/test_baremetal_takeover_etcd.py",
+      "digest": "311bbdc20c09505e83f04ed34b65695bcd42b94bcc0f6ce825ef46fb139644ba"
+    },
+    {
+      "path": "tests/test_baremetal_threshold_cosign.py",
+      "digest": "21940506eee677429bf2e60a6aec8033e7ddc8b5987f509327b13b7bc30c74d0"
+    },
+    {
+      "path": "tests/test_baremetal_tpm_session_slots.py",
+      "digest": "1d118539b70f29654971b5929433db0a67f903bd8d013cec589396675e9fb500"
+    },
+    {
+      "path": "tests/test_baremetal_trails.py",
+      "digest": "99b20bd75d8e98a45683f4c6972ee7842eaa11e0597820c34886cc7450138812"
+    },
+    {
+      "path": "tests/test_baremetal_uki.py",
+      "digest": "b5d0b8ed1419c1ec8ce209eb0a8f8f8113d7072d08e36c364b4295f28055fbb1"
+    },
+    {
+      "path": "tests/test_baremetal_units.py",
+      "digest": "1f71c275b042bde0879d9eb7b74db02595c2ff8d050d740bd73b7e74e5c0ba17"
+    },
+    {
+      "path": "tests/test_baremetal_unlock.py",
+      "digest": "c48b4eb7b9deec4ef1875acce7180bea918619564f2e802eae692b842fbebcc1"
+    },
+    {
+      "path": "tests/test_baremetal_unlock_boot.py",
+      "digest": "b3f58b20edbbe702562c5245a34266f150b085d3b0faa7b5ed53ee294fd1c8ff"
+    },
+    {
+      "path": "tests/test_baremetal_update.py",
+      "digest": "8c4b395cb274524bae7c0adfd9e420b2036ad3e80c7719d08d03dbb1c09176f7"
+    },
+    {
+      "path": "tests/test_baremetal_wgsvc.py",
+      "digest": "f592ebf6c2c1b6e276ee571baa915fce50bbe9e32fbf4da38e0be84556c58a8f"
+    },
+    {
+      "path": "tests/test_bench_cards.py",
+      "digest": "0e67534276986beee35e85e5d508b494426724b3774d22c91f0c2af1b7e7f66d"
+    },
+    {
+      "path": "tests/test_build_initrd_inventory_out.py",
+      "digest": "67ce69ae114ffefcc5bf1d8cb67c130bb623bfb45e484e11bab68f71d97fab74"
+    },
+    {
+      "path": "tests/test_ci_gate_needs.py",
+      "digest": "f8c5f7e04941ec57eb1bce16872404e4f392efdd23850b6305f9a6dc616eff91"
+    },
+    {
+      "path": "tests/test_cosmos_hardware_script.py",
+      "digest": "1a50f431c2d8609f38dbb2de83fd3ed37f027e848350a6bd96645d522ff5b97a"
+    },
+    {
+      "path": "tests/test_custody_manifest.py",
+      "digest": "5976bd2b1715ddf3cde7660a85d7040ed02e15c804e0c9536968b1f0800ad38f"
+    },
+    {
+      "path": "tests/test_custody_manifest_refusals.py",
+      "digest": "1802b75e3fe40dc5d13ee01a5127f230dec51f583df6416d119a6063d8907721"
+    },
+    {
+      "path": "tests/test_custody_slot_vectors.py",
+      "digest": "bcdaf571a7d4d7ac0d30826276b80bf7c95e218da718ed21270880e550fde483"
+    },
+    {
+      "path": "tests/test_debverify.py",
+      "digest": "cd0971a84901664fa04edb5c475f5db1183f200211f4b129ab04485a3e51c522"
+    },
+    {
+      "path": "tests/test_doc_outage_crossref.py",
+      "digest": "595917c19fd4c60f4a32bc53a501c9a1ee75c1c4ff372c8632fb7c54b06eb9ae"
+    },
+    {
+      "path": "tests/test_documented_python_invocations.py",
+      "digest": "4f4d62d892e1c0aef95679334b12480aa44d91e129baeb316c4e2c0dcbc094e5"
+    },
+    {
+      "path": "tests/test_e2e_card_isolation.py",
+      "digest": "d20552a9ba64a39f457bc1bc95b6eab5d777562770c30dd479624f89e35bf29c"
+    },
+    {
+      "path": "tests/test_e2e_credentials.py",
+      "digest": "01a4a453eec9869da066e1fef554128bfe57bd284c853eec3ee2422b10bac459"
+    },
+    {
+      "path": "tests/test_e2e_signed_boot.py",
+      "digest": "579dc8fd34c0d75540ae541c5b99a3e0178defd0346c68549b1b888090317246"
+    },
+    {
+      "path": "tests/test_e2e_timeout_escalation.py",
+      "digest": "b88ebf875ac162f08bdc0f99353459cbc5a2b9d4cee4e929af97b2a7a7dd2b43"
+    },
+    {
+      "path": "tests/test_e2e_tpm_stop.py",
+      "digest": "481c69c84762d3f1f2af0860c20aeeb7a36d7e48d349c997817091802d373b4b"
+    },
+    {
+      "path": "tests/test_e2e_tpmdiag.py",
+      "digest": "993730ab27bf282e6b19cea8ac5582e3671309ad09c71834758c04402f1af87f"
+    },
+    {
+      "path": "tests/test_elfclosure.py",
+      "digest": "f4db45fb0eba3376d1eaf164370feafd8f35660c210bbd7056652b0364a40173"
+    },
+    {
+      "path": "tests/test_fido_continuity.py",
+      "digest": "99e36384b03c2cb6b35a24927272b798981b7cb93b42eac335ff20a17e7c8459"
+    },
+    {
+      "path": "tests/test_initrd_drift.py",
+      "digest": "e61a0afb26062e5e5cfcdd900e981f1257da516967307b56b63dd0388a2ae187"
+    },
+    {
+      "path": "tests/test_initrd_firewall_modules.py",
+      "digest": "93ef8970bcddda8e483c75e706c881794e7dc982038ec4dc392c0ac4b00f1cd1"
+    },
+    {
+      "path": "tests/test_junit.py",
+      "digest": "911fde07ca556fb239602a75571de670d114c42d013436304f1bee0f334fe487"
+    },
+    {
+      "path": "tests/test_known_polkit_rules_job.py",
+      "digest": "4c758dbabb0de87e2ae9e941fa45e5488dd438a3826b8d53776c611dd35ddf89"
+    },
+    {
+      "path": "tests/test_named_tests_exist.py",
+      "digest": "22c97cd3c396d869cf1eb247d7293f924fe16797639860d321baf933fe2a14ac"
+    },
+    {
+      "path": "tests/test_no_conflict_markers.py",
+      "digest": "e6b4df7ac7252d896dbeaa4804f93060b9a9092d920e2e4a42b0500f0a7dd63f"
+    },
+    {
+      "path": "tests/test_no_site_names.py",
+      "digest": "ced5f5707508d9b00a78c5a25af2524eac4844ddfea5ffc7bbc35b4d0a729be8"
+    },
+    {
+      "path": "tests/test_node_alert_firing.py",
+      "digest": "ff8f815b6f774793f1a22fa0f8ccd181239f7891cf93619dd072ced4d3453374"
+    },
+    {
+      "path": "tests/test_node_units_filter.py",
+      "digest": "d8674257944e3ba24b5fedb2064c60c5b2e4815e512f595642cb79df2a896e10"
+    },
+    {
+      "path": "tests/test_node_units_nightly.py",
+      "digest": "61c0eaef5594b9ca454fafa1f44af4ac17ba093ff1d6eaaf116e0074e14d6f5e"
+    },
+    {
+      "path": "tests/test_one_node_ci_todos.py",
+      "digest": "734f1ca0bcf50f9536f971829587fb7649ed155dd5e0d45aed35a1774e7a7083"
+    },
+    {
+      "path": "tests/test_one_node_owner_unlock.py",
+      "digest": "72298c115d71e180b976296eb558a192add2b3502ef47fef89964d59b7120cd4"
+    },
+    {
+      "path": "tests/test_one_node_revocation.py",
+      "digest": "afafeb2df852c38173df6ec59899ff672c07ab4514d6e429a82e9b507effb26a"
+    },
+    {
+      "path": "tests/test_one_node_survivor.py",
+      "digest": "f3c911b837c0e45f7f2d4927462d7e9906f1a1ffe2576fbd5d18bde99745b4e3"
+    },
+    {
+      "path": "tests/test_openapi_contract.py",
+      "digest": "b9831c9c463c1f40ff277662781243d75a663dac07da6179213eb9564c254023"
+    },
+    {
+      "path": "tests/test_p11_extract_probe.py",
+      "digest": "88ba6b5cc0e913e582ac48bb1ba583007914308f2094bb532c333d0ce959566c"
+    },
+    {
+      "path": "tests/test_python_isolation.py",
+      "digest": "90469d4ff700a4041d22f5597c9b7359e14a62094d0683025e133b58221beaf1"
+    },
+    {
+      "path": "tests/test_qualified_stack.py",
+      "digest": "073074e89312a37883e9fa44b4140b480ca13458ad70d2c039173182531a2ab0"
+    },
+    {
+      "path": "tests/test_recovery_matrix_observer.py",
+      "digest": "0c2b074c221bd643ccf1ef50fccf035d883939b6a38f3e4ec708fc61fc4f2534"
+    },
+    {
+      "path": "tests/test_recovery_reconcile.py",
+      "digest": "1517e811623a1b06a1c0becff6266b22c8de26befa8c94357ef595d28ef3c994"
+    },
+    {
+      "path": "tests/test_root_only_go_tests_run_in_ci.py",
+      "digest": "8494d0be49143bccd3b1867c7def51b2a14651fe85b067b33727bd5fcb673489"
+    },
+    {
+      "path": "tests/test_scrape_job_contract.py",
+      "digest": "01ad4c18aeff4fab7ad3cafa310f1441999efc0ed9d6d98d20a39eb5f2efaff9"
+    },
+    {
+      "path": "tests/test_sequence_cases.py",
+      "digest": "8f10bf98791e5a187641279983dd9093eba1bf4d7af8103cc0e3fc4b87fcbe4f"
+    },
+    {
+      "path": "tests/test_service_unit.py",
+      "digest": "308196b6ad35b61c23a29adc423a4309641bab24321b32a195c4ec8338eaef39"
+    },
+    {
+      "path": "tests/test_shell_locale.py",
+      "digest": "86b54ce66ac0f129a5d8670fddccd3644d2092765558171a7d300deeec6a01e9"
+    },
+    {
+      "path": "tests/test_single_node_limits.py",
+      "digest": "b7ea3bf6783e930619e77af0caeb0ed68bbcd590ed52085f020af68468ef1afd"
+    },
+    {
+      "path": "tests/test_source_lexing.py",
+      "digest": "0683045829a238b1c7b809a8bc383d44264e89da645ad4ed1cc0e940e0fc519f"
+    },
+    {
+      "path": "tests/test_threenode_abrmd.py",
+      "digest": "fc5e576f28db9afc286b5957ebbd13f7d3b018a09c77d4a92b56fe17243b2bd6"
+    },
+    {
+      "path": "tests/test_threenode_audit_complete.py",
+      "digest": "27b4890d88a9c309fde455b27010505cbb8cd14b3aab67db43bfe94f328a9449"
+    },
+    {
+      "path": "tests/test_threenode_moving_line.py",
+      "digest": "0198ab6a7a06729ee0c9b1aa21beb281333bf150192f316f955084bca011964f"
+    },
+    {
+      "path": "tests/test_threenode_renewals_beyond.py",
+      "digest": "067397caf5ed1beb17019410c663a62e76beb914a5f5780b4c10295edb456033"
+    },
+    {
+      "path": "tests/test_threenode_topology.py",
+      "digest": "dd8a74cd1caec4b272bf0a634c7090f24cff906e6c642037348b51f30e79a161"
+    },
+    {
+      "path": "tests/test_tools_import.py",
+      "digest": "bb1ed0b1a83caf2b3fa7aef1a61b341662232c765110668ee9033b4b65a63b77"
+    },
+    {
+      "path": "tests/test_tpm_diagnostics_action.py",
+      "digest": "091d1a9be02d736c177471fc6e5d5293b79017c327c9cde2e5f781436b8d9fc6"
+    },
+    {
+      "path": "tests/test_twin_rule_coverage.py",
+      "digest": "af6589feb9f23205c4ef64a76103d2a576dbff86520d2eca4fd19db4cd2b768c"
+    },
+    {
+      "path": "tests/test_verity_slot_diagnostics.py",
+      "digest": "383ea50bbf2297e4555c880ef645985e7dea3095c5171478fec3bdbb36b84cb2"
+    },
+    {
+      "path": "tests/test_workflow_concurrency.py",
+      "digest": "0fc32db4cd3581d14fccff02637ee4a2cbaad8cc3e9de3e67810c00b70023a0b"
+    },
+    {
+      "path": "tests/vectors/anchor-policy-ksys.pub.pem",
+      "digest": "a99fc95a1e1b4b54dc859e881edb0f14e476bb8ce6f8d70ff6728680afb1ae46"
+    },
+    {
+      "path": "tests/vectors/anchor-policy-v1.json",
+      "digest": "e90c97579c6b2306b8e86aba42be727faa53898999895eac6f815e1508e3213b"
+    },
+    {
+      "path": "tests/vectors/bootcreds-v1.json",
+      "digest": "1e0f80cced557fef7cb3656e2282ff8550b67b2fba7ac666e199d67846bae402"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/bad-signature.json",
+      "digest": "5a6bf0c8e2690e978f975d6c24d435b1421f53e10a7d5f92af9a39cc79c8508c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/expect.json",
+      "digest": "9005de3c13f7c13cddd69a838394c5a89c78d7ff134959fe21d43e0632b21f7c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/first-supersedes.json",
+      "digest": "68446062f243f8908ac505ceb28653e89562e686b1c5ff96f4a1462529ed14a6"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness-expect.json",
+      "digest": "fc4ae017a8a1f3f9dc52da76e22a29e20d892d125b310e9c7490508731eeadae"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/baseline-not-first/card-record-rebuild.record.json",
+      "digest": "d2322deb6b56f5a568e912491c58bdbfeb9d233d16a8d22341e0ceb05f63be6c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/baseline-not-first/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/baseline-not-first/signing-record.jsonl",
+      "digest": "e5d20f76923bcbff9a1d7f0554c32c525e11f7e05b115179cb034e525dbfaa5b"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/bool-sequence/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/bool-sequence/signing-record.jsonl",
+      "digest": "0d2ff689fa611ba10bc4d8acb70aa9517afe770a7137e69cca68546caeb53030"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-1/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-1/signing-record.jsonl",
+      "digest": "40f1081fc07554e6d26e156b34763ace170064498e5c819bd75210e6b6e1f546"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-2/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-2/signing-record.jsonl",
+      "digest": "6d80bc0df603db5dbff1bf626c2e64fa44e16b08ce402db62b5c7e54b65502f0"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt-pinned/card-record-rebuild.record.json",
+      "digest": "d2322deb6b56f5a568e912491c58bdbfeb9d233d16a8d22341e0ceb05f63be6c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt-pinned/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt-pinned/signing-record.jsonl",
+      "digest": "4b8ca99bfc5e7e01ce0e2775d7e067621c51b0f13f57a1ef6978b9e04dd833ac"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt/card-record-rebuild.record.json",
+      "digest": "d2322deb6b56f5a568e912491c58bdbfeb9d233d16a8d22341e0ceb05f63be6c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/current-rebuilt/signing-record.jsonl",
+      "digest": "4b8ca99bfc5e7e01ce0e2775d7e067621c51b0f13f57a1ef6978b9e04dd833ac"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/foreign-key/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/foreign-key/signing-record.jsonl",
+      "digest": "9bd1d5622c61fc701b6dfe9c4c1866d72a8f5c2b396498227dbe4d873e2805b5"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/gap/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/gap/signing-record.jsonl",
+      "digest": "c328d6ec6db6ca85ee829307264c89d71bb5c50f2b1063affb975631d4ca34c5"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/marker-other-root/regalia-signing-state.json",
+      "digest": "9cca812e2c500f06b2ac1138f83c44b5b5943e68196875f9729e8c2b9929069f"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/marker-other-root/signing-record.jsonl",
+      "digest": "40f1081fc07554e6d26e156b34763ace170064498e5c819bd75210e6b6e1f546"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/no-marker/signing-record.jsonl",
+      "digest": "40f1081fc07554e6d26e156b34763ace170064498e5c819bd75210e6b6e1f546"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/not-an-object/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/not-an-object/signing-record.jsonl",
+      "digest": "888e9b0747af983706eeb780b735772cf462c92a291967ca69d81e7d350f51a1"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/pin-mismatch/card-record-rebuild.record.json",
+      "digest": "d2322deb6b56f5a568e912491c58bdbfeb9d233d16a8d22341e0ceb05f63be6c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/pin-mismatch/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/pin-mismatch/signing-record.jsonl",
+      "digest": "4b8ca99bfc5e7e01ce0e2775d7e067621c51b0f13f57a1ef6978b9e04dd833ac"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/rebuild-record-missing/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/rebuild-record-missing/signing-record.jsonl",
+      "digest": "4b8ca99bfc5e7e01ce0e2775d7e067621c51b0f13f57a1ef6978b9e04dd833ac"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/superseded/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/superseded/signing-record.jsonl",
+      "digest": "c30c97c7e2eb3c97480e0ead68e668584cdb8892dd3d099fb2f4b1c317c0a88f"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/torn-line/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/torn-line/signing-record.jsonl",
+      "digest": "a11fd467c411ecd27a449539d4ecf8ccc7d28fd6c9769af905c3973a70825915"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/two-baselines/card-record-rebuild.record.json",
+      "digest": "d2322deb6b56f5a568e912491c58bdbfeb9d233d16a8d22341e0ceb05f63be6c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/two-baselines/regalia-signing-state.json",
+      "digest": "cc24e6d25fe3edbf8b4b26d24755b69afae4a7ed9ba2e9729a6583e64357a8ab"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/freshness/two-baselines/signing-record.jsonl",
+      "digest": "4f96ab44f63ef617db4338708ada361275522ae8d2c781dc4e8bb73ba00b5e41"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/missing-owner-backup.json",
+      "digest": "60c4c878b7b67da03e1bd5664c1f7fd6edfcd81ff702e246e4703983d7a5f09a"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/offline-keys-domain.json",
+      "digest": "f4e76dae74519074b1c7b991f5a4b246c58b012746c117c885fe6924bdb8814c"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/other-root.json",
+      "digest": "eeaa561bfbf0c9ecc9e992cef627bc6017811688db39a91070634a4302331f24"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/ownerauth-domain.json",
+      "digest": "99a039d8913f9585e3bdbbb7adedfd1e73642b7c06a9d94f4924c0e2bc39dfe2"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/rebuild-domain.json",
+      "digest": "04fa36501d411a361d407120e23308a3395d2cb5a0020e1fe49b3be6cd2cb310"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/rebuilt-3.json",
+      "digest": "095039af8181eda464d5b7b37e6ed070fc5eb375fc0cae2c591ca6801b633b72"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/release-is-owner.json",
+      "digest": "d6ce4e734c106ecfb1e3911b7f2f0d4a4a74df29cc65fc2e5ded63fcf495e621"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/retired-domain.json",
+      "digest": "4537dc21f7ebea5162ccc806a159fa163f6996be184f1e788443ea77288db66b"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/root.hex",
+      "digest": "68d9aeb400e1dcc1513eeffb850354de3632cda39b0149bbe2ca2b3a49c28620"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/sequence-2.json",
+      "digest": "b9a69564ba6be7048d10d1fc1cdc212f6e448c775a59fc56efae9aba136c1b0d"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/signing-record.jsonl",
+      "digest": "c30c97c7e2eb3c97480e0ead68e668584cdb8892dd3d099fb2f4b1c317c0a88f"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/unknown-field.json",
+      "digest": "c52185834207f048be299810670c8d677cc5fdb9784ef59c199315e339de047a"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/valid.json",
+      "digest": "f018aa170082a808723cc70f67d1c738c875bbd0e8fb6018a28eae27e75b1e0f"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run-gen.py",
+      "digest": "a847a4d74dbe43883ef048d97b8b43353e8e71ec7776e77cc67a491bdc681aec"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run/card-record-1.record.json",
+      "digest": "e6f9fbd6eead2b53b1511d16ae92c0a86b86251904a27a2815f0f2d3bd7fc23b"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run/card-record-2.record.json",
+      "digest": "dbdae43c69c78ce2c5b142102edc7ac8f2a1a8ce04444e22fbfff84f5a2e68f7"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run/root.hex",
+      "digest": "49d5be1c97cd7c194972f50b8acd3a276165e85e99c562d8382f5c57849db09a"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run/state/regalia-signing-state.json",
+      "digest": "846a158c51804b98be603add4ffb64d8e3ef6f0b71e8263794d41d98d2f7d447"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/writer-run/state/signing-record.jsonl",
+      "digest": "e3c83f6c7b7489a45aaa49dfc3d3a7164b450c0dff45a3ddd4fca61dc2c5ed88"
+    },
+    {
+      "path": "tests/vectors/card-ceremony-record/wrong-domain.json",
+      "digest": "7f4de929edfe134da7fbab5d496fc7a5dd115f3d30a07f77147863a52d19755a"
+    },
+    {
+      "path": "tests/vectors/custody-slot-rules-v1.json",
+      "digest": "b2a1b8a0413224785a611053fa324354c66640601a390fd70a3a19e30d2b6fdf"
+    },
+    {
+      "path": "tests/vectors/heartbeat-v4.json",
+      "digest": "da6372b1d41ee6e87b99611b1d3fedb746cf7066c1f82d4e59d24ee0a2d3bbce"
+    },
+    {
+      "path": "tests/vectors/highwater-v1.json",
+      "digest": "df60ead665a1ddff9c33f068060932e8e3ada87c94f3a691ae72878262d26260"
+    },
+    {
+      "path": "tests/vectors/make-anchor-policy-v1.py",
+      "digest": "208da7ebf8c8152506164652d3a839e6a3e74bd4e5cd97c6778074c89cb5db0f"
+    },
+    {
+      "path": "tests/vectors/make-bootcreds-v1.py",
+      "digest": "309397ea3d0eb3d0012efa20f80c7a8416236d051eae9c2bf4a8ae02567fea8c"
+    },
+    {
+      "path": "tests/vectors/make-custody-slot-rules-v1.py",
+      "digest": "30eaff03f41500f93101b2ef45f57c91527a3196e0da752f65a7bf7953600e6c"
+    },
+    {
+      "path": "tests/vectors/make-heartbeat-v4.py",
+      "digest": "cf67fb18ff677d169a7c0d293caf5824ed76ee482acd8525877875c23c6b5d31"
+    },
+    {
+      "path": "tests/vectors/make-highwater-v1.py",
+      "digest": "cc0cc817c777fe33acd6053006378cc2acc355a10e0858f73fec59394534dde5"
+    },
+    {
+      "path": "tests/vectors/make-membership-v1.py",
+      "digest": "f7d3371f5ad51d0b1898d80e96739a12191c6e9670481e48994f2669f67725d8"
+    },
+    {
+      "path": "tests/vectors/make-membership-v4.py",
+      "digest": "cc826039e35f0e6c771ba1a4b59e3bb9cd71f3fd355708a5ac66835cd00b50be"
+    },
+    {
+      "path": "tests/vectors/make-membership-v5.py",
+      "digest": "bd95eaf2aacf460aed309354d292f8aac422993b99672eec10f3ce0d190112bc"
+    },
+    {
+      "path": "tests/vectors/make-opstate-v1.py",
+      "digest": "63c5b4c4f0fe8cceb1d3b2a227c8a8a021c9d4b4bbffdb168ffcbe9006642d16"
+    },
+    {
+      "path": "tests/vectors/make-pcr-key-policy-v1.py",
+      "digest": "fc81e22251bec6129ab80e144b9e2d9abfe35a5f48e0db43964da794830fd3d0"
+    },
+    {
+      "path": "tests/vectors/make-pcr-values-v2.py",
+      "digest": "4dbd2bd0120d2d386781da14b26376f61635d587e05e9c371a742dd65f6df770"
+    },
+    {
+      "path": "tests/vectors/make-spendaudit-v1.py",
+      "digest": "511434aad40905ac44b0b856dbb4d3636a7f5ac8fa9cfc6d863a0075c9132e29"
+    },
+    {
+      "path": "tests/vectors/make-survivor-directives-v1.py",
+      "digest": "d7a1d77e3ffee4fa905a37a3bc35c578a82ac057fe210b2177e96f386de4ce59"
+    },
+    {
+      "path": "tests/vectors/make-tpm-reason-v1.py",
+      "digest": "045b69d769953509ba7a0746ac93183bfe0cfd3fb80fee15d8f1c95d44f245ef"
+    },
+    {
+      "path": "tests/vectors/membership-v1.json",
+      "digest": "fb95a16076e8aa0bfe3007d5e0251c454d839f222e6d557b8fd3fea9433c9200"
+    },
+    {
+      "path": "tests/vectors/membership-v4.json",
+      "digest": "703f308ccf7bf62459e275640784f3d8f46e4f754bb4f62f1cb5585408947be7"
+    },
+    {
+      "path": "tests/vectors/membership-v5.json",
+      "digest": "4bc6bcc8daf6dd2c50112247cc906cf6f55fe32418cfdf74c2dfe10c76fd78c2"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/PROVENANCE.md",
+      "digest": "27ebce3a25f42ba423de8bb3e4b875b5abc88e2936e6387b14e181b8591ba362"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/offline-keys.record.fd8df0a.json",
+      "digest": "9e1f1f67f7a1cfbaf074710f64930d8e847a29110e8454b1097a8b2e1a87bae4"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/offline-keys.record.json",
+      "digest": "c77edde50c05e7f9cfd122f1221cd3c9c7d2578e3bd1aec87fd3edee2d89cd43"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/offline-keys.record.rc133.json",
+      "digest": "2e32afb1420123d63d6f6f26239791f8996343b5120313c15d1e04354980d06a"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/root-fd8df0a.hex",
+      "digest": "0b82e2ff415e84d9ed6f932364a55ac0e85cf60fc169946b971f7b2fcbae8813"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/root-rc133.hex",
+      "digest": "3a459886284291d155ea2775ace7c6e5c04751d9e479ae7a6b202d7147430db6"
+    },
+    {
+      "path": "tests/vectors/offline-keys-record/root.hex",
+      "digest": "83bf67df11a8c737eab11c4e92848f9cab65d743ef30fc31c9a3e2bace4bd9d1"
+    },
+    {
+      "path": "tests/vectors/opstate-v1.json",
+      "digest": "4da7d48fe8afbbb5cbfe142bec9a8c65d767639b4e6315b7cee2023f2a53060a"
+    },
+    {
+      "path": "tests/vectors/ownerauth-v1-gen.py",
+      "digest": "943e74dbf790b9730a2e49b7f95182f3e0d5c2c6ef504b4d87077e7af40e1a84"
+    },
+    {
+      "path": "tests/vectors/ownerauth-v1.json",
+      "digest": "1f1c01ee4ee65ec9e47f5b94033e8385456369232b6da132a2e3d19de7cfb81a"
+    },
+    {
+      "path": "tests/vectors/pcr-key-policy-v1.json",
+      "digest": "b62022ca96cbc0b76f2d93c9275c5c0c523520dd5114d922267b34fe93f6c49b"
+    },
+    {
+      "path": "tests/vectors/pcr-values-v2.json",
+      "digest": "6d107447f618de30970c1b1af90929829908c322bd052d8f16c9150b913d030c"
+    },
+    {
+      "path": "tests/vectors/root-card-chain-v3.json",
+      "digest": "70be892525a83403a46b61621cbfffbf1db12f87175097ebe5e19dd5e1fad2ae"
+    },
+    {
+      "path": "tests/vectors/self-lease-v1.json",
+      "digest": "5a3486befd3dd42892e27fd4d82120c7544f98f1eebf40f3b701a130b159a75f"
+    },
+    {
+      "path": "tests/vectors/sequence-cases-v1.json",
+      "digest": "6b16a19d55b229b039fd2938050e092488e8e8b1332d4810f956f0caecd8e094"
+    },
+    {
+      "path": "tests/vectors/spendaudit-v1.json",
+      "digest": "9db872d7dafa76735e700adbca7a8e3546203eba59f61c4f31056d01ed25b3bc"
+    },
+    {
+      "path": "tests/vectors/survivor-directives-v1.json",
+      "digest": "05e0dcbcf8f6d553cfa7d4a4ca4b8397882bfbc66926348073597a0ef5047017"
+    },
+    {
+      "path": "tests/vectors/tpm-reason-v1.json",
+      "digest": "08b6b429b2ed4a3b61a2d4c8ebeb288e6eb3e7dd7248b471c01ff3d8ea232704"
+    },
+    {
+      "path": "tests/vectors/trail-events-v2.json",
+      "digest": "fa66e7d6f75738428348befd997efb2891b33d33507182fbec638fde3b9de8aa"
+    },
+    {
+      "path": "tests/vectors/typed-keys-p256.json",
+      "digest": "4e6810efec93dd91e7819b0e2412668e96117d452b641c9040ca4df9d060e93a"
+    },
+    {
+      "path": "tests/vectors/unlock-owner-v1.json",
+      "digest": "09e265bb341fd3e98bd9dd0658afe2cfb9f3229376d53f5f97c19bb9942967d6"
+    },
+    {
+      "path": "tests/vectors/unlock-v1.json",
+      "digest": "8e97358cfe5c28bdda752b71f4674df23e2e7fcf6a92ca11a8fa27d9732b7d66"
+    },
+    {
+      "path": "tools/__init__.py",
+      "digest": "c9d7e96d8621b0bbc7ec9dcb29015cd165a6bce57c6c4d76ef47d1ad854d1941"
+    },
+    {
+      "path": "tools/bench/README.md",
+      "digest": "a1fe6664c5e2ce3a53bce143a92bb23a32c3a60a46025c161ed81ae7b306b56c"
+    },
+    {
+      "path": "tools/bench/hsm-bench.py",
+      "digest": "e3f7c4b824dbd6829772f11dd0e6be59e44b3b4b9fe3fae8f1663eb88e082700"
+    },
+    {
+      "path": "tools/bench/requirements.txt",
+      "digest": "34d7b444ee12d489738a5965d63947116f8ee08c24747e9f09b9f2ed18a6a34c"
+    },
+    {
+      "path": "tools/bench/test_hsm_bench.py",
+      "digest": "f8d3cc0c83ce542e34aaa91ed697328498395c1454ca158ce63f3c23e0bb9018"
+    },
+    {
+      "path": "tools/custody_manifest.py",
+      "digest": "343775a5aba7d3c09d53039569cf79f3d2a473812eab931fe003f458bdd0a5f6"
+    },
+    {
+      "path": "tools/fido_continuity.py",
+      "digest": "e4cee77df3accdfb804c4040099babec383e907d9758863f7274b4325ed2d317"
+    },
+    {
+      "path": "tools/guardenum/main.go",
+      "digest": "55f542bdb962b9a14172eb71b80a92875e857b6d1c0848ffb0eb9d70e77ad5fa"
+    },
+    {
+      "path": "tools/guardenum/main_test.go",
+      "digest": "107fe7943b050a05c275eebf7829adf7491ec542a4b6d4cbe17876b3cfded7f5"
+    },
+    {
+      "path": "tools/guardenum/output_contract_test.go",
+      "digest": "6882014c71a45a132e1550e72cbc82371dfa85c0102b70a15e71d2c1b413b079"
+    },
+    {
+      "path": "tools/inventory/inventory.go",
+      "digest": "7509b9cf1a5f9c555210b7952abd05aa8aefbab841a51bb499132bf089fb2603"
+    },
+    {
+      "path": "tools/inventory/inventory_test.go",
+      "digest": "b388c5cd2a4f0125d1a54e31e3ae40f2cca061a8b6beb03dc5fbcf99f00983c8"
+    },
+    {
+      "path": "tools/inventory/main.go",
+      "digest": "bbf8ef17443b1098943e2bd6407c4a956c3a2ec3e391d515d83283a28d85709c"
+    },
+    {
+      "path": "tools/junit.py",
+      "digest": "ec2d995e86727e2ddc3ec50c9293c6ad48df3cb83c5adfc0598a8a17aa035a33"
+    },
+    {
+      "path": "tools/nodeunitsguard/build_graph_test.go",
+      "digest": "affef2670254b08a85d2c8e94a83bcd483e59c069e7b14697a8c8a1017e8f6ff"
+    },
+    {
+      "path": "tools/qualified_stack.py",
+      "digest": "4c5509c4b7aa0b336976cb7d58157fe2b5ddf589823e930e0ef644cf091768db"
+    }
+  ],
+  "omittedFiles": [],
+  "digestAlgorithm": "sha256"
+}

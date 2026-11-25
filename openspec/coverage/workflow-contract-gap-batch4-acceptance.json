@@ -1,0 +1,721 @@
+{
+  "schemaVersion": 1,
+  "reviewId": "parent-workflow-contract-batch4-20261122",
+  "reviewedAtUTC": "2026-11-22T02:24:12.136264+00:00",
+  "sourceRevision": "0a32a901d1240eec51ddff323274e2ad935116f3",
+  "sourceTree": "347cc36bd44945fcff8a6624237222cb64c0cf17",
+  "status": "accepted-declaration-contract-text-only",
+  "proposalPath": "openspec/coverage/workflow-contract-gap-batch4-proposal.json",
+  "proposalSha256": "bcdc06ebe2228acaa8760f39cee2d130613c1864dd64b3e045262eb5d78c4d96",
+  "authorityBoundary": "Declared workflow events/jobs and settings only. No job execution, effective permissions, branch rules, remote required checks or installed ratchet proven.",
+  "cases": [
+    {
+      "caseId": "WORKFLOW.abrmd-probe.pull_request.declared-registration",
+      "oldCaseSha256": "cec9c3b1b999faee2f9989c4318e3d2e7c29686dfd57738203b29f9167cc6b2f",
+      "newCaseSha256": "8869f65634c7545eef8e946421a76325ef60c0798afc5ed90c53e29732ad3008",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "abrmd-probe declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.abrmd-probe.schedule.declared-registration",
+      "oldCaseSha256": "effdb15c95e4be8d940f2c5425aaf7e847fd6d08065ac958a7cc6d391c169e5b",
+      "newCaseSha256": "0a9da7cc6247884fdc0be4c6eebf556670e9953b0ca38abbc451ab10c468bfa5",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "abrmd-probe declares event schedule",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.abrmd-probe.workflow_dispatch.declared-registration",
+      "oldCaseSha256": "2a58104299713a5ef7042c679966448b8d521645d6b81e49a567cca82331a3c0",
+      "newCaseSha256": "1df5758e014adc88e5d244de97899e0ac8ed5ae567c3b9e34cbb8a994a4ddbce",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "abrmd-probe declares event workflow_dispatch",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.abrmd-probe.abrmd.declared-registration",
+      "oldCaseSha256": "255a3a51058e5ae4b926628f4914d2b5a9533493b52678fdc4f6772e48792ac7",
+      "newCaseSha256": "b21bfd8ec8b0f344ad54d766ae10154d16249683df1aab0181df761e28a06f63",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "abrmd-probe declares job abrmd",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.pull_request.declared-registration",
+      "oldCaseSha256": "b9883184072b9e175d0d55e4b0a00ecf08a8ae440349a506704ec2754685f54b",
+      "newCaseSha256": "fe6da0aaa4260ed56761caa740448b083b176651c102e91b85651c65f71d1bb5",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "ci declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.push.declared-registration",
+      "oldCaseSha256": "9b3f66d942a13666e86b89adcaac219bfa9c7d3a686767c1832a1aa8ee6806ae",
+      "newCaseSha256": "083108d48f429c77832aee06ab8830a15bd616dc1957847cdef5866a3d05c0a4",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "ci declares event push",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.build-test.declared-registration",
+      "oldCaseSha256": "bf3a8ae0b7a2dc875c119f53aae6547849058c58ff284d4ebb8d554a4a6098aa",
+      "newCaseSha256": "e8d7d61cda32178aa11b553ccac53d33e8058a11255fc4e8f3dba13dafa93b81",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job build-test",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.e2e-swtpm.declared-registration",
+      "oldCaseSha256": "af047b20ef2bb1990a5ae536c64cb6ef8b2a7000d9f08398ab4bfd36e0e325c5",
+      "newCaseSha256": "0ce978da8650eee78a87288dd3d4d88f2ccdd5cc86ac2349756ede08e00ed789",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job e2e-swtpm",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.e2e-netns-disk.declared-registration",
+      "oldCaseSha256": "bbc23c8bb11645b3104b879fff304b695a05a347e16ccfa4cb73951a2d7521c8",
+      "newCaseSha256": "f7b9d4a1eb7ad4102f6b2dd7b67063196683b84239c2d7b620be023f5ddd18e5",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job e2e-netns-disk",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.e2e-sandbox-policy.declared-registration",
+      "oldCaseSha256": "8d51acbd11f49ac2611ebb41f9bb625d286fa52e9a104b61915400ea103f7204",
+      "newCaseSha256": "e9c8e3e7ab6819edf9a2e3970903e6809652696fd5d6584a22f2500595d32bc2",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job e2e-sandbox-policy",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.known-polkit-rules-debian13.declared-registration",
+      "oldCaseSha256": "bb1e9659547faf44b9626d4fa1a121a7d263be71b9dc4d896d768567d3e6de22",
+      "newCaseSha256": "5a11724320c2a383c53393816b2312b8da17d4fa260775931f748e73fde17868",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job known-polkit-rules-debian13",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.govulncheck.declared-registration",
+      "oldCaseSha256": "cb2ae162843e279f097c564b0843b5bf88c5fd90bdc5f2f17258bf0fc042dfc1",
+      "newCaseSha256": "e44889d42fcc19862abbcb01a05829548c6f3afa7fe747f4f0fdd97c4ad9551f",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job govulncheck",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.pkcs11-e2e.declared-registration",
+      "oldCaseSha256": "2268557ca8f6ba230d37c29fc9471f3cf677189855c2dbfbff715a83778ee1de",
+      "newCaseSha256": "e52cddb83947bd06f932dee7f09c49465bc9df16b8e7eeae1cc7355023846a12",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job pkcs11-e2e",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.privileged-and-fuzz.declared-registration",
+      "oldCaseSha256": "004a354d8a225bc4e0d44f27eb107664a3aa4cbab6bd8bb30b20f777e878f0c5",
+      "newCaseSha256": "d627f57e01562f4451d0ce534a3f51b17251d596a1d481b9c874c4b5f0611f01",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job privileged-and-fuzz",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.cosmos-node.declared-registration",
+      "oldCaseSha256": "d0c9b1320621806a0a76e21a53520ae6839ad7bea3cc199cabf23b67e080a340",
+      "newCaseSha256": "6c4e6f0950a9b45a6344acf3c8e2316e091157a24dd1d9501946fa382d648f56",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job cosmos-node",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.unlock-boot-qemu.declared-registration",
+      "oldCaseSha256": "1498b6af786157a32116947d68cd383cd545560b6e54121bb88e4eefa5ea25ec",
+      "newCaseSha256": "247bf671b0513046838496228a8b64cbd40afa2c0e4ff6e7f574f0a623240308",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job unlock-boot-qemu",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.verity-boot-qemu.declared-registration",
+      "oldCaseSha256": "63585096f7739446ec9480e2e97a17d1041c667f7feaec9b8d5e3dd5623cec17",
+      "newCaseSha256": "927eb83feefaa1cb782b6d012ce10050d761025187e80cb37eb1e401edd26aca",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job verity-boot-qemu",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.initrd-reproducible.declared-registration",
+      "oldCaseSha256": "dbdc4836cacab3704405cc7278639d2532a58f83776fa5aadef1a2f38b8f41aa",
+      "newCaseSha256": "d5bc6fd519ade1abf4eddf3bb832004c65fe87f78625c5af87a305de3825482e",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job initrd-reproducible",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.rootfs-reproducible.declared-registration",
+      "oldCaseSha256": "8da98d85c3402d05738f1454645a65de9c717e9762a28735548a557e2e7ceb47",
+      "newCaseSha256": "e87cec88b7317b5f8e0db9f30f51961364d2c0afc3dd51cd1feb1e46f0650be9",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job rootfs-reproducible",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.initrd-reproducible-debian.declared-registration",
+      "oldCaseSha256": "0c354336a6bdc15e5427dda43c9b1a7a0a676197505f595c2334de1c4403f9ad",
+      "newCaseSha256": "e8b9a2ccaf5803e4a3fd531ccf383af73a479553d46503c2d6f0cca683e1ae07",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job initrd-reproducible-debian",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.initrd-reproducible-compare.declared-registration",
+      "oldCaseSha256": "6179fa529a8a22f17d6021456020d51e725603ba3a0128d2e8e7bc716818787a",
+      "newCaseSha256": "9623e290caf849fdb19bfd25c6f3d5a0707cfcaffaf76cec72b01fe03d663cfe",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job initrd-reproducible-compare",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.peer-unlock-swtpm.declared-registration",
+      "oldCaseSha256": "4e992a6818200678dd74dc25ced29c01f7e2d61b0cd2513b3e72c96830690972",
+      "newCaseSha256": "19fbf5cae96bb377851fa712fe51f50f25f9f2f3a5d4214c4675eac409973454",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job peer-unlock-swtpm",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.pcrlock-luks-swtpm.declared-registration",
+      "oldCaseSha256": "60c655c19aa8bb7a93c7ebf254b0528df983456d3fcfcba4b507f998caba2881",
+      "newCaseSha256": "c8a623c1f574cd4f8f2d2adf2ccdcd0ab7394446bdf16049c3d1a271308a861d",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job pcrlock-luks-swtpm",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.ci.uki-build.declared-registration",
+      "oldCaseSha256": "7cea61219775798122d33de2a46d773be748f1686ace73053c2685fe5427f44b",
+      "newCaseSha256": "aba99462bfb3ddd6adc1365dd5b829b8a23ca61846740b521df95e1d7aa3e937",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-001",
+        "scenario": "ci declares job uki-build",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.codeql.pull_request.declared-registration",
+      "oldCaseSha256": "59659c82298d8619100e4eb434051cb23bc18e6cd2709e0f653f84043c6a8aa9",
+      "newCaseSha256": "0a3e1c0ceeea6a19917abbc4ad23d2ff41d78eb655818f0cce7fcc3b1c0a43cc",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "codeql declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.codeql.push.declared-registration",
+      "oldCaseSha256": "bc396ff96075a3e94e7bf78bd016b4a0d8f2a3d43cac007f379cb4ff1834e4fe",
+      "newCaseSha256": "a689ee533bc91bf6d7f515b233dc0792ce894e62e13286f1c57273c632171e70",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "codeql declares event push",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.codeql.schedule.declared-registration",
+      "oldCaseSha256": "18f2ad98995bdb1c9f03272a2ed8c22565f2ec6d5cced9372d9c0b0cdf43eb9d",
+      "newCaseSha256": "59c208873e33b5f45e8655ed800b65b17648c93a0cc868517725156707f168c9",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "codeql declares event schedule",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.codeql.analyze.declared-registration",
+      "oldCaseSha256": "cfca22bdf31d76ea8824728f35dd5116a2cc448aa2e8e13d13491dc9da198142",
+      "newCaseSha256": "e20924750dd377f293ec42463fc6a976284d71accf94068f744b4bf00d969a51",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "codeql declares job analyze",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.initrd-drift.pull_request.declared-registration",
+      "oldCaseSha256": "3b013924515d04fb33d2c83696ae218014bad8fce5c692c04f665186baedfd4d",
+      "newCaseSha256": "8aeefc2df2b41f2f9c9fc11839bfcf5eb484048a7d33cbc4499b9acdc8a84d67",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "initrd-drift declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.initrd-drift.schedule.declared-registration",
+      "oldCaseSha256": "63e3d7ac19a4eb82f9224145dd89bce0bf82922f3bb456a453859d5aa47d0117",
+      "newCaseSha256": "8c7d5f4fbf661dbdd4e7bf61c573a128e57c52af8fb1ab31644c130a2e0aa73e",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "initrd-drift declares event schedule",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.initrd-drift.workflow_dispatch.declared-registration",
+      "oldCaseSha256": "bbe557edd99207407cbecfa02607d6ba25c8822c2356833e8ddf423973524b60",
+      "newCaseSha256": "1466739f1062d0f603b83519e102edbcaf5efca43cbd0e0b96802a5c3eb318c7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "initrd-drift declares event workflow_dispatch",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.initrd-drift.build.declared-registration",
+      "oldCaseSha256": "41fd2af24082f623ad4efea883c7ca2781f13b33b2b38413b619dd91b854000a",
+      "newCaseSha256": "e163a2151200f2a14d953cf51bafe2898f3c5f4dce8ef167c5642c6d4a206bb4",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "initrd-drift declares job build",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.initrd-drift.file.declared-registration",
+      "oldCaseSha256": "c1f9945130806a8c7e798d15fc747dbbd09f11dc0ab6236244543ebfcbcfc722",
+      "newCaseSha256": "35bdbe8008afd98a86ecebb97ca955160da7dd58878d109e5472967b2d7d9e4d",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "initrd-drift declares job file",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.pull_request.declared-registration",
+      "oldCaseSha256": "a9c31d5441082070b81b753696dbb4aa939ea83cd5add34725b213f6803431b9",
+      "newCaseSha256": "7fc10c501c3fb8cb5d69530335ac6bb759b207585cdb31086aa38b62a690f443",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.push.declared-registration",
+      "oldCaseSha256": "5ca134dc04d9b734db2efa84ddfdc1f27858438ff0278a17b9dea2dae27751eb",
+      "newCaseSha256": "b3d231e0da87de976ae5f9443ff34abf4454214187bc4ca2f8c668ef78d041d6",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares event push",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.schedule.declared-registration",
+      "oldCaseSha256": "73c32a9eacc019af4640eddca102f45aaf5d4fb22a6baef5fe650148150a73f6",
+      "newCaseSha256": "fa313bfdfea4436287ed1fa61960c250756a0351b4721bec028aaff61a4a7cea",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares event schedule",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.node-units-systemd.declared-registration",
+      "oldCaseSha256": "02adedf19163adc41bfb62af1ead5a676ba21616a547496552022db4614aa763",
+      "newCaseSha256": "f36acf2577cc003ffa657cb0d8dd73d4417ceb844cc33d2ba2352c6010bb0792",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job node-units-systemd",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.audit-ship-systemd.declared-registration",
+      "oldCaseSha256": "c5a2b82dca84928e4ea634b48786c0c69d93bb95315c870c8c57fa24e57b6ac1",
+      "newCaseSha256": "a414ac888da1ba4a7273e555143bbfc76c9da98ea874d4412826dae1fd3a6c50",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job audit-ship-systemd",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-netns.declared-registration",
+      "oldCaseSha256": "647766a2e52d59358e754c4b8659d80d03165f4e109769681f4c84bac1dffc21",
+      "newCaseSha256": "fc94c324de8f94ded4c6f3a2b883302c44b5e9e1711fc97e210cf1a74668a9ef",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-netns",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.rolling-threenode.declared-registration",
+      "oldCaseSha256": "69d9de60620dbc6024993640e09758c01b8d27710d19ce5021e568b95c07f6d7",
+      "newCaseSha256": "33d55ccd7beeca83bde7d18839e9f94be52391f6c096b004ac7f8a1fc7bd3692",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job rolling-threenode",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-site-advance.declared-registration",
+      "oldCaseSha256": "b6b5b4439ba195fbdbe241dadc7bd321ea3dc2751e3ea6f7841eb332e9b43b42",
+      "newCaseSha256": "9740d62a60daf0a7c188641e621de8bc02217167283215eea08ff06dc1d45f5f",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-site-advance",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-outage.declared-registration",
+      "oldCaseSha256": "3e5a54b6d398668c3523a2fe2ab21a5b9f285a4f24b9b575f7fa046ad5e3987b",
+      "newCaseSha256": "4af5e729485a46e6a50a7844bd24e25f663fbe35b20950b1c9defe97c50982d7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-outage",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-reanchor.declared-registration",
+      "oldCaseSha256": "c4556de225b332d9b4e9f2b64dcc024452af24d7a1f557f828e183a2a5318929",
+      "newCaseSha256": "dcf918c8e7aa3aba9888885dcefea645d12e975e1609ef1035ce192893500db6",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-reanchor",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-replace.declared-registration",
+      "oldCaseSha256": "ace17c8b860684db142318c9b75379efddd35b62854db690997d8e0344e548a7",
+      "newCaseSha256": "ad3ef9876dff415d04709266f198a46abeb970ce9d7a145d1198a613943de84a",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-replace",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-theft.declared-registration",
+      "oldCaseSha256": "378df98c98202bbfa71e244c6e2e2c74c9a1934188da8f53101c6124347a1cc8",
+      "newCaseSha256": "6837035a9786bfc80ee576a1928d2e469f70d8d7c9889dcc2dc2134e5cb07b86",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-theft",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-leases.declared-registration",
+      "oldCaseSha256": "9abccac33b80d3cdacec98d31eab159f73536ead75ccfe30dd630620cb7a3075",
+      "newCaseSha256": "738d1b3458b51edcb15c2c95439db804ab6ba31c14dc07243e0f27c4c624240f",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-leases",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.node-units.three-node-wan.declared-registration",
+      "oldCaseSha256": "795faf9b98dec521760d45d2565bf482450297e4c6e9c797b25f71684a13a9a5",
+      "newCaseSha256": "c4806d07e7704e50ddd34ad6407a58ead15ee2f9eabac26e3b9ff07dc1f0ae45",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "node-units declares job three-node-wan",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-matrix.pull_request.declared-registration",
+      "oldCaseSha256": "e3cfe4adddd4f74e2f36eece2706ae4b85b6a16f643c48cd37306c03ecf55cb9",
+      "newCaseSha256": "4aaebf88af1b42055b0dacc1ae73e4a9e399525d959ca675e9d7d59f286fcab7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-matrix declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-matrix.workflow_dispatch.declared-registration",
+      "oldCaseSha256": "47cf015bb31e97a8837336cc4671b4d2fa23e1596ce338a3b0e6549698018c5c",
+      "newCaseSha256": "4c459a3505d6c6664cd5b6543661c270065a3dd78d2c62d8c393fc3b77efaba7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-matrix declares event workflow_dispatch",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-matrix.matrix.declared-registration",
+      "oldCaseSha256": "43f15fb08d031fe1a9e616c40c7e694cd47a8202f81d27a0f0fa33b890e033c8",
+      "newCaseSha256": "2fe4f27e100339a313fbe4e16023b9477e88f159f14c1830dfb816bc3fdda2d1",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-matrix declares job matrix",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-matrix.merge.declared-registration",
+      "oldCaseSha256": "766a7f9e2dac5ebf8c71c2fd04f3e4e3af1788f58a58da5ed8bfa73b6ba28ef6",
+      "newCaseSha256": "2fb33021711d88ac1eb3b17d9dc2476b123359520de0f3558c81f0cf45c28620",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-matrix declares job merge",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-reconcile.pull_request.declared-registration",
+      "oldCaseSha256": "521671a55fc980c38dfba90c28fab059524a053102eab4adab4ef053d5a03825",
+      "newCaseSha256": "17ed65019cbf64239a9ef35788b1f271a5ed030aa3bd36af6f5a93d954c04381",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-reconcile declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-reconcile.workflow_dispatch.declared-registration",
+      "oldCaseSha256": "bb96ffbbd4c32e5de7002fbb2397b9060d634bd76c21318fec2e82fee49087b5",
+      "newCaseSha256": "f8a809ffed4a940fa07c2f55efe432d2bc6ddfff157d7efbc4e9670412df76d1",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-reconcile declares event workflow_dispatch",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.recovery-reconcile.reconcile.declared-registration",
+      "oldCaseSha256": "93e28237ffb89aad2b98f99d180b5a92f7c491384a65505ab7969860781eb56d",
+      "newCaseSha256": "1a701ed6648bf9a6dbede5a7c24d1a6247b8e2d1be054fa4e6d92ba771a6cf0a",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "recovery-reconcile declares job reconcile",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.secret-scan.pull_request.declared-registration",
+      "oldCaseSha256": "bad2044c26848440502f5af3e7a6b7e3c9b2bf43e3806c8b5a6a5eba05c0793b",
+      "newCaseSha256": "5661965ac5974cf4efc0a061b1c1dbf94e91ebc908a44c38f48fc625a025a3ad",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "secret-scan declares event pull_request",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.secret-scan.push.declared-registration",
+      "oldCaseSha256": "2438e6bf623699e8a5661e6cd42527f96222ce4c82172b98432c9dd533e31735",
+      "newCaseSha256": "ac9c981d6f59b6bd16618dbb0b6aa3eaa8f982d475b8408d7b4dcb83ceb4d76f",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "secret-scan declares event push",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.secret-scan.secrets.declared-registration",
+      "oldCaseSha256": "3186e5b8b5c11b00e21cf568567c08b6b483916f8133a05c1ac2a35a0f0f4f6b",
+      "newCaseSha256": "83570d1194a83e125d5802025f811c4e76cf3a11d293c82151d3eaed795b0402",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "secret-scan declares job secrets",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.vtpm-probe.workflow_dispatch.declared-registration",
+      "oldCaseSha256": "8282b12a664e9d7bdfb754358e3eb21bd1c4e1050460e400818d12fc53260257",
+      "newCaseSha256": "a4d3799e2052e9a8c41a9ec47fe435681066bf41b2639cb3e110d1a8d0f8aab9",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "vtpm-probe declares event workflow_dispatch",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    },
+    {
+      "caseId": "WORKFLOW.vtpm-probe.vtpm-proxy.declared-registration",
+      "oldCaseSha256": "161f14f683f0097fd184b8a2c8b504109fc624ccee87c68f088df2ab5a368cac",
+      "newCaseSha256": "ee04454b86cc94d4bb89afa5a45d6dc9ad1f11469dfdba429a5207c94d0276f7",
+      "scenarioRef": {
+        "path": "openspec/changes/document-kms-spec-baseline/specs/delivery/software-build-and-ci/spec.md",
+        "requirementId": "KMS-CI-008",
+        "scenario": "vtpm-probe declares job vtpm-proxy",
+        "relation": "direct"
+      },
+      "remainingClass": "test_gap"
+    }
+  ]
+}
