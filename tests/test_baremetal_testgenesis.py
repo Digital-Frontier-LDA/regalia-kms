@@ -321,6 +321,12 @@ class Guard(Case):
         self.refused("pins another membership root", self.generate, build_record=record)
         self.assertFalse(os.path.lexists(self.out))
 
+    def test_an_image_that_pins_no_root_is_refused(self):
+        record = signed_record(self.root)
+        record["initrd_review"]["root_key"] = None
+        self.refused("pins no membership root", self.generate, build_record=record)
+        self.assertFalse(os.path.lexists(self.out))
+
 
 class Directory(Case):
     def test_an_existing_directory_must_be_empty_and_is_made_private(self):

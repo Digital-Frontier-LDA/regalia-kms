@@ -55,7 +55,7 @@ THE GUARD. Refused, before the private key is read, unless the named root is TES
       else, an unknown root included, is refused. `generate(..., allow=...)` is the tests' hook for a throwaway root;
       the command line has no way to extend the list.
   (c) the image: a signed build record whose initrd review names the root its image pins (initrd_review.root_key, the
-      SHA-256 of root-key.json) must name THIS root: TEST material for an image that trusts another root is refused.
+      SHA-256 of root-key.json) must name THIS root: TEST material for an image that trusts another root, or pins none, is refused.
 No production root exists yet (no ceremony has run, manifest.py's limitations): when one does, its id goes on
 REAL_ROOTS in the same change that records it.
 
@@ -361,7 +361,10 @@ def generate(root, root_pk8, out, node_id, site, build_record, pcrs, tpm_firmwar
             "the site is not a single-node host's (boot_mesh.owner) for %s" % node_id)
     record = uki.load_record(membership.canonical(build_record), signed=True)
     pinned = record["initrd_review"]["root_key"]
-    require(pinned is None or pinned == hashlib.sha256(membership.canonical(root)).hexdigest(),
+    # council on #787: an image that pins NO root is refused too (staging images always pin the TEST root they trust)
+    require(pinned is not None, "the build record's image pins no membership root (initrd_review.root_key is null): TEST "
+            "material is made only for an image that trusts this TEST root")
+    require(pinned == hashlib.sha256(membership.canonical(root)).hexdigest(),
             "the build record's image pins another membership root (initrd_review.root_key %s, not the SHA-256 of root-key.json "
             "for %s): TEST material is made only for an image that trusts this TEST root" % (pinned, root))
     require(isinstance(pcrs, dict) and sorted(pcrs) == sorted(PCR_INDICES), "the PCR values are exactly PCRs 0-7")
