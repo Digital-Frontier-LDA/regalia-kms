@@ -271,6 +271,12 @@ def _refusal(reason):
     return membership.canonical({"v": VERSION, "ok": False, "refused": convergence._printable(reason)})
 
 
+class _Late(list):
+    """A request's list of late (caller, class, count) refusals (_View.late). `uid`: the caller's uid on the local lease
+    listener (LocalServer, from SO_PEERCRED), else None; LocalServer keys its node buckets by it (_spend)."""
+    uid = None
+
+
 class _View:
     """One request's view of the node's store: the chain is read and verified ONCE, and every decision of
     the request is made on that one reading. Without it a pull verified the chain six times over (the
@@ -336,7 +342,7 @@ class Server:
         inside this node. Only a sink that cannot take the event raises (SinkFailed): nothing is answered
         that is not recorded."""
         # "uid": the caller's uid, for the local lease listener only (LocalServer: SO_PEERCRED); None leaves the event as it was
-        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": [],
+        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": _Late(),
                  "uid": None}
         answer = refusal = None
         try:
@@ -411,7 +417,7 @@ class Server:
         def decided():
             raise Refused(reason + (" (%d more dropped since the last report)" % suppressed if suppressed else ""))
         try:
-            convergence.audited(self._record, "sync-drop", None, name, self.node_id, decided)
+            convergence.audited(self._report_record(name), "sync-drop", None, name, self.node_id, decided)
         except Refused:
             pass
 
@@ -932,21 +938,32 @@ class LocalServer(Server):
     def _no_tunnel(manifest, source):
         raise Refused("the local lease listener has no tunnel key")
 
+    def _spend(self, late, who, kind):
+        # the node-keyed classes ("any", "lease") are counted per uid here: only admission and root get this far (_decide),
+        # so a node has at most two such keys. A late report of a flood then names whose flood it was: its key ends in
+        # that uid ("a uid:0"), never the uid of the request that happens to report it (#786 review, MUST 2)
+        uid = getattr(late, "uid", None)
+        if kind not in OPEN and uid is not None:
+            who = "%s %s" % (who, local_source(uid))
+        super()._spend(late, who, kind)
+
     def _report_record(self, who):
-        # a late sync-rate report is about the caller who flooded (`who`, its own source "uid:N"), never the current
-        # request's: its uid comes from `who`, so every event this listener records carries a uid (CodeRabbit on #786)
-        uid = local_uid(who)
+        # every event this listener records carries a uid (#786 review, MUST 2): a late sync-rate report or a sync-drop is
+        # about the caller in its key -- "uid:N" (the address class, a drop) or "<node> uid:N" (_spend) -- never about the
+        # request that writes it. A key with no uid in it (the listener's own accept failures, "too many callers") has none.
+        uid = local_uid(who.rsplit(" ", 1)[-1]) if isinstance(who, str) else None
         return self._record if uid is None else (lambda event: self._record(dict(event, uid=uid)))
 
     def _node_at(self, source):
         return None             # no address table to stand in front of: every source is counted under its uid
 
     def _decide(self, raw, source, known):
+        # the caller's uid, on every event recorded for this request, ALLOW or DENY: a lease root (the operator's update)
+        # asked for is told apart from admission's on the trail, where the subject is this node either way. Set FIRST, so
+        # that a failure reading the store (below) is recorded under it too (#786 review)
+        known["uid"] = known["late"].uid = local_uid(source)
         view = _View(self.store)
         view.late = known["late"]
-        # the caller's uid, on every event recorded for this request, ALLOW or DENY: a lease root (the operator's update)
-        # asked for is told apart from admission's on the trail, where the subject is this node either way
-        known["uid"] = local_uid(source)
         self._spend(view.late, convergence._printable(source), "address")     # before the disk and the TPM, for anybody
         # access control: only this node's admission service and root (the operator's update quote-for-owner and promote,
         # OPERATOR_UID), by the kernel's word; anybody else learns nothing

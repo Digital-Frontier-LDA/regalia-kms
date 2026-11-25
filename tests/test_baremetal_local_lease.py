@@ -120,19 +120,6 @@ class TheLease(Local):
                                                        "uid:-1", "10.0.0.2", None, ("uid:0",))],
                          [0, ADMISSION_UID, None, None, None, None, None, None])
 
-    def test_a_late_rate_report_carries_the_uid_of_the_caller_who_flooded_not_the_current_request_s(self):
-        """CodeRabbit on #786: a late sync-rate report is written while another request is handled; its uid is the
-        flooding caller's, taken from that caller's own source, so every event this listener records has a uid."""
-        for flooder in (ADMISSION_UID + 1, 0):
-            with self.subTest(flooder=flooder):
-                del self.trail[:]
-                self.server._report(sync.local_source(flooder), "any", 7, self.manifest)
-                self.assertEqual([(e["event"], e["outcome"], e["uid"]) for e in self.trail], [("sync-rate", "DENY", flooder)])
-                self.assertIn("7 more any requests from uid:%d" % flooder, self.trail[0]["reason"])
-        del self.trail[:]
-        self.server._report("not a local source", "any", 1, self.manifest)    # nothing to read a uid from: written as it was
-        self.assertNotIn("uid", self.trail[0])
-
     def test_the_network_listener_s_events_carry_no_uid(self):
         """Server (the tunnel's listener) is unchanged: its caller is a node, by its tunnel key, and no uid is recorded."""
         trail = []
@@ -185,6 +172,65 @@ class TheLease(Local):
             self.assertEqual(server._issued(three(), REQUEST, EVIDENCE), "a peer's lease")
         self.assertEqual(issue.call_args.args[:7], (three(), "b", REQUEST, "verifier", EVIDENCE, "freshness", "signer"))
         self.assertEqual(self.issued, [])
+
+
+class EveryEventHasAUid(Local):
+    """#786 review, MUST 2: every event the local lease listener records carries a uid -- the late sync-rate reports of the
+    node-keyed buckets ("any", "lease") included, a sync-drop, and a request whose store cannot be read. Through the real
+    paths: handle() with real token buckets on a clock this test turns."""
+
+    def flood(self, kind):
+        self.now = [1000.0]
+        rates = dict(sync.RATE, **{kind: (1, 60)})
+        self.server.buckets = sync.Buckets(rates, clock=lambda: self.now[0])
+
+    def rate_events(self):
+        return [(e["outcome"], e["uid"], e["reason"]) for e in self.trail if e["event"] == "sync-rate"]
+
+    def test_a_flood_of_the_any_bucket_is_reported_under_the_flooder_s_uid(self):
+        for flooder, other in ((0, ADMISSION_UID), (ADMISSION_UID, 0)):
+            with self.subTest(flooder=flooder):
+                self.flood("any")
+                self.answer(ask("lease-nonce", node_id="a"), uid=flooder)                  # passes
+                for _ in range(3):                                                          # refused, then quiet twice
+                    self.assertIn("refused", self.answer(ask("lease-nonce", node_id="a"), uid=flooder))
+                self.assertEqual((self.trail[-1]["outcome"], self.trail[-1]["uid"]), ("DENY", flooder))
+                # the other uid has its own bucket: the flood costs it nothing, and nothing late is reported under it
+                del self.trail[:]
+                self.assertIn("nonce", self.answer(ask("lease-nonce", node_id="a"), uid=other))
+                self.assertEqual(self.rate_events(), [])
+                self.assertTrue(all(e["uid"] == other for e in self.trail))
+                # a minute later the flooder's next request passes, and the late report is the flooder's
+                self.now[0] += 61
+                del self.trail[:]
+                self.assertIn("nonce", self.answer(ask("lease-nonce", node_id="a"), uid=flooder))
+                [(outcome, uid, reason)] = self.rate_events()
+                self.assertEqual((outcome, uid), ("DENY", flooder))
+                self.assertIn("2 more any requests from a uid:%d" % flooder, reason)
+                self.assertTrue(all("uid" in e for e in self.trail))
+
+    def test_a_flood_of_the_lease_bucket_is_reported_under_the_flooder_s_uid(self):
+        self.flood("lease")
+        for _ in range(4):
+            self.answer(ask("lease-nonce", node_id="a"), uid=0)
+        self.now[0] += 61
+        del self.trail[:]
+        self.answer(ask("lease-nonce", node_id="a"), uid=ADMISSION_UID)       # another uid's request reports nothing of root's
+        self.assertEqual(self.rate_events(), [])
+        self.answer(ask("lease-nonce", node_id="a"), uid=0)
+        [(outcome, uid, reason)] = self.rate_events()
+        self.assertEqual((outcome, uid), ("DENY", 0))
+        self.assertIn("2 more lease requests from a uid:0", reason)
+
+    def test_a_dropped_connection_is_recorded_under_its_uid(self):
+        self.server.dropped(sync.local_source(ADMISSION_UID + 1), "no complete request in 10 s")
+        self.assertEqual([(e["event"], e["outcome"], e["uid"]) for e in self.trail], [("sync-drop", "DENY", ADMISSION_UID + 1)])
+
+    def test_a_request_whose_store_cannot_be_read_is_recorded_under_its_uid(self):
+        with mock.patch.object(sync, "_View", side_effect=OSError("disk")):
+            self.assertEqual(self.answer(ask("lease-nonce", node_id="a"), uid=0)["refused"], "refused")   # nobody identified yet
+        self.assertEqual((self.trail[-1]["outcome"], self.trail[-1]["uid"]), ("DENY", 0))
+        self.assertIn("could not answer (OSError)", self.trail[-1]["reason"])
 
 
 class TheSocket(unittest.TestCase):
