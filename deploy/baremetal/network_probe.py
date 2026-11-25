@@ -31,8 +31,10 @@ ROLES = ("client", "monitoring", "admin", "unauthorized")
 
 def expected_ports(cfg, role):
     kms, ssh = cfg["kms_port"], cfg["ssh_port"]
-    return {"client": {kms: True, ssh: False}, "monitoring": {kms: True, ssh: False},
-            "admin": {kms: False, ssh: False}, "unauthorized": {kms: False, ssh: False}}[role]
+    # TCP :22 is closed from every zone whatever ssh_port says (sitecfg.SSH_PORT, #791 independent review MUST 4)
+    closed = {sitecfg.SSH_PORT: False, ssh: False}
+    return {"client": {**closed, kms: True}, "monitoring": {**closed, kms: True},
+            "admin": {**closed, kms: False}, "unauthorized": {**closed, kms: False}}[role]
 
 
 def role_matches_source(cfg, role, source):

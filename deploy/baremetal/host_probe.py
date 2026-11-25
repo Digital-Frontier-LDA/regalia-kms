@@ -1436,7 +1436,69 @@ def firewall(host):
     bad = [h for h in ("input", "output", "forward") if (chains.get(h) or {}).get("policy") != "drop"]
     if bad:
         return False, "inet regalia_kms is loaded, but %s %s not on policy drop" % (", ".join(bad), "is" if len(bad) == 1 else "are")
-    return True, "inet regalia_kms loaded; input, output and forward default to drop"
+    # q-20 (#791 independent review, MUST 5): a host enrolled before q-20 keeps its old "ssh: admin only" rule, in the
+    # kernel and in the fragment on /var that every boot reloads, until the fragment is re-rendered. Neither may admit
+    # TCP :22: the loaded rules are read from nft -j, the persisted fragment from /var.
+    live = [r["rule"] for r in items if isinstance(r, dict) and isinstance(r.get("rule"), dict) and _admits_ssh(r["rule"])]
+    if live:
+        return False, "the loaded inet regalia_kms still admits TCP :%d (%s): re-render, load and persist the fragment (q-20 rollout, README)" % (
+            SSH_PORT, "; ".join("%s chain, handle %s%s" % (r.get("chain"), r.get("handle"), ", %r" % r["comment"] if r.get("comment") else "")
+                               for r in live))
+    persisted = host.read(PERSISTED_FIREWALL)
+    if persisted is None:
+        return False, "the persisted ruleset %s cannot be read: the next boot's firewall is unknown" % PERSISTED_FIREWALL
+    stale = [line.strip() for line in persisted.splitlines() if _text_admits_ssh(line)]
+    if stale:
+        return False, "the persisted ruleset %s still admits TCP :%d (%s): the next boot would load it back (q-20 rollout, README)" % (
+            PERSISTED_FIREWALL, SSH_PORT, "; ".join(stale))
+    return True, ("inet regalia_kms loaded; input, output and forward default to drop; TCP :%d admitted neither by the loaded "
+                  "rules nor by the persisted %s" % (SSH_PORT, PERSISTED_FIREWALL))
+
+
+# The per-host fragment every boot loads (README "Host firewall"; /etc/nftables.d/regalia-kms.nft links here on a verity host)
+PERSISTED_FIREWALL = "/var/lib/regalia-etc/nftables.d/regalia-kms.nft"
+SSH_PORT = 22
+TCP_DPORT = re.compile(r"tcp dport (\{[^}]*\}|\S+)")
+
+
+def _text_admits_ssh(line):
+    """A line of nft's text form that accepts TCP to port 22 (alone, in a set, in a range that holds it), or carries the
+    pre-q-20 rule's comment."""
+    if " accept" not in line:
+        return False
+    if 'comment "ssh' in line:
+        return True
+    for match in TCP_DPORT.finditer(line):
+        for item in match.group(1).strip("{} ").split(","):
+            low, _, high = item.strip().partition("-")
+            if low.isdigit() and (high or low).isdigit() and int(low) <= SSH_PORT <= int(high or low):
+                return True
+    return False
+
+
+def _port_holds(right, port):
+    if isinstance(right, int):
+        return right == port
+    if isinstance(right, dict):
+        if "set" in right:
+            return any(_port_holds(item, port) for item in right["set"])
+        if "range" in right and len(right["range"]) == 2:
+            low, high = right["range"]
+            return isinstance(low, int) and isinstance(high, int) and low <= port <= high
+    if isinstance(right, list):
+        return any(_port_holds(item, port) for item in right)
+    return False
+
+
+def _admits_ssh(rule):
+    """A rule of nft -j that accepts TCP to port 22 (alone, in a set or a range), or carries the old rule's comment."""
+    exprs = rule.get("expr") or []
+    accepts = any(isinstance(e, dict) and "accept" in e for e in exprs)
+    port = any(isinstance(e, dict) and isinstance(e.get("match"), dict)
+               and (e["match"].get("left") or {}).get("payload", {}).get("field") == "dport"
+               and (e["match"].get("left") or {}).get("payload", {}).get("protocol") == "tcp"
+               and _port_holds(e["match"].get("right"), SSH_PORT) for e in exprs)
+    return accepts and (port or str(rule.get("comment", "")).lower().startswith("ssh"))
 
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, secure_boot_db_has_image_cert=secure_boot_db,

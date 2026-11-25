@@ -2,6 +2,7 @@
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
+import fnmatch
 import hashlib
 import json
 import os
@@ -127,8 +128,21 @@ NO_SSH_LISTENING = ("LISTEN 0      4096   192.0.2.10:8443   0.0.0.0:*\n"
                     "LISTEN 0      4096   127.0.0.1:2379    0.0.0.0:*\n")
 
 
-def stat_file(kind="regular file"):
-    return lambda g: g.commands.__setitem__(("stat", "-c", "%F", "/usr/sbin/sshd"), kind + "\n")
+KMS_UNIT_PATH = "/usr/lib/systemd/system/regalia-kms.service"
+
+
+def stat_file(kind="regular file", path="/usr/sbin/sshd"):
+    return lambda g: g.present.__setitem__(path, kind)
+
+
+def unit_file(directory, name, text, program=None, program_bytes=None):
+    """A unit file in one of systemd's directories, and (optionally) the program its Exec line names, with its bytes."""
+    def breaker(g):
+        g.dirs.setdefault(directory, []).append(name)
+        g.files[directory + "/" + name] = text
+        if program:
+            g.files[program] = program_bytes
+    return breaker
 
 
 class FakeHost:
@@ -183,12 +197,18 @@ class FakeHost:
             # the client endpoint shows `*` and is found by inode.
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
-            # no SSH server: the KMS unit alone among the unit files listed, nothing on :22 (every stat of an SSH
-            # server's path answers 1, "no such file", as an unknown command does here)
-            UNIT_FILES: KMS_UNIT_FILE,
+            # no SSH server: nothing on :22 (the unit files are self.unit_files below; every SSH server's path is missing)
             LISTENERS: NO_SSH_LISTENING,
-            ("stat", "-c", "%F", "/"): "directory\n",
         }
+        # the KMS unit, as the image ships it, is the one unit file; the KMS program's bytes are not an SSH server's
+        self.files[KMS_UNIT_PATH] = "[Service]\nExecStart=/usr/sbin/regalia-kms --config /etc/regalia-kms/config.json\n"
+        self.files["/usr/sbin/regalia-kms"] = "\x7fELF the regalia-kms daemon\n"
+        self.dirs["/usr/lib/systemd/system"] = ["regalia-kms.service"]
+        self.unit_files = [KMS_UNIT_FILE.strip()]   # what systemctl list-unit-files knows; None: it fails
+        self.unit_files_rc = 0
+        self.present = {}                           # path -> what lstat says it is
+        self.lookup_errors = {}                     # path -> the errno its lstat fails with
+        self.realpaths = {}
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
             self.commands[("test", "-e", directory)] = ""
@@ -212,6 +232,12 @@ class FakeHost:
     def run(self, argv):
         if argv[:2] == ["find", "-H"] and argv[2] in self.dirs and argv[2] not in self.unlistable:
             return 0, "".join(name + "\n" for name in self.dirs[argv[2]] if name.endswith(".rules"))
+        if argv[:4] == ["systemctl", "list-unit-files", "--no-legend", "--no-pager"]:
+            # systemctl applies the globs it is given: a glob the probe stops asking for stops finding its units
+            if self.unit_files is None:
+                return 1, ""
+            return self.unit_files_rc, "".join(line + "\n" for line in self.unit_files
+                                               if any(fnmatch.fnmatchcase(line.split()[0], g) for g in argv[4:]))
         out = self.commands.get(tuple(argv))
         return (0, out) if out is not None else (1, "")
 
@@ -220,6 +246,19 @@ class FakeHost:
 
     def readlink(self, path):
         return self.links.get(path)
+
+    def lookup(self, path):
+        if path in self.lookup_errors:
+            return "error", self.lookup_errors[path]
+        if path in self.present:
+            return "present", self.present[path]
+        return ("present", "regular file") if path in self.files else ("missing", None)
+
+    def entries(self, path):
+        return None if path in self.unlistable else sorted(self.dirs.get(path, []))
+
+    def realpath(self, path):
+        return self.realpaths.get(path, path)
 
 
 def add_pcscd_client(host, inode, name, pid, exe):
@@ -657,13 +696,14 @@ class SshdAbsent(unittest.TestCase):
 
     def test_an_sshd_binary_fails_it(self):
         """(a) an SSH server binary on the host, whatever else is absent: no unit, nothing listening."""
-        def at(path, kind="regular file"):
-            return lambda g: g.commands.__setitem__(("stat", "-c", "%F", path), kind + "\n")
-
-        def on_path(g):
-            g.which = lambda tool: "/opt/openssh/sbin/sshd" if tool == "sshd" else None
-        self.assert_fails([stat_file(), at("/usr/lib/openssh/sshd-session"), at("/usr/sbin/dropbear"),
-                           at("/usr/local/sbin/sshd"), at("/usr/sbin/sshd", "symbolic link"), on_path])
+        def on_path(name, where):
+            def breaker(g):
+                g.which = lambda tool: where if tool == name else None
+            return breaker
+        self.assert_fails([stat_file(), stat_file(path="/usr/lib/openssh/sshd-session"), stat_file(path="/usr/sbin/dropbear"),
+                           stat_file(path="/usr/local/sbin/sshd"), stat_file("symbolic link"),
+                           on_path("sshd", "/opt/openssh/sbin/sshd"), on_path("dropbear", "/opt/bin/dropbear"),
+                           on_path("tinysshd", "/usr/sbin/tinysshd")])
         host = FakeHost()
         stat_file()(host)
         self.assertIn("/usr/sbin/sshd is present (regular file)", self.judged(host)[1])
@@ -671,7 +711,7 @@ class SshdAbsent(unittest.TestCase):
     def test_an_ssh_unit_fails_it(self):
         """(b) a unit file an SSH server brings, enabled or not, masked or generated: no binary, nothing listening."""
         def unit(line):
-            return lambda g: g.commands.__setitem__(UNIT_FILES, KMS_UNIT_FILE + line + "\n")
+            return lambda g: g.unit_files.append(line)
         self.assert_fails([unit("ssh.service enabled enabled"), unit("ssh.socket disabled enabled"),
                            unit("ssh@.service static -"), unit("sshd.service disabled disabled"),
                            unit("sshd-vsock.socket generated -"), unit("ssh.service masked enabled"),
@@ -680,6 +720,78 @@ class SshdAbsent(unittest.TestCase):
         host = FakeHost()
         unit("ssh.service enabled enabled")(host)
         self.assertIn("the unit ssh.service exists (enabled)", self.judged(host)[1])
+
+    def test_each_unit_glob_finds_a_unit_no_other_glob_finds(self):
+        """#791 independent review (MUST 1): with the fake answering list-unit-files by the globs it is asked for, every
+        glob in SSH_UNIT_PATTERNS is load-bearing: dropping any one of them lets its unit through this check."""
+        only = {"ssh.*": "ssh.socket", "ssh@*": "ssh@.service", "*sshd*": "sshd-unix-local.socket", "dropbear*": "dropbear.service"}
+        self.assertEqual(set(only), set(os_probe.SSH_UNIT_PATTERNS))
+        for glob, name in only.items():
+            with self.subTest(glob=glob):
+                self.assertEqual([g for g in os_probe.SSH_UNIT_PATTERNS if fnmatch.fnmatchcase(name, g)], [glob])
+                host = FakeHost()
+                host.unit_files.append(name + " disabled enabled")
+                value, why = self.judged(host)
+                self.assertFalse(value)
+                self.assertIn("the unit %s exists" % name, why)
+
+    def test_a_renamed_ssh_service_or_socket_fails_it_masked_or_not(self):
+        """#791 independent review (MUST 1): an SSH server is found by what its units run and listen on, not by their
+        names: a service under any name whose Exec line runs an SSH server's program (by path, by name, or renamed and
+        recognised by its bytes), a socket under any name on TCP :22, a drop-in that swaps the program, and the vendor
+        file under a mask (systemctl does not list a renamed unit, and a masked one is still installed)."""
+        lib, etc = "/usr/lib/systemd/system", "/etc/systemd/system"
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        cases = [
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/sbin/sshd -D\n"),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=-/opt/x/bin/sshd-session -i\n"),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/libexec/admin-shell -D\n",
+                      "/usr/libexec/admin-shell", openssh),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/opt/db -F -R\n", "/opt/db", "\x7fELF dropbear_2025.88\n"),
+            unit_file(lib, "remote-admin@.service", "[Service]\nExecStart=@/usr/sbin/dropbear dropbear -i\n"),
+            unit_file(lib, "remote-admin.socket", "[Socket]\nListenStream=22\nAccept=yes\n"),
+            unit_file(lib, "remote-admin.socket", "[Socket]\nListenStream=[::]:22\n"),
+        ]
+        # a drop-in that changes the KMS unit's program to an sshd
+        def drop_in(g):
+            g.dirs.setdefault(etc, []).append("regalia-kms.service.d")
+            g.dirs[etc + "/regalia-kms.service.d"] = ["override.conf"]
+            g.files[etc + "/regalia-kms.service.d/override.conf"] = "[Service]\nExecStart=\nExecStart=/usr/sbin/sshd -D\n"
+        # a masked unit: /etc's name is a link to /dev/null (it reads empty), the vendor file is still under /usr/lib
+        def masked(g):
+            unit_file(etc, "remote-admin.service", "")(g)
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/sbin/sshd -D\n")(g)
+        self.assert_fails(cases + [drop_in, masked], "the ")
+        host = FakeHost()
+        cases[2](host)
+        self.assertIn("is an SSH server's program by its contents (OpenSSH_)", self.judged(host)[1])
+        host = FakeHost()
+        cases[5](host)
+        self.assertIn("the socket remote-admin.socket", self.judged(host)[1])
+        # the KMS's own unit, a unit whose program is not installed, and a socket on another port are not SSH
+        host = FakeHost()
+        unit_file(lib, "other.service", "[Service]\nExecStart=/usr/lib/x/not-installed --flag\n")(host)
+        unit_file(lib, "other.socket", "[Socket]\nListenStream=2222\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_program_or_unit_that_cannot_be_read_fails_it(self):
+        """Fail closed: a unit directory that cannot be listed, a unit file or a program that is there but cannot be read
+        is not shown to be free of an SSH server."""
+        lib = "/usr/lib/systemd/system"
+
+        def unlistable(g):
+            g.unlistable.add("/etc/systemd/system")
+
+        def unit_unreadable(g):
+            g.dirs[lib].append("remote-admin.service")
+            g.present[lib + "/remote-admin.service"] = "regular file"
+
+        def program_unreadable(g):
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/libexec/admin-shell\n")(g)
+            g.present["/usr/libexec/admin-shell"] = "regular file"
+        self.assert_fails([unlistable], "cannot be listed")
+        self.assert_fails([unit_unreadable], "the unit file %s/remote-admin.service cannot be read" % lib)
+        self.assert_fails([program_unreadable], "/usr/libexec/admin-shell cannot be read")
 
     def test_a_listener_on_port_22_fails_it(self):
         """(c) anything on TCP :22, on any address: no binary, no unit (a netcat, a container's sshd, a forwarder)."""
@@ -690,13 +802,16 @@ class SshdAbsent(unittest.TestCase):
 
     def test_a_read_that_does_not_answer_fails_it(self):
         """Fail closed: a host that cannot be read is not a host with no SSH server."""
-        def stat_broken(g):
-            run = g.run
-            g.run = lambda argv: (127, "") if argv[:3] == ["stat", "-c", "%F"] else run(argv)   # the polkit check's stats still answer
         self.assert_fails([lambda g: g.commands.pop(LISTENERS)], "the TCP listeners cannot be listed")
-        self.assert_fails([lambda g: g.commands.pop(UNIT_FILES), lambda g: g.commands.__setitem__(UNIT_FILES, "")],
+        self.assert_fails([lambda g: setattr(g, "unit_files", None), lambda g: setattr(g, "unit_files", [])],
                           "the unit files cannot be listed")
-        self.assert_fails([stat_broken], "cannot be checked (stat exit 127)")
+
+    def test_a_systemctl_that_fails_part_way_fails_it(self):
+        """#791 independent review (MUST 3): systemctl exiting non-zero after printing the KMS unit (a partial
+        inventory) is not an answer, even when what it printed shows no SSH unit."""
+        def partial(g):
+            g.unit_files_rc = 1
+        self.assert_fails([partial], "the unit files cannot be listed (systemctl list-unit-files exit 1)")
 
     def test_a_listener_the_kernel_holds_fails_it_even_when_ss_shows_none(self):
         """#791 review: an ss that exits 0 and prints nothing read as "nothing on :22". The kernel's tables are read
@@ -719,19 +834,47 @@ class SshdAbsent(unittest.TestCase):
     def test_a_kernel_table_that_cannot_be_read_fails_it(self):
         self.assert_fails([lambda g: g.files.pop("/proc/net/tcp"), lambda g: g.files.pop("/proc/net/tcp6")], "cannot be read")
 
-    def test_a_stat_that_answers_1_to_everything_fails_it(self):
-        """#791 review: GNU stat exits 1 for a missing path and for most other errors, so "exit 1 = absent" alone is not
-        a read that answered. A stat that cannot stat "/" shows nothing absent."""
-        def stat_says_1(g):
-            run = g.run
-            g.run = lambda argv: (1, "") if argv[:3] == ["stat", "-c", "%F"] else run(argv)
-        self.assert_fails([stat_says_1, lambda g: g.commands.__setitem__(("stat", "-c", "%F", "/"), "regular file\n")],
-                          "stat does not answer")
+    def test_a_blank_or_malformed_kernel_table_fails_it(self):
+        """#791 independent review (MUST 3): the table must be the kernel's: a header, then rows of its shape. A blank
+        table, one with another header, or a row that is not a TCP row fails the control; a header with no rows (an
+        address family with no sockets) is a valid empty table."""
+        def table(text, name="/proc/net/tcp"):
+            return lambda g: g.files.__setitem__(name, text)
+        self.assert_fails([table(""), table("\n"), table("garbage\n"), table("", "/proc/net/tcp6")], "is not a kernel TCP table")
+        self.assert_fails([table(PROC_TCP_HEAD + "   0: 00000000:0016 0A\n"), table(PROC_TCP_HEAD + "nonsense row\n"),
+                           table(PROC_TCP_HEAD + "   0: 0000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 0 0 0 1\n")],
+                          "is not a kernel TCP row")
+        host = FakeHost()
+        host.files["/proc/net/tcp"] = PROC_TCP_HEAD
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_lookup_that_fails_other_than_missing_fails_it(self):
+        """#791 independent review (MUST 2): only "no such file" (ENOENT) is absence. One binary path whose lookup fails
+        with EACCES, EIO or ENOTDIR, while every other path is plainly missing, fails the control by name."""
+        def error(path, name):
+            return lambda g: g.lookup_errors.__setitem__(path, name)
+        self.assert_fails([error("/usr/local/sbin/sshd", "EACCES"), error("/usr/local/bin/sshd", "EIO"),
+                           error("/usr/sbin/sshd", "ENOTDIR")], "cannot be checked")
+        host = FakeHost()
+        error("/usr/local/sbin/sshd", "EACCES")(host)
+        self.assertIn("/usr/local/sbin/sshd cannot be checked (EACCES)", self.judged(host)[1])
+
+    def test_the_real_lookup_tells_missing_from_unreadable(self):
+        """os_probe.Host.lookup itself: ENOENT is missing, a dangling link is present, a path under a file is an error."""
+        real = os_probe.Host()
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(real.lookup(os.path.join(d, "absent")), ("missing", None))
+            os.symlink(os.path.join(d, "nowhere"), os.path.join(d, "dangling"))
+            self.assertEqual(real.lookup(os.path.join(d, "dangling")), ("present", "symbolic link"))
+            pathlib.Path(d, "file").write_text("x")
+            self.assertEqual(real.lookup(os.path.join(d, "file", "below")), ("error", "ENOTDIR"))
+            self.assertEqual(real.entries(os.path.join(d, "absent")), [])
+            self.assertIsNone(real.entries(os.path.join(d, "file")))
 
     def test_every_problem_is_named(self):
         host = FakeHost()
         stat_file()(host)
-        host.commands[UNIT_FILES] = KMS_UNIT_FILE + "ssh.service enabled enabled\n"
+        host.unit_files.append("ssh.service enabled enabled")
         host.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
         value, why = self.judged(host)
         self.assertFalse(value)
@@ -750,7 +893,7 @@ class SshdAbsent(unittest.TestCase):
             def breaker(g):
                 g.files[os_probe.STAGING_VARIANT] = "staging\n"
                 stat_file()(g)
-                g.commands[UNIT_FILES] = KMS_UNIT_FILE + "regalia-staging-sshd.service enabled enabled\n"
+                g.unit_files.append("regalia-staging-sshd.service enabled enabled")
                 if booted:
                     g.files["/proc/cmdline"] = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/root ro quiet regalia.staging=1\n"
                     g.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 192.0.2.10:22 0.0.0.0:*\n"

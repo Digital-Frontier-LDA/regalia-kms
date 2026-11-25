@@ -9,6 +9,7 @@ import sys
 import hashlib
 import io
 import json
+import pathlib
 import os
 import re
 import struct
@@ -121,6 +122,9 @@ NFT_JSON = json.dumps({"nftables": [
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "input", "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "forward", "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "output", "type": "filter", "hook": "output", "prio": 0, "policy": "drop"}}]})
+PERSISTED_RULESET = ("table inet regalia_kms {\n  chain input {\n    type filter hook input priority filter; policy drop;\n"
+                     "    ip daddr 192.0.2.10 tcp dport 8443 ip saddr { 198.51.100.0/24 } accept comment \"kms\"\n"
+                     "    ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment \"ping: admin only\"\n  }\n}\n")
 # cryptsetup luksDump --dump-json-metadata, trimmed: the TPM2 slot 1 with the token
 # systemd-cryptenroll --tpm2-device --tpm2-pcrlock writes (NV-backed: the one shape today under which
 # a retired boot image stops unlocking the disk, #135; captured from e2e/pcrlock-luks-swtpm.sh), and the
@@ -198,6 +202,8 @@ class FakeHost:
             # sealed to the host key and the TPM under PCR 7 and the signed PCR 11 policy (#198 requires it)
             PIN_FILE: cred("host-pk-7-11.cred"),
             host_probe.PCRLOCK_POLICY: json.dumps(PCRLOCK),
+            # the per-host fragment every boot reloads, as firewall.py renders it since q-20: no SSH rule
+            host_probe.PERSISTED_FIREWALL: PERSISTED_RULESET,
         }
         self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.DB_VAR: DB, host_probe.KMS_BINARY: KMS_BYTES}
         self.dirs = {"/sys/class/tpm/tpm0/pcr-sha256": [str(i) for i in range(24)], USB: ["1-1", "1-1.4", "usb1"],
@@ -2287,3 +2293,79 @@ class SignedEvidence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirewallAfterQ20(unittest.TestCase):
+    """#791 independent review (MUST 5): a host enrolled before q-20 keeps its old "ssh: admin only" rule loaded and in
+    the fragment on /var that every boot reloads, until the fragment is re-rendered. firewall_default_deny fails while
+    either still admits TCP :22, in any form, and passes once both are the q-20 ruleset."""
+
+    OLD_RULE = 'ip daddr 192.0.2.10 tcp dport 22 ip saddr { 203.0.113.0/28 } accept comment "ssh: admin only"'
+
+    def nft_with(self, *rules):
+        d = json.loads(NFT_JSON)
+        d["nftables"] += [{"rule": dict({"family": "inet", "table": "regalia_kms", "chain": "input", "handle": 7 + i}, **r)}
+                          for i, r in enumerate(rules)]
+        return 0, json.dumps(d)
+
+    @staticmethod
+    def dport(right, comment=None):
+        rule = {"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": right}},
+                         {"accept": None}]}
+        if comment:
+            rule["comment"] = comment
+        return rule
+
+    def test_the_q20_host_passes(self):
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with(self.dport(8443, "kms"))
+        value, why = host_probe.firewall(h)
+        self.assertTrue(value, why)
+        self.assertIn("admitted neither", why)
+
+    def test_a_loaded_rule_that_admits_22_fails_it_in_every_form(self):
+        for label, rule in {"the old rule": self.dport(22, "ssh: admin only"), "22 alone": self.dport(22),
+                            "22 in a set": self.dport({"set": [8443, 22]}), "a range holding 22": self.dport({"range": [20, 30]}),
+                            "the old comment on another port": self.dport(2222, "ssh: admin only")}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(rule)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value)
+                self.assertIn("the loaded inet regalia_kms still admits TCP :22", why)
+        # a drop on 22, or an accept on a port that only contains 22, is not an admission
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with({"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}},
+                                                               "right": 22}}, {"drop": None}]}, self.dport(2222), self.dport({"range": [23, 30]}))
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_persisted_fragment_that_admits_22_fails_it_though_the_kernel_is_clean(self):
+        for label, line in {"the old rule": self.OLD_RULE, "22 in a set": "tcp dport { 8443, 22 } accept",
+                            "a range holding 22": "tcp dport 20-30 accept", "the old comment": 'tcp dport 2222 accept comment "ssh: admin only"'}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value)
+                self.assertIn("would load it back", why)
+        h = FakeHost()
+        h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    tcp dport 2222 accept\n    tcp dport 22 drop\n  }\n}\n")
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_persisted_fragment_that_cannot_be_read_fails_it(self):
+        h = FakeHost()
+        del h.files[host_probe.PERSISTED_FIREWALL]
+        value, why = host_probe.firewall(h)
+        self.assertFalse(value)
+        self.assertIn("cannot be read", why)
+
+    def test_the_rendered_ruleset_passes_the_persisted_check(self):
+        """What firewall.py renders today, written to /var, is what the check accepts (no drift between the two)."""
+        from deploy.baremetal import firewall, sitecfg
+        example = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "site.example.json"
+        h = FakeHost()
+        h.files[host_probe.PERSISTED_FIREWALL] = firewall.render(sitecfg.validate(json.loads(example.read_text())))
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+
+NFT_LIST = ("nft", "-j", "list", "table", "inet", "regalia_kms")

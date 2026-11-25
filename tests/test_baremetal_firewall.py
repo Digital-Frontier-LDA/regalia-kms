@@ -286,3 +286,47 @@ class ServiceMesh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SshPortReserved(unittest.TestCase):
+    """#791 independent review (MUST 4): TCP :22 is SSH's whatever the site's ssh_port says. With ssh_port moved to
+    another number, no listener of this host may take 22 (the KMS, a node peer's unlock service, the sync service),
+    so the config can never render a ruleset that opens :22, and sshd_absent (which finds anything on :22) and the
+    site config cannot disagree. A single-node host's unlock_port is the owner's, at the owner's address: it may be 22."""
+
+    def other_ssh(self, doc):
+        doc["ssh_port"] = 2222
+        return doc
+
+    def test_no_listener_of_this_host_may_take_22_with_another_ssh_port(self):
+        cases = {
+            "the KMS on 22": (lambda d: d.__setitem__("kms_port", 22), "kms_port must not be 22"),
+            "a node peer's unlock service on 22": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 22), "not be SSH's 22"),
+            "the sync service on 22": (lambda d: d["service_mesh"].__setitem__("sync_port", 22), "not be SSH's 22"),
+        }
+        for label, (breakit, why) in cases.items():
+            with self.subTest(label):
+                d = self.other_ssh(meshed())
+                breakit(d)
+                with self.assertRaises(sitecfg.InvalidSite) as ctx:
+                    sitecfg.validate(d)
+                self.assertIn(why, str(ctx.exception))
+        # with ssh_port elsewhere and nothing on 22, the config is valid and the ruleset opens neither port
+        text = firewall.render(sitecfg.validate(self.other_ssh(meshed())))
+        self.assertNotIn("dport 22 ", text)
+        self.assertNotIn("dport 2222", text)
+
+    def test_a_single_node_host_s_unlock_port_is_the_owner_s_and_may_be_22(self):
+        from tests.test_baremetal_single_node_network import single_site
+        doc = self.other_ssh(single_site(unlock_port=22))
+        self.assertEqual(sitecfg.validate(doc)["boot_mesh"]["unlock_port"], 22)
+        self.assertNotIn("dport 22 ", firewall.render(sitecfg.validate(doc)))
+
+    def test_network_probe_expects_22_closed_from_every_zone_whatever_ssh_port_is(self):
+        from deploy.baremetal import network_probe
+        cfg = sitecfg.validate(self.other_ssh(json.loads(EXAMPLE.read_text())))
+        for role in network_probe.ROLES:
+            with self.subTest(role=role):
+                ports = network_probe.expected_ports(cfg, role)
+                self.assertIs(ports[22], False)
+                self.assertIs(ports[2222], False)

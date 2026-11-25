@@ -406,6 +406,20 @@ else
 fi
 ```
 
+**A host enrolled before q-20 (no SSH, #791) must re-render this fragment at its image update.** Its fragment on `/var`
+still holds the old `ssh: admin only` rule, and every boot loads it back: the new image runs no sshd, but its firewall
+would keep admitting TCP :22 from the admin zone. Run the block above on each such host, from the new image's
+`firewall.py`, in the same maintenance window as the update, then check that neither the kernel nor `/var` admits :22:
+
+```sh
+nft list table inet regalia_kms | grep -nE 'dport (22|\{[^}]*\b22\b)|comment "ssh' && echo "LOADED RULES STILL ADMIT SSH" >&2
+grep -nE 'dport (22|\{[^}]*\b22\b)|comment "ssh' /var/lib/regalia-etc/nftables.d/regalia-kms.nft && echo "PERSISTED RULES STILL ADMIT SSH" >&2
+# then re-measure the host as at commissioning (host_probe.py): firewall_default_deny reads both, and fails while either admits :22
+```
+
+`host_probe.py`'s `firewall_default_deny` fails on such a host until both are clean (the loaded rules from `nft -j`, the
+persisted fragment from `/var`), so its commissioning or re-commissioning evidence cannot pass with the old rule in place.
+
 It must also survive a reboot, and the KMS must never start without it. **The image does both; the file above is the
 only thing the operator writes** (regalia-kms-r1s.8: on a verity host `/etc` is made from the image at every boot, so
 an edited `/etc/nftables.conf`, a `systemctl enable` or a drop-in under `/etc/systemd/system` would be gone at the

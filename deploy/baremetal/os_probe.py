@@ -95,12 +95,14 @@ regalia-kms-r1s.12). Administration goes through the console or the iLO and the 
 
 Standard library only.
 """
+import errno
 import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -208,6 +210,31 @@ class Host:
             return os.readlink(path)
         except OSError:
             return None
+
+    def lookup(self, path):
+        """("missing", None) only when the path is not there (ENOENT); ("present", kind) when lstat answers (a link that
+        points nowhere is present); ("error", errno name) for anything else (EACCES, EIO, ENOTDIR, ...): that is not
+        absence, and a check that passes on absence must not pass on it (host_probe.Host.missing, kms#644)."""
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return "missing", None
+        except OSError as error:
+            return "error", errno.errorcode.get(error.errno, str(error.errno))
+        return "present", ("symbolic link" if stat.S_ISLNK(st.st_mode) else "regular file" if stat.S_ISREG(st.st_mode)
+                           else "directory" if stat.S_ISDIR(st.st_mode) else "other")
+
+    def entries(self, path):
+        """A directory's names: [] when the directory is not there, None when it cannot be listed (fail closed)."""
+        try:
+            return sorted(os.listdir(path))
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return None
+
+    def realpath(self, path):
+        return os.path.realpath(path)
 
 
 def unit_properties(host, *names, service=SERVICE):
@@ -863,38 +890,172 @@ def separate_users(host):
 SSHD_BINARIES = ("/usr/sbin/sshd", "/usr/bin/sshd", "/usr/local/sbin/sshd", "/usr/local/bin/sshd",
                  "/usr/lib/openssh/sshd-session", "/usr/lib/openssh/sshd-auth", "/usr/libexec/openssh/sshd-session",
                  "/usr/sbin/dropbear")
+# What an SSH server's program is called, whatever directory it was put in (an executable named after any of these
+# is an SSH server's, on PATH or in a unit's Exec line), and what its bytes say it is when it was renamed: OpenSSH's
+# programs carry their version banner, Dropbear's and tinysshd's their names (#791 independent review, MUST 1).
+SSH_SERVER_NAMES = ("sshd", "sshd-session", "sshd-auth", "dropbear", "dropbearmulti", "tinysshd", "lshd")
+SSH_SERVER_MARKERS = (b"OpenSSH_", b"dropbear_", b"Dropbear", b"tinysshd")
 # The unit files an SSH server comes with (systemctl list-unit-files globs): Debian's ssh.service, ssh.socket and
 # ssh@.service; sshd.service and sshd@.service elsewhere; systemd-ssh-generator's sshd-vsock.socket and
 # sshd-unix-local.socket (systemd 256+, made when an sshd is installed); the staging variant's
 # regalia-staging-sshd.service; Dropbear's. The KMS unit is listed with them, so an empty answer cannot pass.
 SSH_UNIT_PATTERNS = ("ssh.*", "ssh@*", "*sshd*", "dropbear*")
+# Every directory a unit file or a drop-in can come from (systemd.unit(5), system manager), generators included. Each
+# service and socket in them is read, masked or not and whatever its name: a masked unit's vendor file is still here.
+UNIT_DIRECTORIES = ("/etc/systemd/system", "/run/systemd/system", "/run/systemd/generator.early",
+                    "/run/systemd/generator", "/run/systemd/generator.late", "/usr/local/lib/systemd/system",
+                    "/usr/lib/systemd/system", "/lib/systemd/system")
+UNIT_EXEC_KEYS = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload", "ExecCondition")
+SOCKET_LISTEN_KEYS = ("ListenStream", "ListenSequentialPacket")
 SSH_PORT = 22
 PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
+PROC_TCP_HEADER = ("sl", "local_address", "rem_address", "st")
+# one row of /proc/net/tcp (8 hex digits of address) or tcp6 (32): "sl: local:port remote:port st ..."
+PROC_TCP_ROW = re.compile(r"\s*\d+: ([0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):([0-9A-Fa-f]{4}) "
+                          r"(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):[0-9A-Fa-f]{4} ([0-9A-Fa-f]{2}) ")
 STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --variant staging writes it; imagevariant.py
                                                        # refuses a production image that holds it
+
+
+def _ssh_executable(host, argv0, seen):
+    """Why argv0 is an SSH server's program, or None: by its path, by its name or its target's, or by what its bytes say.
+    A path that cannot be looked up, or read when it is there, is named too: unknown is not absent."""
+    if not argv0:
+        return None
+    path = argv0 if argv0.startswith("/") else host.which(argv0)
+    names = {os.path.basename(argv0)}
+    if path:
+        real = host.realpath(path)
+        names.add(os.path.basename(real))
+        if path in SSHD_BINARIES or real in SSHD_BINARIES:
+            return "%s runs an SSH server's program (%s)" % (argv0, real)
+    if names & set(SSH_SERVER_NAMES):
+        return "%s is named as an SSH server's program" % argv0
+    if not path:
+        return None                      # not installed: named nothing an SSH server is called, and there are no bytes
+    real = host.realpath(path)
+    if real in seen:
+        return seen[real]
+    state, detail = host.lookup(real)
+    why = None
+    if state == "error":
+        why = "%s cannot be looked up (%s)" % (real, detail)
+    elif state == "present":
+        data = host.read_bytes(real)
+        if data is None:
+            why = "%s cannot be read, so it is not shown not to be an SSH server" % real
+        else:
+            marks = [m.decode() for m in SSH_SERVER_MARKERS if m in data]
+            if marks:
+                why = "%s is an SSH server's program by its contents (%s)" % (real, ", ".join(marks))
+    seen[real] = why
+    return why
+
+
+def _unit_lines(text):
+    """(key, value) for each assignment in a unit file, continuation lines joined."""
+    out, pending = [], ""
+    for raw in (text or "").splitlines():
+        line = pending + raw.strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1] + " "
+            continue
+        if not line or line[0] in "#;[" or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out.append((key.strip(), value.strip()))
+    return out
+
+
+def _exec_argv0(value):
+    """The program of an Exec*= line: its special prefixes (@ - : + !) dropped; None for an empty reset."""
+    value = value.lstrip("@-:+!")
+    try:
+        words = shlex.split(value)
+    except ValueError:
+        words = value.split()
+    return words[0] if words else None
+
+
+def _ssh_units(host):
+    """Every service and socket file, and drop-in, in every unit directory, read whatever its name and masked or not:
+    an Exec line that runs an SSH server's program, or a socket that listens on TCP :22, is an SSH unit."""
+    found, seen, files = [], {}, []
+    for directory in UNIT_DIRECTORIES:
+        names = host.entries(directory)
+        if names is None:
+            found.append("the unit directory %s cannot be listed" % directory)
+            continue
+        for name in names:
+            path = directory + "/" + name
+            if name.endswith((".service", ".socket")):
+                files.append((name, path))
+            elif name.endswith((".service.d", ".socket.d")):
+                drop_ins = host.entries(path)
+                if drop_ins is None:
+                    found.append("the drop-in directory %s cannot be listed" % path)
+                    continue
+                files += [(name[:-2], path + "/" + d) for d in drop_ins if d.endswith(".conf")]
+    for unit, path in files:
+        text = host.read(path)
+        if text is None:
+            state, detail = host.lookup(path)
+            if state != "missing":       # a link that points nowhere (a dead alias) carries nothing to run
+                found.append("the unit file %s cannot be read%s" % (path, " (%s)" % detail if detail else ""))
+            continue
+        for key, value in _unit_lines(text):
+            if key in UNIT_EXEC_KEYS:
+                why = _ssh_executable(host, _exec_argv0(value), seen)
+                if why:
+                    found.append("the unit %s (%s): %s" % (unit, path, why))
+            elif key in SOCKET_LISTEN_KEYS and value.rpartition(":")[2].strip() == str(SSH_PORT):
+                found.append("the socket %s (%s) listens on %s" % (unit, path, value))
+    return found
+
+
+def _kernel_listeners(host, table):
+    """The rows of one kernel TCP table that LISTEN on :22, or the reason the table is not a table. A header with no
+    rows is a valid empty address family; a blank or malformed table is not one (#791 review, MUST 3)."""
+    text = host.read(table)
+    if text is None:
+        return ["%s cannot be read" % table]
+    lines = text.splitlines()
+    if not lines or tuple(lines[0].split()[:4]) != PROC_TCP_HEADER:
+        return ["%s is not a kernel TCP table (its header is %r)" % (table, lines[0][:60] if lines else "")]
+    found = []
+    for number, line in enumerate(lines[1:], 2):
+        if not line.strip():
+            continue
+        row = PROC_TCP_ROW.match(line)
+        if not row:
+            found.append("%s line %d is not a kernel TCP row (%r)" % (table, number, line.strip()[:60]))
+        elif row.group(3).upper() == "0A" and int(row.group(2), 16) == SSH_PORT:
+            found.append("%s shows a listener on :%d (%s:%s)" % (table, SSH_PORT, row.group(1), row.group(2)))
+    return found
 
 
 def sshd_absent(host):
     """No SSH server on the host: no binary, no unit, nothing on TCP :22. Every problem is named, not the first only."""
     found = []
-    # stat exits 1 for a missing path AND for most other errors: a stat that cannot stat "/" cannot say "absent" either
-    rc, out = host.run(["stat", "-c", "%F", "/"])
-    if rc != 0 or out.strip() != "directory":
-        found.append(f"stat does not answer (stat / exit {rc}: {out.strip() or 'no output'}), so no path can be shown absent")
     for path in SSHD_BINARIES:
-        # stat without -L: a link that points nowhere is still an SSH server's name, and is reported
-        rc, out = host.run(["stat", "-c", "%F", path])
-        if rc == 0:
-            found.append(f"{path} is present ({out.strip() or 'a file'})")
-        elif rc != 1:
-            found.append(f"{path} cannot be checked (stat exit {rc})")
-    on_path = host.which("sshd")
-    if on_path and on_path not in SSHD_BINARIES:
-        found.append(f"sshd is on PATH as {on_path}")
+        # lstat, not stat -L: a link that points nowhere is still an SSH server's name, and is reported. Only ENOENT is
+        # absence: EACCES, EIO or a path component that is not a directory is a lookup that did not answer
+        state, detail = host.lookup(path)
+        if state == "present":
+            found.append(f"{path} is present ({detail})")
+        elif state == "error":
+            found.append(f"{path} cannot be checked ({detail})")
+    for name in SSH_SERVER_NAMES:
+        on_path = host.which(name)
+        if on_path and on_path not in SSHD_BINARIES:
+            found.append(f"{name} is on PATH as {on_path}")
+    found += _ssh_units(host)
     rc, out = host.run(["systemctl", "list-unit-files", "--no-legend", "--no-pager", SERVICE, *SSH_UNIT_PATTERNS])
     units = [line.split() for line in out.splitlines() if line.split()]
-    if SERVICE not in [unit[0] for unit in units]:
-        found.append(f"the unit files cannot be listed (systemctl list-unit-files does not show {SERVICE})")
+    if rc != 0 or SERVICE not in [unit[0] for unit in units]:
+        found.append(f"the unit files cannot be listed (systemctl list-unit-files exit {rc}"
+                     f"{'' if SERVICE in [unit[0] for unit in units] else f', and it does not show {SERVICE}'})")
     else:
         found += [f"the unit {unit[0]} exists ({unit[1] if len(unit) > 1 else 'state unknown'})" for unit in units if unit[0] != SERVICE]
     rc, out = host.run(["ss", "-Hltn"])
@@ -906,21 +1067,17 @@ def sshd_absent(host):
         found += [f"{fields[3]} is listening" for fields in (line.split() for line in out.splitlines())
                   if len(fields) >= 4 and fields[3].rpartition(":")[2] == str(SSH_PORT)]
     # the kernel's own tables, read independently of ss: an ss that exits 0 and prints nothing must not read as
-    # "nothing on :22". Each row: sl local_address(hex IP:hex port) rem_address st(0A = LISTEN) ...
+    # "nothing on :22"
     for table in PROC_TCP_TABLES:
-        text = host.read(table)
-        if text is None:
-            found.append(f"{table} cannot be read")
-            continue
-        found += [f"{table} shows a listener on :{SSH_PORT} ({fields[1]})" for fields in (line.split() for line in text.splitlines()[1:])
-                  if len(fields) >= 4 and fields[3] == "0A" and fields[1].rpartition(":")[2].upper() == "%04X" % SSH_PORT]
+        found += _kernel_listeners(host, table)
     if found:
         why = "this host is not shown to be free of an SSH server (a production KMS host has none, q-20): " + "; ".join(found)
         if host.read(STAGING_VARIANT) is not None:
             why += (f". This is the STAGING image variant ({STAGING_VARIANT}): its operator sshd is staging-only, and "
                     "a staging host is never a production host")
         return False, why
-    return True, f"no SSH server binary, no ssh or sshd unit file, nothing listening on TCP :{SSH_PORT} (q-20: absent)"
+    return True, (f"no SSH server binary, no service or socket that runs one or listens on :{SSH_PORT} (every unit file "
+                  f"read), no ssh or sshd unit file, nothing listening on TCP :{SSH_PORT} (q-20: absent)")
 
 
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
