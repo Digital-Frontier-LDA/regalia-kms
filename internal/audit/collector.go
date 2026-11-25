@@ -351,10 +351,17 @@ func (c *Collector) MetricsHandler() http.Handler {
 		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_membership_epoch gauge")
 		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_anchor_epoch The highest epoch committed in the node's esp-advances trail.")
 		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_anchor_epoch gauge")
+		// The streams' identity, site and committed size are snapshotted UNDER c.mu: the commit path
+		// updates size under the same lock, so reading it after Unlock would race an append (PR #783
+		// CodeRabbit r4685272685 follow-up). The walk below then reads each file only up to that size.
+		type streamSnapshot struct {
+			identity, site string
+			size           int64
+		}
 		c.mu.Lock()
-		streams := make(map[string]*collectorStream, len(c.streams))
-		for key, stream := range c.streams {
-			streams[key] = stream
+		streams := make([]streamSnapshot, 0, len(c.streams))
+		for _, stream := range c.streams {
+			streams = append(streams, streamSnapshot{identity: stream.identity, site: stream.site, size: stream.size})
 		}
 		c.mu.Unlock()
 		// One entry per node site, gathering every identity's stream for it. Streams are keyed by
@@ -394,9 +401,17 @@ func (c *Collector) MetricsHandler() http.Handler {
 				node.esp = append(node.esp, entry)
 			}
 		}
+		// highest is the site's witness across its identities' streams. A stream that cannot be read
+		// through its committed size makes the WHOLE site report no value (the blind state
+		// RegaliaCollectorEpochMissing covers), never the other streams' lower maximum: an unreadable
+		// stream may hold the highest epoch, and a lower floor would hide a rollback (regalia-kms-1gv).
 		highest := func(trails []witness) (epoch uint64, ok bool) {
 			for _, trail := range trails {
-				if value, found := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine); found && (!ok || value > epoch) {
+				value, found, readable := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine)
+				if !readable {
+					return 0, false
+				}
+				if found && (!ok || value > epoch) {
 					epoch, ok = value, true
 				}
 			}
@@ -436,36 +451,44 @@ func splitWitnessTrail(site string) string {
 
 // witnessedTrail reads one stream's committed lines through the committed size, from a FRESH
 // read-only handle: the commit path's file is O_WRONLY|O_APPEND and shares no offset with a
-// scrape, and a read error (the file vanished, the disk failed) yields no value, so the endpoint
-// reports absence — the blind state RegaliaCollectorEpochMissing exists for — never a floor it
-// invented. The walk is one line at a time, bounded by the committed size: a torn append is
-// truncated back to it on commit, so the committed size is a line boundary.
-func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, ok bool) {
+// scrape. readable is false when the walk could not cover the committed size — the file could
+// not be opened, a read failed, or it ended before the committed size — and then no epoch is
+// reported, even one found before the failure: a partial walk can miss the highest epoch, and a
+// value it invented would suppress RegaliaCollectorEpochMissing (PR #783 r4685272685 follow-up).
+// found says whether an ALLOW epoch was seen in a fully read trail. The walk is one line at a
+// time, bounded by the committed size: a torn append is truncated back to it on commit, so the
+// committed size is a line boundary.
+func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, found, readable bool) {
 	if size <= 0 {
-		return 0, false
+		return 0, false, true
 	}
 	file, err := os.Open(c.streamPath(identity, site))
 	if err != nil {
-		return 0, false
+		return 0, false, false
 	}
 	defer file.Close()
 	reader := bufio.NewReaderSize(io.LimitReader(file, size), 64*1024)
+	var read int64
 	for {
 		line, readErr := reader.ReadString('\n')
+		read += int64(len(line))
 		trimmed := strings.TrimSuffix(line, "\n")
 		if trimmed != "" {
 			var event Event
 			if json.Unmarshal([]byte(trimmed), &event) == nil {
-				// ok tracks whether an epoch was FOUND, not whether the trail was committed: a
+				// found tracks whether an epoch was FOUND, not whether the trail was committed: a
 				// committed trail with no ALLOW epoch reports absence (the blind state), never a
 				// zero floor. A genuine epoch 0 is found and published.
-				if value, found := epochOf(&event); found && (!ok || value > epoch) {
-					epoch, ok = value, true
+				if value, ok := epochOf(&event); ok && (!found || value > epoch) {
+					epoch, found = value, true
 				}
 			}
 		}
 		if readErr != nil {
-			return epoch, ok
+			if readErr != io.EOF || read != size {
+				return 0, false, false
+			}
+			return epoch, found, true
 		}
 	}
 }
