@@ -60,14 +60,19 @@ registered during reboots, failed scrapes and outages, including before their fi
 profile is an external label for monitoring, not an admission decision. Keep each `job`, `instance` pair unique
 so that no other endpoint supplies its health evidence.
 
-**The node's `instance` is the shipper's site.** The single-node behind rules compare a node's epoch series
-against the collector's witness on `instance` (the fleet rules join on `job`, which may differ; the behind rules
-do not). So the `regalia-node` target's `instance` label must be set, in the inventory, to the node's shipper site
-(the same value the collector's stream site carries, `nodea` for node-a) — not left at Prometheus's default of the
-scrape address (`192.0.2.10:9100`). The collector's `metric_relabel_configs` (section 4.1) maps its `site` label to
-that same `instance` and drops `site`, so both sides of the comparison carry one shared `instance` and nothing else
-the join does not ignore. A target whose `instance` is the bare address never matches its own witness: the behind
-rules stay silent for it and `RegaliaCollectorEpochMissing` fires.
+**The node's `instance` is the shipper's site, and the two sides carry no other differing labels.** The
+single-node behind rules compare a node's epoch series against the collector's witness on `instance` (the fleet
+rules join on `job`, which may differ; the behind rules do not), and the comparison is
+`ignoring(job, topology_profile)` — every other label must match on both sides. So the `regalia-node` target's
+`instance` label must be set, in the inventory, to the node's shipper site (the same value the collector's stream
+site carries, `nodea` for node-a) — not left at Prometheus's default of the scrape address (`192.0.2.10:9100`) — and
+the collector's `metric_relabel_configs` (section 4.1) maps its `site` label to that same `instance` and drops
+`site`, so both sides carry one shared `instance` and nothing else the join does not ignore. Inventory labels attach
+to every series a target exposes, so do not add an extra inventory label (such as `cluster="west"`) to one target
+only: a label present on the node's series and absent on the witness series breaks the join for that node, the
+behind rules stop firing for it, and `RegaliaCollectorEpochMissing` fires. A target whose `instance` is the bare
+address never matches its own witness for the same reason: the behind rules stay silent and
+`RegaliaCollectorEpochMissing` fires.
 
 The rule tests hold job matchers to these names. New registrations require the profile label on both jobs. Older
 unlabeled targets keep the legacy multi-node alert behavior while the metadata warning is active.
