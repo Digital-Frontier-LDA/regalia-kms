@@ -6,20 +6,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/sys/unix"
-
 	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign"
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign/internal/protected"
 )
 
 const maxConfigBytes = 16 << 10
@@ -139,19 +136,7 @@ func (cfg config) key(now func() time.Time) (*gpgsign.Key, time.Duration, error)
 }
 
 func (cfg config) publicKey() (crypto.PublicKey, error) {
-	contents, err := readProtected(cfg.PublicKeyPath, 16<<10, false)
-	if err != nil {
-		return nil, errors.New("the release public key is unavailable")
-	}
-	block, rest := pem.Decode(contents)
-	if block == nil || block.Type != "PUBLIC KEY" || len(bytes.TrimSpace(rest)) != 0 {
-		return nil, errors.New("public_key_path must hold exactly one PEM PUBLIC KEY")
-	}
-	public, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, errors.New("public_key_path does not hold a public key")
-	}
-	return public, nil
+	return protected.PublicKey(cfg.PublicKeyPath, "the release public key", "public_key_path")
 }
 
 func (cfg config) identity() (tls.Certificate, *x509.CertPool, error) {
@@ -179,42 +164,9 @@ func (cfg config) identity() (tls.Certificate, *x509.CertPool, error) {
 	return certificate, roots, nil
 }
 
-// readProtected reads a file this process must be able to trust: a regular file, not reached
-// through a symbolic link, owned by root or by this user, writable by nobody else, and — when it is
-// a secret — readable by nobody else. The rule is the SOPS sidecar's, for the same reason: whoever
-// can rewrite the configuration or the pinned key chooses what gets signed with.
+// readProtected and zero are shared with regalia-approve (internal/protected).
 func readProtected(path string, maximum int64, secret bool) ([]byte, error) {
-	if !filepath.IsAbs(path) || maximum < 1 {
-		return nil, errors.New("invalid protected file")
-	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, errors.New("open protected file")
-	}
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = unix.Close(fd)
-		return nil, errors.New("open protected file")
-	}
-	defer file.Close()
-	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) {
-		return nil, errors.New("unsafe protected file owner")
-	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || (secret && info.Mode().Perm()&0o077 != 0) {
-		return nil, errors.New("unsafe protected file")
-	}
-	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
-	if err != nil || int64(len(contents)) > maximum {
-		zero(contents)
-		return nil, errors.New("read protected file")
-	}
-	return contents, nil
+	return protected.Read(path, maximum, secret)
 }
 
-func zero(value []byte) {
-	for index := range value {
-		value[index] = 0
-	}
-}
+func zero(value []byte) { protected.Zero(value) }

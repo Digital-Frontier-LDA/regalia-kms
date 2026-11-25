@@ -1,0 +1,714 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign"
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign/internal/protected"
+)
+
+// THE TOKEN IS STOOD IN FOR BY THIS TEST BINARY. regalia-approve reaches a hardware key by running
+// pkcs11-tool; here the "tool" is the test executable itself, which TestMain turns into a signer
+// when stubVariable is set. It reads --input-file and writes --output-file exactly as pkcs11-tool
+// does, so what is tested is everything regalia-approve does around the token: the argument vector,
+// the files, and above all the check of what comes back. The real pkcs11-tool against a real
+// PKCS#11 module is in internal/integration (SoftHSM).
+const stubVariable = "REGALIA_APPROVE_TEST_STUB"
+
+func TestMain(m *testing.M) {
+	if behaviour := os.Getenv(stubVariable); behaviour != "" {
+		os.Exit(stubTool(behaviour, os.Args[1:]))
+	}
+	os.Exit(m.Run())
+}
+
+// stubSeed is the stub token's key. The honest stub signs with it; the others misbehave.
+var stubSeed = bytes.Repeat([]byte{0x42}, ed25519.SeedSize)
+
+func stubTool(behaviour string, args []string) int {
+	values := map[string]string{}
+	for index := 0; index+1 < len(args); index++ {
+		if strings.HasPrefix(args[index], "--") {
+			values[args[index]] = args[index+1]
+		}
+	}
+	// Listing the tokens: no login, nothing signed. The bench is one YubiKey, which presents two
+	// tokens under one serial, and whatever else the test attaches.
+	for _, argument := range args {
+		if argument == "--list-token-slots" {
+			fmt.Print("Available slots:\n" + stubSlot(0, "OpenPGP card (User PIN)", stubSerial) + stubSlot(1, "OpenPGP card (User PIN (sig))", stubSerial) + os.Getenv("REGALIA_APPROVE_TEST_SLOTS"))
+			return 0
+		}
+	}
+	if record := os.Getenv("REGALIA_APPROVE_TEST_ARGV"); record != "" {
+		// The command line, and whether the PIN variable reached this process (its length only).
+		_ = os.WriteFile(record, []byte(strings.Join(args, "\n")+fmt.Sprintf("\nPIN-IN-ENVIRONMENT=%d\n", len(os.Getenv(pinVariable)))), 0o600)
+	}
+	message, err := os.ReadFile(values["--input-file"])
+	if err != nil || values["--mechanism"] != "EDDSA" {
+		return 3
+	}
+	var signature []byte
+	switch behaviour {
+	case "honest":
+		signature = ed25519.Sign(ed25519.NewKeyFromSeed(stubSeed), message)
+	case "another-key":
+		signature = ed25519.Sign(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x43}, ed25519.SeedSize)), message)
+	case "prehashed":
+		// What a device does that signs a hash of the input instead of the input: 64 bytes, by the
+		// right key, and not a plain Ed25519 signature over the binding.
+		signature, _ = ed25519.NewKeyFromSeed(stubSeed).Sign(nil, message, &ed25519.Options{Context: "not-plain"})
+	case "short":
+		signature = ed25519.Sign(ed25519.NewKeyFromSeed(stubSeed), message)[:63]
+	case "fails":
+		return 1
+	}
+	if os.WriteFile(values["--output-file"], signature, 0o600) != nil {
+		return 3
+	}
+	return 0
+}
+
+const stubSerial = "000f35718625"
+
+// stubSlot is one slot as pkcs11-tool --list-token-slots prints it.
+func stubSlot(index int, label, serial string) string {
+	return fmt.Sprintf("Slot %d (0x%x): Yubico YubiKey OTP+FIDO+CCID 00 00\n  token label        : %s\n  token manufacturer : Yubico\n  token model        : PKCS#15 emulated\n  token flags        : login required, token initialized, PIN initialized\n  hardware version   : 0.0\n  firmware version   : 0.0\n  serial num         : %s\n  pin min/max        : 6/127\n", index, index, label, serial)
+}
+
+type bench struct {
+	t         *testing.T
+	directory string
+	release   *ecdsa.PrivateKey
+	key       *gpgsign.Key // the preparer's key; its KMS is never reached
+	approver  ed25519.PrivateKey
+	config    map[string]any
+}
+
+const (
+	userID     = "Regalia Release Signing (test) <releases@example.invalid>"
+	keyCreated = "2026-10-02T00:00:00Z"
+	approverID = "spiffe://regalia/approver/release"
+)
+
+func (b *bench) write(name string, contents []byte, mode os.FileMode) string {
+	b.t.Helper()
+	path := filepath.Join(b.directory, name)
+	if err := os.WriteFile(path, contents, mode); err != nil {
+		b.t.Fatal(err)
+	}
+	return path
+}
+
+func publicPEM(t *testing.T, public any) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKIXPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+func newBench(t *testing.T) *bench {
+	t.Helper()
+	release, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &bench{t: t, directory: t.TempDir(), release: release, approver: ed25519.NewKeyFromSeed(stubSeed)}
+	// The testing package makes this directory with the umask's permissions, which may leave it
+	// group-writable. The approver's files live in a directory only the approver can write.
+	if err := os.Chmod(b.directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := gpgsign.Target{ObjectID: "release-signing-key", Environment: "production", Purpose: "release-signing"}
+	// The preparer's side. Its client points nowhere: Prepare must not use it.
+	client, err := gpgsign.NewClient("https://kms.invalid", &http.Client{Timeout: time.Second}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := gpgsign.NewSigner(release.Public(), client, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _ := time.Parse(time.RFC3339, keyCreated)
+	if b.key, err = gpgsign.NewKey(signer, created, userID); err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(b.approver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.config = map[string]any{
+		"approver_id": approverID, "approver_public_key_path": b.write("approver.pub.pem", publicPEM(t, b.approver.Public()), 0o644),
+		"key_file":  b.write("approver-key.pem", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}), 0o600),
+		"object_id": target.ObjectID, "environment": target.Environment, "purpose": target.Purpose,
+		"public_key_path": b.write("release.pub.pem", publicPEM(t, release.Public()), 0o644), "key_created": keyCreated, "user_id": userID,
+	}
+	return b
+}
+
+// useToken switches the approver from the key file to the stub token.
+func (b *bench) useToken(behaviour string) {
+	b.t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	// A copy with exact permissions: the toolchain builds the test binary group-writable under a
+	// permissive umask, and a tool others can write is (rightly) not run.
+	contents, err := os.ReadFile(executable)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	executable = b.write("pkcs11-tool", contents, 0o755)
+	if err := os.Chmod(executable, 0o755); err != nil {
+		b.t.Fatal(err)
+	}
+	// The tool refuses to run from a directory someone else could write (rightly). If the directory
+	// tests are given is such a place, that is the machine, not the code under test: say so.
+	if _, err := protected.Program(executable); err != nil {
+		b.t.Skipf("the test directory is not one a tool may be run from on this machine: %v", err)
+	}
+	delete(b.config, "key_file")
+	// The module is only named to the stub, never loaded; any file that passes the same ownership
+	// check as the tool will do.
+	b.config["pkcs11"] = map[string]string{"tool": executable, "module": b.write("module.so", []byte("not a module"), 0o644), "token_serial": stubSerial, "token_label": "OpenPGP card (User PIN (sig))", "key_id": "01"}
+	b.t.Setenv(stubVariable, behaviour)
+}
+
+func (b *bench) configPath() string {
+	b.t.Helper()
+	encoded, err := json.Marshal(b.config)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	path := filepath.Join(b.directory, "approve.json")
+	_ = os.Remove(path)
+	return b.write("approve.json", encoded, 0o600)
+}
+
+// prepare writes a pending record for document, as regalia-sign --prepare does.
+func (b *bench) prepare(name string, mode gpgsign.Mode, document []byte) (string, gpgsign.Pending) {
+	b.t.Helper()
+	pending, err := b.key.Prepare(context.Background(), mode, bytes.NewReader(document), time.Now(), 5*time.Minute)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(pending)
+	return b.write(name, encoded, 0o644), pending
+}
+
+func (b *bench) invoke(environment map[string]string, args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	config := b.configPath()
+	getenv := func(name string) string {
+		if name == "REGALIA_APPROVE_CONFIG" {
+			return config
+		}
+		return environment[name]
+	}
+	code := run(args, strings.NewReader(""), &stdout, &stderr, getenv, time.Now)
+	return code, stdout.String(), stderr.String()
+}
+
+// counts says whether the approval file is one the KMS would count: the approver's Ed25519
+// signature over the binding of the pending request, carrying that request's own fields.
+func (b *bench) counts(path string, pending gpgsign.Pending) bool {
+	b.t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	approval, err := gpgsign.ReadApproval(contents)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	binding, err := pending.Binding()
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(approval.Signature)
+	return err == nil && approval.ApproverID == approverID && approval.Nonce == pending.Nonce && approval.ExpiresAt == pending.ExpiresAt &&
+		approval.PayloadDigest == pending.PayloadSHA256 && ed25519.Verify(b.approver.Public().(ed25519.PublicKey), binding, signature)
+}
+
+var sums = []byte("0f3a…  regalia-kms_1.0.0_linux_amd64.tar.gz\n")
+
+func TestAnApproverWhoHoldsTheFileApprovesExactlyThatFile(t *testing.T) {
+	b := newBench(t)
+	file := b.write("SHA256SUMS", sums, 0o644)
+	for _, mode := range []gpgsign.Mode{gpgsign.ModeDetach, gpgsign.ModeDetachBinary, gpgsign.ModeClearSign} {
+		path, pending := b.prepare("pending-"+string(mode), mode, sums)
+		code, stdout, stderr := b.invoke(nil, "--pending", path, "--file", file)
+		if code != 0 || !strings.Contains(stdout, "checked against SHA256SUMS, sha256 "+pending.DocumentSHA256) || !strings.Contains(stdout, approverID) {
+			t.Fatalf("%s: exit %d, stdout %q, stderr %q", mode, code, stdout, stderr)
+		}
+		if !b.counts(path+".approval", pending) {
+			t.Fatalf("%s: the approval is not one the KMS would count", mode)
+		}
+		// An approval is never replaced.
+		if code, _, stderr := b.invoke(nil, "--pending", path, "--file", file); code != 1 || !strings.Contains(stderr, "already exists") {
+			t.Fatalf("%s: a second approval to the same name: exit %d, stderr %q", mode, code, stderr)
+		}
+	}
+	// A key export signs no file: it is checked against the pinned key alone.
+	path, pending := b.prepare("pending-key", gpgsign.ModeExportKey, nil)
+	if code, stdout, stderr := b.invoke(nil, "--pending", path, "--output", filepath.Join(b.directory, "key.approval")); code != 0 || !strings.Contains(stdout, "a key export") {
+		t.Fatalf("key export: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	if !b.counts(filepath.Join(b.directory, "key.approval"), pending) {
+		t.Fatal("the key-export approval is not one the KMS would count")
+	}
+}
+
+// THE POINT OF THE TOOL. The pending record carries a file hash, but the hash is only what the
+// preparer wrote; what the approver signs is the payload digest. Each case below is a record whose
+// claims and whose payload disagree, or that is for something this approver does not approve, and
+// each must end with no approval file.
+func TestNothingIsApprovedThatTheApproverDidNotCheck(t *testing.T) {
+	b := newBench(t)
+	file := b.write("SHA256SUMS", sums, 0o644)
+	other := b.write("OTHER", []byte("deadbeef  backdoored.tar.gz\n"), 0o644)
+	rewrite := func(name string, pending gpgsign.Pending) string {
+		encoded, _ := json.Marshal(pending)
+		return b.write(name, encoded, 0o644)
+	}
+	_, honest := b.prepare("honest", gpgsign.ModeDetach, sums)
+	_, forOther := b.prepare("for-other", gpgsign.ModeDetach, []byte("deadbeef  backdoored.tar.gz\n"))
+
+	// The preparer signs another file and labels it with the good file's hash.
+	lying := forOther
+	lying.DocumentSHA256 = honest.DocumentSHA256
+	otherObject, otherPurpose, otherEnvironment, otherKey := honest, honest, honest, honest
+	otherObject.ObjectID, otherPurpose.Purpose, otherEnvironment.Environment = "another-key", "token-signing", "staging"
+	otherKey.Fingerprint = strings.Repeat("0", 40)
+	laterTime := honest
+	laterTime.Created = "2031-01-01T00:00:00Z"
+	movedTime := honest
+	movedTime.Created = time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Format(time.RFC3339)
+	noHash := honest
+	noHash.DocumentSHA256 = ""
+	// BACKDATING. The preparer computes everything honestly for the right file, except that the
+	// signature is dated last year: the payload digest is the true one for that date, so the digest
+	// check passes. Only the window check stands in the way.
+	lastYear := time.Now().UTC().AddDate(-1, 0, 0).Truncate(time.Second)
+	if _, err := b.key.Prepare(context.Background(), gpgsign.ModeDetach, bytes.NewReader(sums), lastYear, 5*time.Minute); err == nil {
+		t.Fatal("Prepare itself wrote a backdated record")
+	}
+	backdated := honest
+	backdated.Created = lastYear.Format(time.RFC3339)
+	payload, err := b.key.Payload(context.Background(), gpgsign.ModeDetach, bytes.NewReader(sums), lastYear)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadSum := sha256.Sum256(payload)
+	backdated.PayloadSHA256 = hex.EncodeToString(payloadSum[:])
+	ahead, offset, fractional, upperDigest, noNonce, brokenNonce, longNonce, badRequestID := honest, honest, honest, honest, honest, honest, honest, honest
+	// Consistent with itself, an hour ahead of the approver: created = expires = now + 1h.
+	inAnHour := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	ahead.Created, ahead.ExpiresAt = inAnHour.Add(-time.Minute).Format(time.RFC3339), inAnHour.Format(time.RFC3339Nano)
+	aheadPayload, err := b.key.Payload(context.Background(), gpgsign.ModeDetach, bytes.NewReader(sums), inAnHour.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aheadSum := sha256.Sum256(aheadPayload)
+	ahead.PayloadSHA256 = hex.EncodeToString(aheadSum[:]) // the true digest for that date: only the clock refuses it
+	honestCreated, _ := time.Parse(time.RFC3339, honest.Created)
+	offset.Created = honestCreated.In(time.FixedZone("", 14*3600)).Format(time.RFC3339)
+	fractional.Created = strings.TrimSuffix(honest.Created, "Z") + ".999999999Z"
+	upperDigest.PayloadSHA256 = strings.ToUpper(honest.PayloadSHA256)
+	noNonce.Nonce, brokenNonce.Nonce, longNonce.Nonce = "", honest.Nonce[:16]+"\n"+honest.Nonce[16:], strings.Repeat("a", 4000)
+	badRequestID.RequestID = "request-1"
+	_, datedExport := b.prepare("export", gpgsign.ModeExportKey, nil)
+	datedExport.Created = "1999-01-01T00:00:00Z"
+	otherMode := honest
+	otherMode.Mode = gpgsign.ModeClearSign
+	// Prepared five minutes and one second ago, honestly, and not approved in time.
+	expired := honest
+	then := time.Now().UTC().Add(-5*time.Minute - time.Second).Truncate(time.Second)
+	expired.Created = then.Format(time.RFC3339)
+	expired.ExpiresAt = then.Add(5 * time.Minute).Format(time.RFC3339Nano)
+	expiredPayload, err := b.key.Payload(context.Background(), gpgsign.ModeDetach, bytes.NewReader(sums), then)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredSum := sha256.Sum256(expiredPayload)
+	expired.PayloadSHA256 = hex.EncodeToString(expiredSum[:])
+
+	for name, test := range map[string]struct {
+		pending gpgsign.Pending
+		args    []string
+		want    string
+	}{
+		"a record for another file, labelled with this file's hash": {lying, []string{"--file", file}, "not a signature over this file"},
+		"the approver's file is not the one prepared":               {honest, []string{"--file", other}, "not a signature over this file"},
+		"another object":      {otherObject, []string{"--file", file}, "another key or target"},
+		"another purpose":     {otherPurpose, []string{"--file", file}, "another key or target"},
+		"another environment": {otherEnvironment, []string{"--file", file}, "another key or target"},
+		"another key":         {otherKey, []string{"--file", file}, "another key or target"},
+		"a creation time years outside its window":           {laterTime, []string{"--file", file}, "outside its approval window"},
+		"another kind of signature than the digest is of":    {otherMode, []string{"--file", file}, "not a signature over this file"},
+		"an expired record":                                  {expired, []string{"--file", file}, "expired"},
+		"a creation time moved within the window":            {movedTime, []string{"--file", file}, "not a signature over this file"},
+		"a backdated signature whose digest is the true one": {backdated, []string{"--file", file}, "outside its approval window"},
+		// The option that approved a record without the file is gone; asking for it is a usage error
+		// (exit 2), tested with the command line below.
+		"a record that names no file hash": {noHash, []string{"--file", file}, "does not carry the SHA-256"},
+		"no file":                          {honest, nil, "nothing is approved unseen"},
+		"a signature dated ahead of the approver's clock": {ahead, []string{"--file", file}, "dated in the future"},
+		"a creation time written with an offset":          {offset, []string{"--file", file}, "not in canonical form"},
+		"a creation time with fractional seconds":         {fractional, []string{"--file", file}, "not in canonical form"},
+		"a payload digest in upper case":                  {upperDigest, []string{"--file", file}, "not a lower-case SHA-256"},
+		"an empty nonce":                                  {noNonce, []string{"--file", file}, "nonce or request ID"},
+		"a nonce with a line break":                       {brokenNonce, []string{"--file", file}, "nonce or request ID"},
+		"a 4000-byte nonce":                               {longNonce, []string{"--file", file}, "nonce or request ID"},
+		"a request ID that is not a UUID":                 {badRequestID, []string{"--file", file}, "nonce or request ID"},
+		"a key export with a date of its own":             {datedExport, nil, "not dated as the pinned key is"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := rewrite("case.pending", test.pending)
+			t.Cleanup(func() { _ = os.Remove(path); _ = os.Remove(path + ".approval") })
+			code, _, stderr := b.invoke(nil, append([]string{"--pending", path}, test.args...)...)
+			if code != 1 || !strings.Contains(stderr, test.want) {
+				t.Fatalf("exit %d, stderr %q, want a refusal containing %q", code, stderr, test.want)
+			}
+			if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+				t.Fatal("a refused approval was written")
+			}
+		})
+	}
+
+	// THE DIGEST IS OPAQUE, AND THE RECORD'S ACCOUNT OF IT IS THE PREPARER'S. This record is honest in
+	// every field an approver would read (the good file's hash, today's date, a detached signature)
+	// and carries the payload digest of ANOTHER file signed a year ago. With the file in hand it is
+	// refused; there is no way to approve it without the file.
+	disguised := honest
+	disguised.PayloadSHA256 = backdated.PayloadSHA256
+	path := rewrite("disguised.pending", disguised)
+	if code, _, stderr := b.invoke(nil, "--pending", path, "--file", file); code != 1 || !strings.Contains(stderr, "not a signature over this file") {
+		t.Fatalf("a record whose digest is not what it says: exit %d, stderr %q", code, stderr)
+	}
+	for _, args := range [][]string{{"--pending", path, "--unseen"}, {"--pending", path, "--file="}, {"--pending", path, "--file", ""}} {
+		if code, _, _ := b.invoke(nil, args...); code != 2 {
+			t.Fatalf("%v: exit %d, want a usage error", args[2:], code)
+		}
+	}
+	if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+		t.Fatal("an approval was written for a record whose digest was never checked")
+	}
+}
+
+// A HARDWARE APPROVER, AND WHAT COMES BACK FROM IT. The token is asked through pkcs11-tool; whatever
+// it returns is an approval only if it is a plain Ed25519 signature by the pinned approver key over
+// the binding. A device that signs with another key, signs something derived from the binding, or
+// returns a wrong-sized result would produce an approval the KMS silently does not count; it is
+// refused here instead.
+func TestATokenApproverIsBelievedOnlyWhenItsSignatureVerifies(t *testing.T) {
+	for behaviour, want := range map[string]string{
+		"honest": "", "another-key": "does not verify against the approver's own key",
+		"prehashed": "does not verify against the approver's own key", "short": "did not return an Ed25519 signature", "fails": "the token did not sign",
+	} {
+		t.Run(behaviour, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken(behaviour)
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, pending := b.prepare("pending", gpgsign.ModeDetach, sums)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			if want == "" {
+				if code != 0 || !b.counts(path+".approval", pending) {
+					t.Fatalf("an honest token: exit %d, stderr %q", code, stderr)
+				}
+				// The PIN was not in the environment, so it is not asked for on the command line
+				// either: pkcs11-tool prompts. And the binding it was handed is the record's.
+				recorded, _ := os.ReadFile(argv)
+				if strings.Contains(string(recorded), "--pin") || !strings.Contains(string(recorded), "--slot\n0x1\n") || strings.Contains(string(recorded), "--token-label") ||
+					!strings.Contains(string(recorded), "--id\n01") || !strings.Contains(string(recorded), "--login") {
+					t.Fatalf("the token was asked with %q", recorded)
+				}
+				return
+			}
+			if code != 1 || !strings.Contains(stderr, want) {
+				t.Fatalf("exit %d, stderr %q, want a refusal containing %q", code, stderr, want)
+			}
+			if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+				t.Fatal("an approval the KMS would not count was written")
+			}
+		})
+	}
+
+	// With the PIN in the environment, pkcs11-tool is told the NAME of the variable. The value is
+	// never an argument.
+	b := newBench(t)
+	b.useToken("honest")
+	sumsPath := b.write("SHA256SUMS", sums, 0o644)
+	path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+	argv := filepath.Join(b.directory, "argv")
+	t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+	// In the real environment, as an unattended run has it: the child must find the value there.
+	t.Setenv(pinVariable, "648219")
+	if code, _, stderr := b.invoke(map[string]string{pinVariable: "648219"}, "--pending", path, "--file", sumsPath); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	recorded, _ := os.ReadFile(argv)
+	if !strings.Contains(string(recorded), "--pin\nenv:"+pinVariable) || strings.Contains(string(recorded), "648219") || !strings.Contains(string(recorded), "PIN-IN-ENVIRONMENT=6\n") {
+		t.Fatalf("the PIN handling on the command line is wrong: %q", recorded)
+	}
+}
+
+func TestTheConfigurationAndCommandLineAreStrict(t *testing.T) {
+	b := newBench(t)
+	file := b.write("SHA256SUMS", sums, 0o644)
+	path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	otherSeed := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x07}, ed25519.SeedSize))
+	for name, test := range map[string]struct {
+		edit func(map[string]any)
+		want string
+	}{
+		"no approver ID":   {func(c map[string]any) { c["approver_id"] = " " }, "are required"},
+		"an unknown field": {func(c map[string]any) { c["touch"] = true }, "not the expected JSON document"},
+		"a relative path":  {func(c map[string]any) { c["public_key_path"] = "release.pub.pem" }, "absolute and clean"},
+		"both key sources": {func(c map[string]any) {
+			c["pkcs11"] = map[string]string{"tool": "/t", "module": "/m", "token_serial": "s", "token_label": "l", "key_id": "01"}
+		}, "exactly one of"},
+		"no key source": {func(c map[string]any) { delete(c, "key_file") }, "exactly one of"},
+		"a relative tool path": {func(c map[string]any) {
+			delete(c, "key_file")
+			c["pkcs11"] = map[string]string{"tool": "pkcs11-tool", "module": "/m", "token_serial": "s", "token_label": "l", "key_id": "01"}
+		}, "pkcs11 needs"},
+		"a key ID not in hex": {func(c map[string]any) {
+			delete(c, "key_file")
+			c["pkcs11"] = map[string]string{"tool": "/t", "module": "/m", "token_serial": "s", "token_label": "l", "key_id": "sig"}
+		}, "pkcs11 needs"},
+		"an approver key that is not Ed25519": {func(c map[string]any) {
+			c["approver_public_key_path"] = b.write("p256.pub.pem", publicPEM(t, ecdsaKey.Public()), 0o644)
+		}, "must be Ed25519"},
+		"a key file that is not the pinned approver key": {func(c map[string]any) {
+			c["approver_public_key_path"] = b.write("other.pub.pem", publicPEM(t, otherSeed.Public()), 0o644)
+		}, "is not the Ed25519 private key"},
+		"a key file others can read": {func(c map[string]any) {
+			contents, _ := os.ReadFile(c["key_file"].(string))
+			c["key_file"] = b.write("loose-key.pem", contents, 0o644)
+		}, "key file is unavailable"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			saved := map[string]any{}
+			for key, value := range b.config {
+				saved[key] = value
+			}
+			t.Cleanup(func() { b.config = saved; _ = os.Remove(path + ".approval") })
+			test.edit(b.config)
+			code, _, stderr := b.invoke(nil, "--pending", path, "--file", file)
+			if code != 1 || !strings.Contains(stderr, test.want) {
+				t.Fatalf("exit %d, stderr %q, want %q", code, stderr, test.want)
+			}
+			if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+				t.Fatal("an approval was written under a refused configuration")
+			}
+		})
+	}
+	for _, args := range [][]string{{}, {"--file", "f"}, {"--pending"}, {"--pending", "p", "--frobnicate"}, {"--pending", "p", "--file", "f", "--unseen"}, {"--pending", "p", "--unseen"}, {"p"}, {"--pending="}, {"--pending", ""}, {"--pending", "p", "--file="}, {"--pending", "p", "--output", ""}} {
+		if code, _, stderr := b.invoke(nil, args...); code != 2 || !strings.Contains(stderr, "usage:") {
+			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
+		}
+	}
+}
+
+// THE TOOL THAT IS RUN SEES THE PIN AND DRIVES THE KEY. A tool or module that someone other than root
+// or the approver could have replaced is not run at all.
+func TestAToolOrModuleOthersCanReplaceIsNotRun(t *testing.T) {
+	for name, loosen := range map[string]func(b *bench, device map[string]string){
+		"a group-writable tool": func(b *bench, device map[string]string) {
+			contents, err := os.ReadFile(device["tool"])
+			if err != nil {
+				b.t.Fatal(err)
+			}
+			device["tool"] = b.write("loose-tool", contents, 0o755)
+			if err := os.Chmod(device["tool"], 0o775); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+		"a world-writable module": func(b *bench, device map[string]string) {
+			if err := os.Chmod(device["module"], 0o666); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+		"a tool that is a directory": func(b *bench, device map[string]string) { device["tool"] = b.directory },
+		"a tool in a directory others can write": func(b *bench, device map[string]string) {
+			// The file itself is fine; the name is not, because someone else can put another file
+			// under it between this check and the exec.
+			open := filepath.Join(b.directory, "open")
+			if err := os.Mkdir(open, 0o777); err != nil {
+				b.t.Fatal(err)
+			}
+			if err := os.Chmod(open, 0o777); err != nil {
+				b.t.Fatal(err)
+			}
+			contents, _ := os.ReadFile(device["tool"])
+			device["tool"] = filepath.Join(open, "pkcs11-tool")
+			if err := os.WriteFile(device["tool"], contents, 0o755); err != nil {
+				b.t.Fatal(err)
+			}
+			if err := os.Chmod(device["tool"], 0o755); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+		"a module that does not exist": func(b *bench, device map[string]string) { device["module"] = filepath.Join(b.directory, "absent.so") },
+		"a link to a tool others can write": func(b *bench, device map[string]string) {
+			contents, _ := os.ReadFile(device["tool"])
+			target := b.write("loose-target", contents, 0o755)
+			if err := os.Chmod(target, 0o777); err != nil {
+				b.t.Fatal(err)
+			}
+			device["tool"] = filepath.Join(b.directory, "tool-link")
+			if err := os.Symlink(target, device["tool"]); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken("honest")
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			loosen(b, b.config["pkcs11"].(map[string]string))
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			if code != 1 || !(strings.Contains(stderr, "pkcs11 tool:") || strings.Contains(stderr, "pkcs11 module:")) {
+				t.Fatalf("exit %d, stderr %q", code, stderr)
+			}
+			if _, err := os.Stat(argv); !os.IsNotExist(err) {
+				t.Fatal("the tool was run")
+			}
+			if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+				t.Fatal("an approval was written")
+			}
+		})
+	}
+}
+
+// A CLEARTEXT SIGNATURE DOES NOT PIN TRAILING WHITESPACE OR LINE ENDINGS: its payload is computed
+// over the canonical text (RFC 4880, 7.1), so a file with a space added at the end of a line has the
+// same payload as the file without. The approver is told they approve THEIR copy; the record's file
+// hash, checked byte for byte, is what makes that true for a cleartext signature too.
+func TestAnApproverOfACleartextSignatureApprovesTheirExactBytes(t *testing.T) {
+	b := newBench(t)
+	release := []byte("Origin: Regalia\nSuite: stable\n")
+	variant := []byte("Origin: Regalia  \r\nSuite: stable\t\n")
+	exact, err := b.key.Payload(context.Background(), gpgsign.ModeClearSign, bytes.NewReader(release), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := b.key.Payload(context.Background(), gpgsign.ModeClearSign, bytes.NewReader(variant), time.Now())
+	if err != nil || !bytes.Equal(exact, other) {
+		t.Fatalf("the premise does not hold: the two texts were expected to share one payload (%v)", err)
+	}
+	path, _ := b.prepare("pending", gpgsign.ModeClearSign, variant)
+	code, _, stderr := b.invoke(nil, "--pending", path, "--file", b.write("Release", release, 0o644))
+	if code != 1 || !strings.Contains(stderr, "the record names another file's SHA-256") {
+		t.Fatalf("an approver holding other bytes than the prepared file: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+		t.Fatal("an approval was written")
+	}
+	if code, _, stderr := b.invoke(nil, "--pending", path, "--file", b.write("Release.variant", variant, 0o644)); code != 0 {
+		t.Fatalf("the exact file: exit %d, stderr %q", code, stderr)
+	}
+}
+
+// WHICH TOKEN GETS THE PIN. Every OpenPGP card carries the same label, so the label alone would hand
+// the PIN prompt to whichever card came first. The slot is resolved by serial and label together,
+// before login, and anything but exactly one match stops there: the signing command is never run.
+func TestTheTokenIsTheOneWithTheConfiguredSerialAndLabel(t *testing.T) {
+	for name, test := range map[string]struct {
+		slots  string // further slots attached, after the bench YubiKey's two
+		serial string
+		want   string
+	}{
+		"another card with the same label is not this approver's": {stubSlot(2, "OpenPGP card (User PIN (sig))", "000f99999999"), stubSerial, ""},
+		"two slots with this serial and label":                    {stubSlot(2, "OpenPGP card (User PIN (sig))", stubSerial), stubSerial, "2 attached tokens"},
+		"the configured token is not attached":                    {stubSlot(2, "OpenPGP card (User PIN (sig))", "000f99999999"), "000f11111111", "0 attached tokens"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken("honest")
+			b.config["pkcs11"].(map[string]string)["token_serial"] = test.serial
+			t.Setenv("REGALIA_APPROVE_TEST_SLOTS", test.slots)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, pending := b.prepare("pending", gpgsign.ModeDetach, sums)
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			recorded, _ := os.ReadFile(argv)
+			if test.want == "" {
+				if code != 0 || !b.counts(path+".approval", pending) || !strings.Contains(string(recorded), "--slot\n0x1\n") {
+					t.Fatalf("exit %d, stderr %q, token asked with %q", code, stderr, recorded)
+				}
+				return
+			}
+			if code != 1 || !strings.Contains(stderr, test.want) || len(recorded) != 0 {
+				t.Fatalf("exit %d, stderr %q, signing command run with %q", code, stderr, recorded)
+			}
+		})
+	}
+}
+
+// The pending record is the preparer's file. One of any size is refused before it is parsed.
+func TestAnOversizedPendingRecordIsRefused(t *testing.T) {
+	b := newBench(t)
+	huge := b.write("huge.pending", bytes.Repeat([]byte(" "), maxRecordBytes+1), 0o644)
+	if code, _, stderr := b.invoke(nil, "--pending", huge); code != 1 || !strings.Contains(stderr, "unreadable or too large") {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+// A TOKEN WRITES PART OF THE LISTING. Its label and manufacturer are its own strings; one with a line
+// break could draw a "Slot" line, or a second label, inside its own block and so pass for the
+// configured token. A listing where a slot ID appears twice, or a field twice in one block, is
+// refused before any PIN is asked for.
+func TestATokenListingThatDoesNotParseOneWayIsRefused(t *testing.T) {
+	configured := "  token label        : OpenPGP card (User PIN (sig))\n  serial num         : " + stubSerial + "\n"
+	for name, extra := range map[string]string{
+		"a second block claiming slot 0x1":               "Slot 9 (0x1): fake\n" + configured,
+		"a second block claiming slot 0x0 in other case": "Slot 9 (0X0): fake\n" + configured,
+		"a label that carries a second label line":       "Slot 2 (0x2): hostile\n  token label        : x\n  token label        : OpenPGP card (User PIN (sig))\n  serial num         : " + stubSerial + "\n",
+		"a label that carries a second serial line":      "Slot 2 (0x2): hostile\n  token label        : OpenPGP card (User PIN (sig))\n  serial num         : 000f00000000\n  serial num         : " + stubSerial + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken("honest")
+			t.Setenv("REGALIA_APPROVE_TEST_SLOTS", extra)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			recorded, _ := os.ReadFile(argv)
+			if code != 1 || !strings.Contains(stderr, "it is not trusted") || len(recorded) != 0 {
+				t.Fatalf("exit %d, stderr %q, signing command run with %q", code, stderr, recorded)
+			}
+		})
+	}
+}
