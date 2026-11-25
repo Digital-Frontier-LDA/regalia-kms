@@ -139,8 +139,9 @@ class TheLease(Local):
                 self.assertIs(answered["ok"], False)
                 self.assertIn("the local lease listener answers only under the single-node profile; epoch 1 is multi-node",
                               answered["refused"])
+                # the profile is checked before the operation is read, so the event is the bare "sync" kind
                 self.assertEqual((self.trail[-1]["event"], self.trail[-1]["outcome"], self.trail[-1]["uid"]),
-                                 ("sync-" + op, "DENY", sync.OPERATOR_UID))
+                                 ("sync", "DENY", sync.OPERATOR_UID))
         self.assertEqual((self.issued, self.attested), ([], []))
         self.verifier.nonce.assert_not_called()
 
