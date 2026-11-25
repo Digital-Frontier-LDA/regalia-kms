@@ -65,7 +65,8 @@ cmd/regalia-audit-ship | /usr/bin/regalia-audit-ship | ships the audit trails to
 etcd | /usr/bin/etcd /usr/bin/etcdctl /usr/bin/etcdutl | the operational-state store (ADR-0002 D32, regalia-etcd.service); etcdutl restores a snapshot (ETCD.md)
 
 [imported-not-run]
-# Commands found in modules the host imports, which those modules run only on the signing laptop or the builder.
+# Commands found in modules the host imports, which those modules run only on the signing laptop or the builder, or
+# which a probe only looks for to prove the image does NOT ship them.
 git | uki.Checkout: the build's provenance, read at signing on the laptop (uki.py sign)
 /usr/bin/loginctl | uki.py's signing session on the laptop
 /usr/lib/systemd/systemd-measure | uki.py signs the PCR 11 policy on the laptop
@@ -73,6 +74,9 @@ keyctl | uki.py purges systemd-measure's cached PIN on the laptop
 gpgv | debverify: the initrd builder's archive check
 zstd | debverify: the initrd builder's package check
 pkcheck | os_probe only looks for polkit, which the image does not ship (absence is the expected answer)
+/usr/sbin/sshd | os_probe's sshd_absent only stats it to prove no SSH server is installed (q-20: ABSENT); never run
+/usr/bin/sshd | os_probe's sshd_absent only stats it to prove no SSH server is installed (q-20: ABSENT); never run
+/usr/sbin/dropbear | os_probe's sshd_absent only stats it to prove no SSH server is installed (q-20: ABSENT); never run
 
 [not-on-host]
 # Deploy modules the host neither runs nor imports.
