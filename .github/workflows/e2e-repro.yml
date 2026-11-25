@@ -11,7 +11,8 @@
 # fork's commit would otherwise run as root here, in main's cache scope), failing closed when GitHub cannot answer.
 #
 # Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
-# (a) the checkout takes the dispatched commit, (b) each run's TPM diagnostics have their own name.
+# (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) each run's TPM diagnostics have their
+# own name.
 name: e2e repro
 
 on:
@@ -86,6 +87,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # a dispatch runs in main's cache scope: the dispatched commit writes no cache entry main could read (CodeQL)
+          cache: false
       - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
         run: |
           sudo apt-get update -qq

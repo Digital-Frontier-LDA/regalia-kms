@@ -63,12 +63,20 @@ class Repro(unittest.TestCase):
         self.assertEqual(checkout["uses"], ci_checkout["uses"])
         self.assertEqual(checkout["with"], dict(ci_checkout["with"], ref="${{ inputs.ref }}"))
 
+    def test_setup_go_caches_nothing(self):
+        """A dispatch runs in main's cache scope, so the dispatched commit must write no cache entry main could later
+        read (CodeQL cache poisoning, #788): node-units' setup-go step, with caching off and nothing else changed."""
+        setup, ci_setup = self.job["steps"][1], self.ci["steps"][1]
+        self.assertEqual(setup["uses"], ci_setup["uses"])
+        self.assertIs(setup["with"].get("cache"), False)
+        self.assertEqual(setup["with"], dict(ci_setup["with"], cache=False))
+
     def test_its_steps_are_node_units_three_node_leases_steps(self):
-        """Everything between the checkout and the diagnostics is node-units.yml's, value for value (each script's text
+        """Everything between setup-go and the diagnostics is node-units.yml's, value for value (each script's text
         exactly), and so are the runner and the timeout: a repro runs what CI runs."""
         self.assertEqual((self.job["runs-on"], self.job["timeout-minutes"]), (self.ci["runs-on"], self.ci["timeout-minutes"]))
         self.assertEqual(len(self.job["steps"]), len(self.ci["steps"]))
-        self.assertEqual(self.job["steps"][1:-1], self.ci["steps"][1:-1])
+        self.assertEqual(self.job["steps"][2:-1], self.ci["steps"][2:-1])
         diag, ci_diag = self.job["steps"][-1], self.ci["steps"][-1]
         self.assertEqual({k: v for k, v in diag.items() if k != "with"}, {k: v for k, v in ci_diag.items() if k != "with"})
         self.assertEqual(diag["with"], {"name": ci_diag["with"]["name"] + "-run-${{ matrix.run }}"})
