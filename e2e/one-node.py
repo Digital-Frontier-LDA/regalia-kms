@@ -596,6 +596,19 @@ def owner_statement(cluster, purpose, name, session, issued, out):
     return signed
 
 
+def serving_under(cluster, name, epoch):
+    """`name`'s admission document while it serves in mode single on a lease it issued itself under `epoch` (lease.json's
+    own epoch, not the manifest's the admission was checked under), else None."""
+    serving = cluster.lease(name)
+    try:
+        held = json.loads((cluster.nodes[name].admission / "lease.json").read_text())["envelope"]["lease"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(serving, dict) and serving.get("mode") == "single" and held.get("issuer") == name and held.get("epoch") == epoch:
+        return serving
+    return None
+
+
 def serving_again(cluster, kms, name, message):
     """`name` serves again: its admission holds a lease it issued itself, in mode single; the daemon is READY on it, and
     signs `message` (the signature verifies). Returns (whether, what was seen)."""
@@ -618,17 +631,40 @@ def planned_outage_update(cluster, kms):
        {"epoch": m2["epoch"], "sets": sets, "anchor": cluster.anchored("a")})
 
     trail = cluster.ship_tool_trail("a", "update")                 # a's /var/log/regalia/update.jsonl, shipped as on a host
+    # "a STILL serves" needs a serving before the refusal. An epoch's commit stops a's renewals until a holds its own
+    # heartbeat for that epoch (lease._issue: freshness.live_until; heartbeat.verify takes only the manifest's epoch). In
+    # the d7202fce run (45587190804) accept() took 30.6 s, more than one lease (lease.MAX_LIFETIME), and this was checked
+    # 0.5 s after it returned, inside admission's retry back-off (RETRY_MAX): the run said 40/41 with the reset count
+    # unchanged (the reboot below went 2 to 3). So a serves again, on a lease under epoch 2, first; then the refusal
+    since = time.time()
+    serving_before = until(lambda: serving_under(cluster, "a", 2), 180, 3)
     before = cluster.reset_count("a")
     named = "a single-node host's reboot is a planned outage: give --planned-outage"
     refused = on_node(cluster, "a", "update-apply", module("update", "apply", "--config", cfg, "--entry", "0002",
                                                            "--esp", cluster.esp("a"), "--audit-log", trail))
     denied = [e for e in tool_trail(trail) if e.get("event") == "update-apply"]
-    ok(refused.returncode == 1 and named in refused.stderr and [e.get("outcome") for e in denied] == ["DENY"]
-       and named in denied[0].get("reason", "") and denied[0].get("planned_outage") is False
-       and denied[0].get("topology") == membership.SINGLE_NODE and cluster.reset_count("a") == before and bool(cluster.lease("a")),
+    after = cluster.reset_count("a")
+    serving_after = cluster.lease("a")
+    # each condition by name, so a FAIL says which one was false (the GA's review of d7202fce: 40/41, and the line could
+    # not tell the reset count from the lease)
+    conditions = {
+        "exit status 1": refused.returncode == 1,
+        "the refusal named": named in refused.stderr,
+        "one update-apply event, a DENY": [e.get("outcome") for e in denied] == ["DENY"],
+        "the DENY's reason names it": bool(denied) and named in denied[0].get("reason", ""),
+        "the DENY says planned_outage false": bool(denied) and denied[0].get("planned_outage") is False,
+        "the DENY says topology single-node": bool(denied) and denied[0].get("topology") == membership.SINGLE_NODE,
+        "a served before, on a lease under epoch 2": isinstance(serving_before, dict),
+        "the TPM reset count is unchanged (%s, then %s)" % (before, after): after == before,
+        "a still serves after": isinstance(serving_after, dict) and serving_after.get("mode") == "single",
+    }
+    ok(all(conditions.values()),
        "update apply WITHOUT --planned-outage is refused by name (\"%s\"), a DENY on a's update trail; nothing is armed or "
-       "rebooted (a's TPM reset count stays %d, and a still serves)" % (named, before),
-       {"status": refused.returncode, "said": refused.stderr[-400:], "trail": denied})
+       "rebooted (a, serving on its own lease under epoch 2, keeps TPM reset count %s and still serves)" % (named, before),
+       {"false": [k for k, v in conditions.items() if not v], "conditions": conditions, "status": refused.returncode,
+        "said": refused.stderr[-400:], "trail": denied, "serving_before": serving_before, "serving_after": serving_after,
+        "admission": [{k: e.get(k) for k in ("at", "event", "outcome", "peer", "epoch", "reason")}
+                      for e in admission_trail(cluster, "a") if e.get("at", 0) >= int(since) - 60][-8:]})
 
     done = cluster.as_root("a", "update-planned-%d" % time.monotonic_ns(), ["/usr/bin/python3", "-Es", "-c", DECLARED],
                            input=json.dumps({"cfg": str(cfg), "trail": str(trail), "esp": str(cluster.esp("a"))}), in_ns=True)
