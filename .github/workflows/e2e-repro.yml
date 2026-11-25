@@ -55,6 +55,7 @@ jobs:
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           PIN: 2833e65fe39a0c238fb0458ab9dcd82d47910c86   # the diagnostics action's commit, as in its `uses:` below
+          ACTION_TREE: d13ce44c3e5e7b86df8821b84447572a3722e4eb   # .github/actions/tpm-diagnostics's git tree, at PIN and here
         run: |
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
           [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
@@ -68,8 +69,10 @@ jobs:
              ! main_tree=$(gh api "repos/$REPO/contents/.github/actions?ref=heads/main" --jq '.[] | select(.name == "tpm-diagnostics") | .sha'); then
             echo "::error::GitHub could not read the diagnostics action: refused" >&2; exit 1
           fi
-          [[ -n "$pin_tree" && "$pin_tree" == "$main_tree" ]] || {
-            echo "::error::the diagnostics pin $PIN is stale (main's tpm-diagnostics changed): bump it" >&2; exit 1; }
+          [[ "$pin_tree" == "$ACTION_TREE" ]] || {
+            echo "::error::the diagnostics pin $PIN does not hold tree $ACTION_TREE: refused" >&2; exit 1; }
+          [[ "$main_tree" == "$ACTION_TREE" ]] || {
+            echo "::error::the diagnostics pin $PIN is stale (main's tpm-diagnostics changed): bump PIN and ACTION_TREE" >&2; exit 1; }
           # compare main...REF: `behind` or `identical` means REF is an ancestor of main. `ahead` and `diverged` mean REF
           # has commits main lacks, and GitHub resolves commits from FORKS in the repo network, so they are never enough.
           if ! status=$(gh api "repos/$REPO/compare/heads/main...$REF" --jq .status); then

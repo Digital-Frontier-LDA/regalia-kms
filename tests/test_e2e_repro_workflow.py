@@ -1,6 +1,7 @@
 """e2e-repro.yml (regalia-kms-9xw): the by-hand re-run of node-units.yml's three-node-leases job at one commit, on hosted
 runners, under the GA's conditions (2026-11-25): read-only token, no secrets or environments, a full 40-hex SHA only,
 at most 5 runs, one dispatch at a time. Its steps are node-units.yml's, held equal here, so a repro runs what CI runs."""
+import os
 import re
 import subprocess
 import tempfile
@@ -116,15 +117,18 @@ class Repro(unittest.TestCase):
             self.assertNotIn(workspace, text)
 
     def test_the_pin_holds_the_action_node_units_runs(self):
-        """The pinned commit's tpm-diagnostics tree is this commit's (what node-units.yml runs as `./`). Needs the pin's
-        commit in the local history; the plan job enforces the same against main at run time, failing closed."""
-        pin = self.pin()
-        have = subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", pin + "^{commit}"], capture_output=True)
-        if have.returncode != 0:
-            self.skipTest("the pin %s is not in this checkout's history (shallow); the plan job checks it" % pin)
-        tree = lambda rev: subprocess.run(["git", "-C", str(ROOT), "rev-parse", "%s:%s" % (rev, ACTION)],
-                                          capture_output=True, text=True, check=True).stdout.strip()
-        self.assertEqual(tree(pin), tree("HEAD"))
+        """ACTION_TREE is the git tree of the tpm-diagnostics action in THIS checkout's files (what node-units.yml runs
+        as `./`), computed without history so it never skips; the plan job checks at run time that PIN and main hold the
+        same tree, failing closed. Changing the action without bumping PIN and ACTION_TREE goes red here."""
+        [plan] = self.doc["jobs"]["plan"]["steps"]
+        expected = str(plan["env"]["ACTION_TREE"])
+        self.assertRegex(expected, r"^[0-9a-f]{40}$")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
+            git = lambda *args: subprocess.run(["git", "-C", str(ROOT), *args], env=env, capture_output=True,
+                                               text=True, check=True).stdout.strip()
+            git("add", "--", ACTION)
+            self.assertEqual(git("write-tree", "--prefix=%s/" % ACTION), expected)
 
     def test_the_job_it_mirrors_still_runs_the_three_node_lease_test(self):
         """If node-units.yml's job is renamed or emptied, the equality above would hold vacuously: it is not."""
@@ -154,9 +158,11 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
     every commit GitHub cannot vouch for."""
 
     def run_plan(self, ref=SHA, runs="5", compare="behind", compare_rc="", pulls="", pulls_rc="",
-                 pincmp="identical", pincmp_rc="", pin_tree="t" * 40, main_tree="t" * 40, tree_rc=""):
+                 pincmp="identical", pincmp_rc="", pin_tree=None, main_tree=None, tree_rc=""):
         [plan] = load(REPRO)["jobs"]["plan"]["steps"]
-        self.pin = str(plan["env"]["PIN"])
+        self.pin, self.tree = str(plan["env"]["PIN"]), str(plan["env"]["ACTION_TREE"])
+        pin_tree = self.tree if pin_tree is None else pin_tree
+        main_tree = self.tree if main_tree is None else main_tree
         with tempfile.TemporaryDirectory() as tmp:
             gh = Path(tmp) / "gh"
             gh.write_text(FAKE_GH)
@@ -166,7 +172,7 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
             log.write_text("")
             env = {"PATH": "%s:/usr/bin:/bin" % tmp, "REF": ref, "RUNS": runs, "REPO": REPO_NAME, "GH_TOKEN": "x",
                    "GITHUB_OUTPUT": str(out), "FAKE_LOG": str(log), "FAKE_COMPARE": compare,
-                   "FAKE_COMPARE_RC": compare_rc, "FAKE_PULLS": pulls, "FAKE_PULLS_RC": pulls_rc, "PIN": self.pin,
+                   "FAKE_COMPARE_RC": compare_rc, "FAKE_PULLS": pulls, "FAKE_PULLS_RC": pulls_rc, "PIN": self.pin, "ACTION_TREE": self.tree,
                    "FAKE_PINCMP": pincmp, "FAKE_PINCMP_RC": pincmp_rc, "FAKE_PIN_TREE": pin_tree,
                    "FAKE_MAIN_TREE": main_tree, "FAKE_TREE_RC": tree_rc}
             done = subprocess.run(["bash", "-e", "-c", plan["run"]], env=env, capture_output=True, text=True)
@@ -229,9 +235,14 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
 
     def test_a_stale_diagnostics_pin_is_refused(self):
         """main's tpm-diagnostics changed since the pin: the repro would run an older action than node-units does."""
-        for pin_tree, main_tree in (("t" * 40, "u" * 40), ("", ""), ("", "t" * 40)):
-            with self.subTest(pin_tree=pin_tree, main_tree=main_tree):
-                self.assert_refused(self.run_plan(pin_tree=pin_tree, main_tree=main_tree), "is stale")
+        for main_tree in ("u" * 40, ""):
+            with self.subTest(main_tree=main_tree):
+                self.assert_refused(self.run_plan(main_tree=main_tree), "is stale")
+
+    def test_the_pin_must_hold_the_recorded_action_tree(self):
+        for pin_tree in ("u" * 40, ""):
+            with self.subTest(pin_tree=pin_tree):
+                self.assert_refused(self.run_plan(pin_tree=pin_tree), "does not hold tree")
 
     def test_github_not_answering_about_the_pin_is_a_refusal(self):
         self.assert_refused(self.run_plan(pincmp_rc="1"), "could not say whether the diagnostics pin")
