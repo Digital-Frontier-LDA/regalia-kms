@@ -6,13 +6,16 @@
 # that can't run on heavy, bounded to N<=5 per dispatch, dispatched by the GA only, once per flake bead, at a same-repo
 # 40-hex SHA, each use logged on the bead + #787.
 #
-# Dispatch only: no pull_request, push or schedule. One dispatch at a time, never cancelled. The plan job refuses
+# Dispatch only: no pull_request, push or schedule. One dispatch runs at a time and a running one is never cancelled;
+# GitHub keeps ONE pending run per group, so a third dispatch replaces the one still waiting. The plan job refuses
 # anything but a full SHA that is in main's history or is the head of an open pull request from THIS repository (a
 # fork's commit would otherwise run as root here, in main's cache scope), failing closed when GitHub cannot answer.
 #
 # Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
-# (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) each run's TPM diagnostics have their
-# own name.
+# (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) the TPM diagnostics action is main's,
+# from its own sparse checkout, so no action code from the dispatched commit runs, (d) each run's diagnostics have their
+# own name. The dispatched commit's own code still runs (as root) in main's cache scope: that residual is what the
+# same-repo check bounds and the owner's exception accepts.
 name: e2e repro
 
 on:
@@ -27,7 +30,7 @@ on:
         required: true
         type: choice
         options: ["1", "2", "3", "4", "5"]
-        default: "5"
+        default: "1"
 
 permissions:
   contents: read
@@ -55,7 +58,7 @@ jobs:
           [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
           # compare main...REF: `behind` or `identical` means REF is an ancestor of main. `ahead` and `diverged` mean REF
           # has commits main lacks, and GitHub resolves commits from FORKS in the repo network, so they are never enough.
-          if ! status=$(gh api "repos/$REPO/compare/main...$REF" --jq .status); then
+          if ! status=$(gh api "repos/$REPO/compare/heads/main...$REF" --jq .status); then
             echo "::error::GitHub could not say whether $REF is in main's history: refused" >&2; exit 1
           fi
           if [[ "$status" == behind || "$status" == identical ]]; then
@@ -109,8 +112,18 @@ jobs:
             echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
           grep -q '^three-node-leases: 20 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
             echo "::error::the three-node lease test did not pass all 20 checks" >&2; exit 1; }
+      # The diagnostics action is MAIN's, from its own sparse checkout: no action code from the dispatched commit runs
+      # (CodeQL actions/cache-poisoning/poisonable-step, #788).
+      - name: Main's diagnostics action, not the dispatched commit's
+        if: failure()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/heads/main
+          path: .e2e-repro-trusted
+          sparse-checkout: .github/actions
+          persist-credentials: false
       - name: Keep the software TPMs' logs (regalia-zga)
         if: failure()
-        uses: ./.github/actions/tpm-diagnostics
+        uses: ./.e2e-repro-trusted/.github/actions/tpm-diagnostics
         with:
           name: three-node-leases-run-${{ matrix.run }}

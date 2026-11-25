@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 REPRO = ROOT / ".github" / "workflows" / "e2e-repro.yml"
 NODE_UNITS = ROOT / ".github" / "workflows" / "node-units.yml"
+TRUSTED = ".e2e-repro-trusted"
 
 
 def load(path):
@@ -39,12 +40,16 @@ class Repro(unittest.TestCase):
         self.assertNotRegex(self.text, r"secrets\.")
         self.assertNotRegex(self.text, r"\benvironment:")
 
-    def test_one_dispatch_at_a_time_never_cancelled(self):
+    def test_one_dispatch_runs_at_a_time_and_a_running_one_is_not_cancelled(self):
+        """cancel-in-progress: false keeps a RUNNING dispatch; GitHub still keeps one pending run per group, so a third
+        dispatch replaces the waiting one (the header says so)."""
         self.assertEqual(self.doc["concurrency"], {"group": "e2e-repro", "cancel-in-progress": False})
+        self.assertIn("GitHub keeps ONE pending run per group", self.text)
 
     def test_the_commit_must_be_a_full_sha_and_the_runs_at_most_5(self):
         inputs = self.doc.get(True, self.doc.get("on"))["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["runs"]["options"], ["1", "2", "3", "4", "5"])
+        self.assertEqual(inputs["runs"]["default"], "1", "a mis-click should cost one run, not five")
         [plan] = self.doc["jobs"]["plan"]["steps"]
         self.assertEqual(plan["env"], {"REF": "${{ inputs.ref }}", "RUNS": "${{ inputs.runs }}",
                                        "REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}"})
@@ -75,11 +80,25 @@ class Repro(unittest.TestCase):
         """Everything between setup-go and the diagnostics is node-units.yml's, value for value (each script's text
         exactly), and so are the runner and the timeout: a repro runs what CI runs."""
         self.assertEqual((self.job["runs-on"], self.job["timeout-minutes"]), (self.ci["runs-on"], self.ci["timeout-minutes"]))
-        self.assertEqual(len(self.job["steps"]), len(self.ci["steps"]))
-        self.assertEqual(self.job["steps"][2:-1], self.ci["steps"][2:-1])
+        self.assertEqual(len(self.job["steps"]), len(self.ci["steps"]) + 1, "one step added: main's diagnostics checkout")
+        self.assertEqual(self.job["steps"][2:-2], self.ci["steps"][2:-1])
         diag, ci_diag = self.job["steps"][-1], self.ci["steps"][-1]
-        self.assertEqual({k: v for k, v in diag.items() if k != "with"}, {k: v for k, v in ci_diag.items() if k != "with"})
+        self.assertEqual({k: v for k, v in diag.items() if k not in ("with", "uses")},
+                         {k: v for k, v in ci_diag.items() if k not in ("with", "uses")})
+        self.assertEqual(diag["uses"], "./" + TRUSTED + "/" + ci_diag["uses"][2:])
         self.assertEqual(diag["with"], {"name": ci_diag["with"]["name"] + "-run-${{ matrix.run }}"})
+
+    def test_no_action_code_comes_from_the_dispatched_commit(self):
+        """CodeQL actions/cache-poisoning/poisonable-step (#788): every local action is MAIN's, from a sparse checkout of
+        refs/heads/main into its own path, made just before it under the same condition, with no credentials kept."""
+        local = [(i, s) for i, s in enumerate(self.job["steps"]) if s.get("uses", "").startswith("./")]
+        self.assertEqual([s["uses"] for _, s in local], ["./" + TRUSTED + "/.github/actions/tpm-diagnostics"])
+        for i, step in local:
+            trusted = self.job["steps"][i - 1]
+            self.assertEqual(trusted["uses"], self.job["steps"][0]["uses"])
+            self.assertEqual(trusted["with"], {"ref": "refs/heads/main", "path": TRUSTED,
+                                               "sparse-checkout": ".github/actions", "persist-credentials": False})
+            self.assertEqual(trusted.get("if"), step.get("if"))
 
     def test_the_job_it_mirrors_still_runs_the_three_node_lease_test(self):
         """If node-units.yml's job is renamed or emptied, the equality above would hold vacuously: it is not."""
@@ -132,7 +151,7 @@ class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
             with self.subTest(status=status):
                 rc, output, log, _ = self.run_plan(compare=status)
                 self.assertEqual((rc, output), (0, "runs=[1,2,3,4,5]\n"))
-                self.assertEqual(log, "api repos/%s/compare/main...%s --jq .status\n" % (REPO_NAME, SHA))
+                self.assertEqual(log, "api repos/%s/compare/heads/main...%s --jq .status\n" % (REPO_NAME, SHA))
 
     def test_the_head_of_an_open_pull_request_from_this_repository_runs(self):
         for status in ("ahead", "diverged"):
