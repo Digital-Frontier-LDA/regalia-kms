@@ -1,7 +1,7 @@
 """testgenesis: ALL the staging TEST genesis material of a single-node genesis, from a named TEST membership root
 (regalia-kms-223; the GA's ruling of 2026-11-25 for regalia-kms-dx7.14's staging run). TEST ONLY.
 
-    python3 -Es -m deploy.baremetal.testgenesis --root-key HEX --root-pk8 TEST-root.pk8.pem --out DIR \\
+    python3 -I /abs/path/to/checkout/deploy/baremetal/testgenesis.py --root-key HEX --root-pk8 TEST-root.pk8.pem --out DIR \\
         --node-id NODE --host-ipv4 A.B.C.D --prefix N --gateway A.B.C.D --nic-mac aa:bb:cc:dd:ee:ff \\
         --boot-address 10.89.0.1 --owner-underlay A.B.C.D --owner-address 10.89.0.9 \\
         --client-cidr CIDR --monitoring-cidr CIDR --admin-cidr CIDR --audit CIDR:tcp:PORT [--outbound NAME=CIDR:PROTO:PORT]... \\
@@ -9,14 +9,23 @@
         --build-record SIGNED-RECORD.json --pcrs PCRS.json --tpm-firmware-version HEX16 --device /dev/... \\
         [--owner-recipient PRIMARY:SUBKEY --owner-recipient PRIMARY:SUBKEY]
 
+Run it by its absolute path under `python3 -I` (no working directory, no PYTHON* variable and no user site on the
+module path: a secrets.py beside the operator cannot replace the module every TEST key is drawn from). The module
+then puts the checkout it lives in on the path, found from its own resolved file and checked to hold deploy/baremetal,
+never from the working directory. `python3 -I -m` cannot work (-I drops the directory -m would find `deploy` in);
+`python3 -Es -m deploy.baremetal.testgenesis` from the checkout's root still does, with the working directory first.
+
 deploy.baremetal only VERIFIES the genesis records (manifest.card_record_keys, manifest.offline_keys_record,
 ownerauth.verify, cardrecord.verify); their writers are regalia-ceremony's offline-keys.py, which signs with the
 sealed offline root. A staging box under a TEST root needs the same records signed by THAT root, and this is the
 one reviewed writer of them. Every record is in the exact form its verifier reads, and every output is verified
-by the existing verifier, from disk, before the tool says it is done.
+by the existing verifier, from disk, before the tool says it is done; every TEST key file is read back too and its
+public key held to what the signed records name (verify_outputs).
 
 WHAT IT WRITES, into DIR (created 0700, or an existing EMPTY directory of this user's, made 0700; a non-empty one, a
-link or another user's is refused). Every file is 0600 and every name says TEST (the signing state's two files keep
+link, another user's, or one inside a git checkout, where a TEST private key could be committed, is refused). If the
+run fails once DIR exists, every file and directory the run made is removed (and DIR too if the run made it): no TEST
+secret is left behind by a refusal. Every file is 0600 and every name says TEST (the signing state's two files keep
 the names manifest.py and cardrecord.py read; their directory says TEST):
   TM-3  TEST-cards.record.json            the card ceremony record (regalia.card-ceremony-record/v1), signed by the root:
                                           the two owner "cards'" Ed25519 keys, the release card's, ownerauth_recipients,
@@ -50,12 +59,15 @@ named one. It is read into a bytearray, loaded and zeroed, and never printed or 
 
 THE GUARD. Refused, before the private key is read, unless the named root is TEST:
   (a) DENY: a real or ceremony root (REAL_ROOTS, with where each id comes from) is refused FIRST, whatever the allow-list
-      says: putting one on TEST_ROOTS changes nothing;
+      says: putting one on TEST_ROOTS changes nothing. A caller's `deny` only ADDS to REAL_ROOTS, never replaces it;
   (b) ALLOW: only a root on the explicit allow-list TEST_ROOTS is accepted (the staging TEST root of dx7.14). Anything
       else, an unknown root included, is refused. `generate(..., allow=...)` is the tests' hook for a throwaway root;
       the command line has no way to extend the list.
-  (c) the image: a signed build record whose initrd review names the root its image pins (initrd_review.root_key, the
-      SHA-256 of root-key.json) must name THIS root: TEST material for an image that trusts another root, or pins none, is refused.
+  (c) the image: the signed build record's initrd review must have PASSED, and the root its image pins
+      (initrd_review.root_key: the SHA-256 of the root-key.json bytes build-initrd.sh was given, which uki.check_root_key
+      and build-initrd.sh require to be canonical JSON) must be THIS root alone, in one of the two forms
+      membership.root_entries takes for one Ed25519 root: "<hex>" or ["<hex>"]. TEST material for an image that trusts
+      another root, also trusts another (a longer list), or pins none, is refused.
 No production root exists yet (no ceremony has run, manifest.py's limitations): when one does, its id goes on
 REAL_ROOTS in the same change that records it.
 
@@ -65,17 +77,29 @@ digests of the ownerauth record are STAND-INS unless --owner-recipient gives rea
 record's yk_sha256/bg_sha256 are digests of a named stand-in text (nothing in deploy.baremetal reads an envelope or
 checks those, ownerauth.py's limitations). TEST-README.txt says how the key files are loaded where a token is needed.
 """
+import os
+import sys
+
+if __package__ in (None, ""):
+    # run by path (python3 -I /abs/.../deploy/baremetal/testgenesis.py): the checkout this file is in goes on the module
+    # path, from the file's own resolved location, never the working directory
+    _HERE = os.path.dirname(os.path.realpath(__file__))
+    _CHECKOUT = os.path.dirname(os.path.dirname(_HERE))
+    if not (os.path.basename(_HERE) == "baremetal" and os.path.basename(os.path.dirname(_HERE)) == "deploy"
+            and os.path.isfile(os.path.join(_HERE, "membership.py")) and os.path.isfile(os.path.join(_HERE, "__init__.py"))):
+        raise SystemExit("REFUSED: %s is not deploy/baremetal/testgenesis.py inside a regalia-kms checkout" % os.path.realpath(__file__))
+    sys.path.insert(0, _CHECKOUT)
+
 import argparse
 import base64
 import datetime
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import stat
-import sys
+import types
 
 from deploy.baremetal import (bootcreds, cardrecord, espcreds, manifest, measurements, membership, ownerauth, sitecfg,
                               uki)
@@ -95,7 +119,7 @@ TEST_ROOTS = frozenset({
 # (a) the deny-list: real or ceremony roots, refused even if one is put on TEST_ROOTS. No production root is pinned
 # anywhere yet (no ceremony has run); these are the roots regalia-ceremony's REAL writers produced, kept in this
 # repository as vectors (their records are public: a root whose signed records are published is never a staging root)
-REAL_ROOTS = {
+REAL_ROOTS = types.MappingProxyType({
     "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c": "tests/vectors/card-ceremony-record/root.hex",
     "8e119683841b2edd12a3f01c1a1985b49a373f782ce4c0bb0ed90e182dd8346f": "tests/vectors/card-ceremony-record/writer-run/root.hex",
     "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394":
@@ -104,7 +128,7 @@ REAL_ROOTS = {
     "d253f87454a3717ca6d4aa59b0a64db1e1e0a1a0d6c577d701f02580fd62cb95": "tests/vectors/offline-keys-record/root-fd8df0a.hex",
     "5a91603f023794dd2c8acc92fd470da260bbf06a4d08e2b916dca643c9b605a9": "tests/vectors/offline-keys-record/root-rc133.hex",
     "becd9865eb9eef864694071aa83d221a85edc9f137ddae0224a9c0d0a2b53b76": "tests/vectors/ownerauth-v1.json (root)",
-}
+})
 
 # the TEST card serials (decimal, no leading zero: cardrecord.SERIAL), none a bench YubiKey's
 OWNER_SERIALS = ("91000001", "91000002")
@@ -117,10 +141,11 @@ NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 def check_root(root, allow=None, deny=None):
-    """The guard (module text): `root` (64 hex) refused if it is a real or ceremony root (`deny`, default REAL_ROOTS),
-    whatever `allow` says, and unless it is on `allow` (default TEST_ROOTS). Returns it."""
+    """The guard (module text): `root` (64 hex) refused if it is a real or ceremony root, whatever `allow` says, and
+    unless it is on `allow` (default TEST_ROOTS). REAL_ROOTS ALWAYS applies: `deny` (ids) only adds to it (#787 review).
+    Returns it."""
     allow = TEST_ROOTS if allow is None else allow
-    deny = REAL_ROOTS if deny is None else deny
+    deny = dict(REAL_ROOTS, **{extra: "a caller's deny-list" for extra in (deny or ()) if extra not in REAL_ROOTS})
     require(isinstance(root, str) and re.fullmatch(r"[0-9a-f]{64}", root) is not None,
             "--root-key is not a raw Ed25519 public key (64 lowercase hex, root-key.json's value)")
     require(root not in deny, "the root %s is a real or ceremony root (%s): TEST material is never made for it, whatever the "
@@ -128,6 +153,14 @@ def check_root(root, allow=None, deny=None):
     require(root in allow, "the root %s is not on the TEST allow-list (testgenesis.TEST_ROOTS): only a named TEST root is "
             "accepted, never an unknown one" % root)
     return root
+
+
+def root_key_pins(root):
+    """The SHA-256 values initrd_review.root_key takes for an image that pins `root` alone: uki.py hashes the --root-key
+    file's bytes (review_initrd's root_key_sha256 = sha256(read(--root-key))), which build-initrd.sh and check_root_key
+    require to be canonical JSON accepted by membership.root_entries. For one Ed25519 root that is the bare string
+    "<hex>" (typed entries are for ecdsa-p256 only, membership.revocation_entry) or the one-element list ["<hex>"]."""
+    return {hashlib.sha256(membership.canonical(form)).hexdigest() for form in (root, [root])}
 
 
 def _now():
@@ -149,6 +182,7 @@ def _fingerprint_stand_in(*parts):
 def read_root_private(path, root):
     """The root's private key from `path` (module text): a regular file of this user's, mode 0600, not a link; one
     unencrypted PKCS#8 PEM Ed25519 key whose public key is `root`. The buffer is zeroed once the key is loaded."""
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     try:
@@ -167,8 +201,9 @@ def read_root_private(path, root):
             buffer += chunk
         require(len(buffer) <= MAX_KEY_FILE, "--root-pk8 %s is larger than %d bytes" % (path, MAX_KEY_FILE))
         try:
-            key = serialization.load_pem_private_key(bytes(buffer), password=None)
-        except (ValueError, TypeError):
+            # the bytearray itself (a bytes-like is taken), so no unzeroable bytes copy of the key is made here
+            key = serialization.load_pem_private_key(buffer, password=None)
+        except (ValueError, TypeError, UnsupportedAlgorithm):
             raise Refused("--root-pk8 %s is not one unencrypted PKCS#8 PEM private key" % path) from None
     finally:
         os.close(fd)
@@ -209,27 +244,51 @@ def _proven(key, sign_verify):
 
 # ---- the output directory ----
 
+def inside_git_checkout(path):
+    """The git checkout (a directory holding .git, a directory or a worktree's file) that `path` (resolved) is in, or None."""
+    here = os.path.realpath(path)
+    while True:
+        if os.path.lexists(os.path.join(here, ".git")):
+            return here
+        up = os.path.dirname(here)
+        if up == here:
+            return None
+        here = up
+
+
 class Output:
     """The caller's directory, and nothing outside it: every write is a plain name (or one TEST sub-directory) under the
-    directory's own descriptor, O_CREAT|O_EXCL|O_NOFOLLOW, mode 0600."""
+    directory's own descriptor, O_CREAT|O_EXCL|O_NOFOLLOW, mode 0600. It remembers what THIS run made, so discard()
+    removes exactly that (and the directory itself only if this run made it), never anything else."""
 
     def __init__(self, path):
-        self.path = os.path.abspath(path)
-        require(self.path not in ("/", os.path.abspath(os.path.expanduser("~"))), "--out %s is / or the home directory itself: name a "
+        given = os.path.abspath(path)
+        require(os.path.basename(given) not in ("", ".", ".."), "--out %s does not name a directory of its own" % path)
+        # the parent resolved (a link above --out is followed once, here, and named); --out itself is never a link
+        self.path = os.path.join(os.path.realpath(os.path.dirname(given)), os.path.basename(given))
+        require(self.path not in ("/", os.path.realpath(os.path.expanduser("~"))), "--out %s is / or the home directory itself: name a "
                 "directory of its own" % self.path)
+        checkout = inside_git_checkout(os.path.dirname(self.path))
+        require(checkout is None, "--out %s is inside the git checkout %s: TEST private keys are never written where they could be "
+                "committed; name a directory outside any checkout" % (self.path, checkout))
+        self.files, self.dirs, self.made = [], [], False
         try:
             info = os.lstat(self.path)
         except FileNotFoundError:
             parent = os.path.dirname(self.path)
             require(os.path.isdir(parent), "--out %s: its parent directory does not exist" % self.path)
             os.mkdir(self.path, 0o700)
+            self.made = True
             info = os.lstat(self.path)
         require(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and info.st_uid == os.geteuid(),
                 "--out %s is not a directory of this user's (a link is refused)" % self.path)
         self.fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
-        require(not os.listdir(self.fd), "--out %s is not empty: TEST material is written only into an empty directory" % self.path)
-        os.fchmod(self.fd, 0o700)
-        self.files = []
+        try:
+            require(not os.listdir(self.fd), "--out %s is not empty: TEST material is written only into an empty directory" % self.path)
+            os.fchmod(self.fd, 0o700)
+        except BaseException:
+            os.close(self.fd)
+            raise
 
     def _parts(self, name):
         parts = name.split("/")
@@ -241,19 +300,24 @@ class Output:
     def mkdir(self, name):
         self._parts(name)
         os.mkdir(name, 0o700, dir_fd=self.fd)
+        self.dirs.append(name)
         dfd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.fd)
         try:
             os.fchmod(dfd, 0o700)
         finally:
             os.close(dfd)
 
+    def _dir(self, parts):
+        if len(parts) == 1:
+            return self.fd
+        return os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.fd)
+
     def write(self, name, data):
         parts = self._parts(name)
-        where = self.fd
-        if len(parts) == 2:
-            where = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=self.fd)
+        where = self._dir(parts)
         try:
             fd = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=where)
+            self.files.append(name)                    # made by this run: discard() removes it, whatever follows
             try:
                 os.fchmod(fd, 0o600)
                 view = memoryview(data)
@@ -265,7 +329,6 @@ class Output:
         finally:
             if where != self.fd:
                 os.close(where)
-        self.files.append(name)
         return os.path.join(self.path, *parts)
 
     def json(self, name, obj):
@@ -273,6 +336,38 @@ class Output:
 
     def join(self, name):
         return os.path.join(self.path, *self._parts(name))
+
+    def discard(self):
+        """Removes what this run made, by name under the directory's descriptor: its files, then its sub-directories,
+        then --out itself if this run made it (and it is empty). Returns the names it could not remove."""
+        left = []
+        for name in reversed(self.files):
+            parts = self._parts(name)
+            try:
+                where = self._dir(parts)
+                try:
+                    os.unlink(parts[-1], dir_fd=where)
+                finally:
+                    if where != self.fd:
+                        os.close(where)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                left.append(name)
+        for name in reversed(self.dirs):
+            try:
+                os.rmdir(name, dir_fd=self.fd)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                left.append(name + "/")
+        self.files, self.dirs = [], []
+        if self.made and not left:
+            try:
+                os.rmdir(self.path)
+            except OSError:
+                left.append(".")
+        return left
 
     def close(self):
         os.close(self.fd)
@@ -360,25 +455,37 @@ def generate(root, root_pk8, out, node_id, site, build_record, pcrs, tpm_firmwar
     require(sitecfg.profile(cfg) == sitecfg.SINGLE_NODE and cfg["boot_mesh"]["node_id"] == node_id,
             "the site is not a single-node host's (boot_mesh.owner) for %s" % node_id)
     record = uki.load_record(membership.canonical(build_record), signed=True)
+    require(record["initrd_review"]["passed"] is True, "the build record's initrd review did not pass (%s): TEST material is made "
+            "only for a reviewed image" % "; ".join(record["initrd_review"]["findings"]))
     pinned = record["initrd_review"]["root_key"]
     # council on #787: an image that pins NO root is refused too (staging images always pin the TEST root they trust)
     require(pinned is not None, "the build record's image pins no membership root (initrd_review.root_key is null): TEST "
             "material is made only for an image that trusts this TEST root")
-    require(pinned == hashlib.sha256(membership.canonical(root)).hexdigest(),
-            "the build record's image pins another membership root (initrd_review.root_key %s, not the SHA-256 of root-key.json "
-            "for %s): TEST material is made only for an image that trusts this TEST root" % (pinned, root))
+    require(pinned in root_key_pins(root),
+            "the build record's image pins another membership root (initrd_review.root_key %s is the SHA-256 of neither form of "
+            "root-key.json for %s alone): TEST material is made only for an image that trusts this TEST root" % (pinned, root))
     require(isinstance(pcrs, dict) and sorted(pcrs) == sorted(PCR_INDICES), "the PCR values are exactly PCRs 0-7")
     site_cred = bootcreds.site_document(cfg, device)
     entry = uki.measurement_set(record, label or record["name"], tpm_firmware_version, pcrs, {"regalia.site.cred": site_cred})
     root_key = read_root_private(root_pk8, root)
 
     output = Output(out)
+    done = False
     try:
-        return _write_all(output, root, root_key, node_id, site, cfg, site_cred, entry, record, recipients, say,
-                          serialization, ec, ed25519, x25519, hashes)
+        summary = _write_all(output, root, root_key, node_id, site, cfg, site_cred, entry, record, recipients, say,
+                             serialization, ec, ed25519, x25519, hashes)
+        done = True
+        return summary
     except (Refused, OSError) as failure:
-        raise Refused("%s; %s is INCOMPLETE and holds TEST secrets: delete it, nothing in it is to be used" % (failure, output.path)) from None
+        left = output.discard()
+        done = True
+        if left:
+            raise Refused("%s; %s is INCOMPLETE and still holds TEST material this run could not remove (%s): delete it, nothing "
+                          "in it is to be used" % (failure, output.path, ", ".join(left))) from None
+        raise Refused("%s; everything this run wrote under %s was removed" % (failure, output.path)) from None
     finally:
+        if not done:                                   # any other exception, an interrupt included: no TEST secret stays
+            output.discard()
         output.close()
 
 
@@ -532,6 +639,63 @@ def verify_outputs(directory, root, node_id):
                 "the measurements' PCR 12 is not TEST-regalia.site.cred's")
     with open(os.path.join(directory, "TEST-lockout.value"), "rb") as f:
         require(re.fullmatch(rb"[!-~]{16,32}\n", f.read(64)) is not None, "TEST-lockout.value is not 16-32 printable characters and a newline")
+    verify_keys(directory, root, load)
+
+
+def _read(directory, name, limit=MAX_KEY_FILE):
+    fd = os.open(os.path.join(directory, name), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as f:
+        data = f.read(limit + 1)
+    require(len(data) <= limit, "%s is larger than %d bytes" % (name, limit))
+    return data
+
+
+def verify_keys(directory, root, load):
+    """Every TEST key file read back, its public key held to what the SIGNED records (and TEST-genesis.json) name: the
+    owner and release keys to the card record, the SSH keys to its ssh_signers, K_A to the offline-keys record, the
+    WireGuard pair to itself and its hex, the recipients file to both records. Raises Refused."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+    def private(name):
+        try:
+            return serialization.load_pem_private_key(_read(directory, name), None)
+        except (ValueError, TypeError):
+            raise Refused("%s is not an unencrypted PKCS#8 PEM key" % name) from None
+    card = load("TEST-cards.record.json")["record"]
+    offline = load("TEST-offline-keys.record.json")["record"]
+    oa = load("TEST-ownerauth.record.json")["record"]
+    summary = load("TEST-genesis.json")
+    require(summary.get(MARK) is True and summary.get("root") == root, "TEST-genesis.json is not this run's TEST summary")
+    for entry in card["owner_keys"]:
+        require(_raw_public(private("TEST-%s.ed25519.pk8.pem" % entry["role"])) == entry["key"] == summary["owner_keys"][entry["role"]]["key"],
+                "TEST-%s.ed25519.pk8.pem is not the key the card record names for %s" % (entry["role"], entry["role"]))
+    require(_raw_public(private("TEST-release.ed25519.pk8.pem")) == card["release_key"]["key"] == summary["release_key"],
+            "TEST-release.ed25519.pk8.pem is not the release key the card record names")
+    for role, signer in zip(cardrecord.ROLES, card["ssh_signers"]):
+        try:
+            key = serialization.load_ssh_private_key(_read(directory, "TEST-ssh-%s.key" % role), None)
+        except (ValueError, TypeError):
+            raise Refused("TEST-ssh-%s.key is not an OpenSSH private key" % role) from None
+        public = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
+        require(public == signer["key"] and _read(directory, "TEST-ssh-%s.pub" % role).decode("ascii", "replace") == public + "\n",
+                "TEST-ssh-%s.key/.pub is not the SSH signer the card record names" % role)
+    anchor = private("TEST-anchor-policy.p256.pk8.pem").public_key()
+    point = anchor.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    require(point == offline["anchor_policy_entry"]["key"] == summary["anchor_policy_key"]["key"],
+            "TEST-anchor-policy.p256.pk8.pem is not K_A as the offline-keys record names it")
+    require(offline["publics"]["root"]["spki"] == base64.b64encode(
+        bytes.fromhex("302a300506032b6570032100") + bytes.fromhex(root)).decode(), "the offline-keys record publishes another root")
+    raw = base64.b64decode(_read(directory, "TEST-owner-wg.key", 64).strip(), validate=True)
+    require(len(raw) == 32, "TEST-owner-wg.key is not a WireGuard private key")
+    wg = X25519PrivateKey.from_private_bytes(raw).public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    require(_read(directory, "TEST-owner-wg.pub", 64) == base64.b64encode(wg) + b"\n"
+            and _read(directory, "TEST-owner-wg.pub.hex", 80) == wg.hex().encode() + b"\n" and summary["owner_wg_pub"] == wg.hex(),
+            "TEST-owner-wg.pub/.pub.hex is not TEST-owner-wg.key's public key")
+    subkeys = [r["subkey"] for r in card["ownerauth_recipients"]]
+    require([r["subkey"] for r in oa["yk_recipients"]] == subkeys and sorted(oa["verify_keys"]) == sorted(subkeys)
+            and _read(directory, "TEST-owner-recipients.txt").decode("ascii", "replace").split() == subkeys,
+            "the ownerauth recipients are not the card record's, or TEST-owner-recipients.txt is not them")
 
 
 def _readme(summary):
@@ -570,7 +734,7 @@ TEST-SHA256SUMS: sha256sum -c TEST-SHA256SUMS
 # ---- the command ----
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.testgenesis", description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(prog="python3 -I %s" % os.path.realpath(__file__), description=__doc__.split("\n\n")[0])
     parser.add_argument("--root-key", required=True, help="the TEST membership root: 64 hex, root-key.json's value")
     parser.add_argument("--root-pk8", required=True, help="its private key: unencrypted PKCS#8 PEM, a file of this user's, mode 0600")
     parser.add_argument("--out", required=True, help="the output directory: created 0700, or an existing empty one")

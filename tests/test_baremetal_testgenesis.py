@@ -14,6 +14,8 @@ import pathlib
 import re
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -237,6 +239,35 @@ class Outputs(Case):
                        "TEST-anchor-policy.p256.pk8.pem"):
             self.assertEqual(stat.S_IMODE(os.lstat(os.path.join(self.out, secret)).st_mode), 0o600, secret)
 
+    def test_verify_outputs_refuses_a_tampered_output(self):
+        """The read-back is a check of its own: each tampering below is refused by verify_outputs (not only mocked away)."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        testgenesis.verify_outputs(self.out, self.root, NODE)
+        pem = lambda k: k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+        def tampered(name, data, pattern):
+            path = os.path.join(self.out, name)
+            saved = pathlib.Path(path).read_bytes()
+            pathlib.Path(path).write_bytes(data)
+            try:
+                self.refused(pattern, testgenesis.verify_outputs, self.out, self.root, NODE)
+            finally:
+                pathlib.Path(path).write_bytes(saved)
+        cards = self.load("TEST-cards.record.json")
+        cards["signature"] = ("00" if cards["signature"][:2] != "00" else "11") + cards["signature"][2:]
+        tampered("TEST-cards.record.json", json.dumps(cards).encode(), "signature")
+        tampered("TEST-owner-main.ed25519.pk8.pem", pem(Ed25519PrivateKey.generate()), "TEST-owner-main.ed25519.pk8.pem is not the key")
+        tampered("TEST-release.ed25519.pk8.pem", pem(Ed25519PrivateKey.generate()), "not the release key")
+        tampered("TEST-anchor-policy.p256.pk8.pem", pem(ec.generate_private_key(ec.SECP256R1())), "is not K_A")
+        tampered("TEST-owner-wg.pub.hex", b"00" * 32 + b"\n", "is not TEST-owner-wg.key's public key")
+        tampered("TEST-ssh-owner-backup.pub", b"ssh-ed25519 AAAA\n", "is not the SSH signer")
+        tampered("TEST-owner-recipients.txt", b"A" * 40 + b"\n", "TEST-owner-recipients.txt is not them")
+        tampered("TEST-ownerauth-%s.value" % NODE, b"00" * 32 + b"\n", "not alder's")
+        tampered("TEST-lockout.value", b"short\n", "16-32 printable")
+        testgenesis.verify_outputs(self.out, self.root, NODE)
+
     def test_the_root_private_key_is_nowhere_in_the_output(self):
         with open(self.pk8, "rb") as f:
             pem = f.read()
@@ -270,6 +301,19 @@ class Guard(Case):
                 out = os.path.join(self.d, "real-" + real[:8])
                 self.refused("is a real or ceremony root", self.generate, out=out, root=real, allow={real})
                 self.assertFalse(os.path.lexists(out))
+
+    def test_a_callers_deny_list_only_adds_to_the_real_roots(self):
+        """#787 review: deny= never replaces REAL_ROOTS; an empty one leaves every real root refused."""
+        for real in testgenesis.REAL_ROOTS:
+            with self.subTest(root=real):
+                self.refused("is a real or ceremony root", testgenesis.check_root, real, allow={real}, deny=set())
+                self.refused("is a real or ceremony root", testgenesis.check_root, real, allow={real}, deny={"ab" * 32})
+                out = os.path.join(self.d, "deny-" + real[:8])
+                self.refused("is a real or ceremony root", self.generate, out=out, root=real, allow={real}, deny=set())
+                self.assertFalse(os.path.lexists(out))
+        self.refused("a caller's deny-list", testgenesis.check_root, self.root, allow={self.root}, deny={self.root})
+        with self.assertRaises(TypeError):
+            testgenesis.REAL_ROOTS["ab" * 32] = "x"                   # the deny-list cannot be edited at run time either
 
     def test_every_ceremony_root_in_the_vectors_is_on_the_deny_list(self):
         """regalia-ceremony's writers made the roots of these vectors: a new one added there is denied here too."""
@@ -321,6 +365,30 @@ class Guard(Case):
         self.refused("pins another membership root", self.generate, build_record=record)
         self.assertFalse(os.path.lexists(self.out))
 
+    def test_an_image_whose_initrd_review_did_not_pass_is_refused(self):
+        record = signed_record(self.root)
+        record["initrd_review"].update(passed=False, findings=["usr/bin/sh is not in the inventory"])
+        self.refused("initrd review did not pass \\(usr/bin/sh is not in the inventory\\)", self.generate, build_record=record)
+        self.assertFalse(os.path.lexists(self.out))
+
+    def test_the_pin_is_the_sha256_of_the_canonical_root_key_json_in_either_form(self):
+        """uki.py hashes the --root-key file's bytes, canonical JSON membership.root_entries accepts: "<hex>" or ["<hex>"]."""
+        for form in (self.root, [self.root]):
+            with self.subTest(form=form):
+                raw = membership.canonical(form)
+                self.assertEqual(membership.root_entries(membership.load(raw)), [("ed25519", self.root)])
+                record = signed_record(self.root)
+                record["initrd_review"]["root_key"] = hashlib.sha256(raw).hexdigest()
+                out = os.path.join(self.d, "form-%d" % isinstance(form, list))
+                self.generate(out=out, build_record=record)
+        self.assertIn(hashlib.sha256(b'"%s"' % self.root.encode()).hexdigest(), testgenesis.root_key_pins(self.root))
+        for other in ([self.root, "ab" * 32], self.root + "\n", ["ab" * 32]):
+            with self.subTest(other=other):
+                record = signed_record(self.root)
+                raw = other.encode() if isinstance(other, str) else membership.canonical(other)
+                record["initrd_review"]["root_key"] = hashlib.sha256(raw).hexdigest()
+                self.refused("pins another membership root", self.generate, out=os.path.join(self.d, "x"), build_record=record)
+
     def test_an_image_that_pins_no_root_is_refused(self):
         record = signed_record(self.root)
         record["initrd_review"]["root_key"] = None
@@ -346,12 +414,54 @@ class Directory(Case):
         self.refused("not a directory of this user's", self.generate)
         self.assertEqual(os.listdir(target), [])
 
-    def test_a_failure_after_writing_says_the_directory_is_incomplete(self):
+    def test_a_failure_after_writing_removes_what_the_run_wrote(self):
         def failing(*_):
             raise membership.Refused("a verifier refused")
         with mock.patch.object(testgenesis, "verify_outputs", failing):
-            self.refused(r"a verifier refused; .* is INCOMPLETE and holds TEST secrets: delete it", self.generate)
-        self.assertNotIn("TEST-SHA256SUMS", os.listdir(self.out))
+            self.refused(r"a verifier refused; everything this run wrote under .* was removed", self.generate)
+        self.assertFalse(os.path.lexists(self.out))                   # the run made it: gone with its TEST secrets
+        os.mkdir(self.out, 0o755)                                      # the caller's own empty directory stays, empty
+        with mock.patch.object(testgenesis, "verify_outputs", failing):
+            self.refused("was removed", self.generate)
+        self.assertEqual(os.listdir(self.out), [])
+        os.rmdir(self.out)
+
+    def test_an_interrupt_after_writing_removes_what_the_run_wrote_too(self):
+        def interrupted(*_):
+            raise KeyboardInterrupt
+        with mock.patch.object(testgenesis, "verify_outputs", interrupted), self.assertRaises(KeyboardInterrupt):
+            self.generate()
+        self.assertFalse(os.path.lexists(self.out))
+
+    def test_what_cannot_be_removed_is_named(self):
+        def failing(*_):
+            raise membership.Refused("a verifier refused")
+        real_unlink = os.unlink
+
+        def stuck(name, *a, **kw):
+            if name == "TEST-lockout.value":
+                raise PermissionError(1, "Operation not permitted")
+            return real_unlink(name, *a, **kw)
+        with mock.patch.object(testgenesis, "verify_outputs", failing), mock.patch.object(testgenesis.os, "unlink", stuck):
+            self.refused(r"is INCOMPLETE and still holds TEST material this run could not remove \(TEST-lockout.value\)", self.generate)
+        self.assertEqual(os.listdir(self.out), ["TEST-lockout.value"])
+
+    def test_an_out_inside_a_git_checkout_is_refused(self):
+        checkout = os.path.join(self.d, "checkout")
+        os.makedirs(os.path.join(checkout, ".git"))
+        os.makedirs(os.path.join(checkout, "sub"))
+        for out in (os.path.join(checkout, "out"), os.path.join(checkout, "sub", "out")):
+            with self.subTest(out=out):
+                self.refused("is inside the git checkout", self.generate, out=out)
+                self.assertFalse(os.path.lexists(out))
+        worktree = os.path.join(self.d, "worktree")                    # a linked worktree's .git is a file
+        os.makedirs(worktree)
+        with open(os.path.join(worktree, ".git"), "w") as f:
+            f.write("gitdir: /elsewhere\n")
+        self.refused("is inside the git checkout", self.generate, out=os.path.join(worktree, "out"))
+        if os.path.lexists(os.path.join(ROOT_DIR, ".git")):            # this repository itself, where it is a checkout
+            self.refused("is inside the git checkout", self.generate, out=os.path.join(ROOT_DIR, "TEST-out"))
+            self.assertFalse(os.path.lexists(os.path.join(ROOT_DIR, "TEST-out")))
 
     def test_names_never_leave_the_directory(self):
         os.mkdir(self.out)
@@ -385,6 +495,31 @@ class CommandLine(Case):
         self.assertIn("verified by the existing verifiers", out.getvalue())
         self.assertEqual(sitecfg.load(os.path.join(self.out, "TEST-site.json")), sitecfg.validate(site()))
         testgenesis.verify_outputs(self.out, self.root, NODE)
+
+    def test_it_runs_by_path_under_python_I_from_another_directory(self):
+        """python3 -I /abs/.../testgenesis.py: the checkout comes from the file, never the working directory, where a planted
+        secrets.py and deploy/ package would otherwise be imported first."""
+        elsewhere = os.path.join(self.d, "elsewhere")
+        os.makedirs(os.path.join(elsewhere, "deploy", "baremetal"))
+        for name in ("secrets.py", "deploy/__init__.py", "deploy/baremetal/__init__.py", "deploy/baremetal/membership.py"):
+            with open(os.path.join(elsewhere, name), "w") as f:
+                f.write("raise SystemExit('PLANTED %s WAS IMPORTED')\n" % name)
+        script = os.path.join(ROOT_DIR, "deploy", "baremetal", "testgenesis.py")
+        run = lambda argv: subprocess.run([sys.executable, "-I", script] + argv, cwd=elsewhere, capture_output=True, text=True,
+                                          env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": elsewhere}, timeout=120)
+        done = run(["--help"])
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("python3 -I %s" % os.path.realpath(script), done.stdout)
+        done = run(self.argv(out=os.path.join(self.d, "by-path")))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("is not on the TEST allow-list", done.stderr)               # the guard ran: every import resolved
+        self.assertNotIn("PLANTED", done.stdout + done.stderr)
+        self.assertFalse(os.path.lexists(os.path.join(self.d, "by-path")))
+        argv = self.argv(out=os.path.join(self.d, "by-path"))
+        argv[argv.index("--root-key") + 1] = next(iter(testgenesis.REAL_ROOTS))
+        done = run(argv)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("is a real or ceremony root", done.stderr)
 
     def test_the_pcrs_are_exactly_0_to_7(self):
         argv = self.argv()
