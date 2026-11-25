@@ -88,6 +88,33 @@ def esp_mount_failure(part, appeared_after, mount_rc, mount_stderr, losetup_list
         head = "HOST ESP MOUNT FAILED: %s appeared after %.2f s, then mount -t vfat exited %d" % (part, appeared_after, mount_rc)
     return "%s\n mount rc=%s stderr: %s\n losetup -l:\n%s\n lsblk:\n%s" % (
         head, mount_rc, (mount_stderr or "").strip() or "(empty)", losetup_list.rstrip(), lsblk.rstrip())
+
+
+def slot_b_verify_failure(slot, data, hashes, roothash, first, source, compared, second):
+    """Why the host's check of slot B's freshly written pair failed, by cause, or None when the first verify passed
+    (regalia-kms-4h4). A failure at block 0 (#789, run 45647305255) could be a bad write or a stale read through a
+    reused loop name; this tells them apart from what was measured. first and second: (rc, stderr) of veritysetup
+    verify on the partitions, before and after the comparison; source: the same on the slot's own image files;
+    compared: {partition number: (cmp rc, cmp output)} of each partition against its image file. Every cause still
+    FAILS the test: a stale read is named, never retried into a pass."""
+    if first[0] == 0:
+        return None
+    if source[0] != 0:
+        cause = "SOURCE: the slot's own image files do not verify"
+    elif any(rc != 0 for rc, _ in compared.values()):
+        cause = "WRITE: a partition's bytes differ from the slot's image file"
+    elif second[0] == 0:
+        cause = "STALE READ: the bytes match the slot's image files and a second verify passes"
+    else:
+        cause = "UNEXPLAINED: the bytes match and the image files verify, yet the partitions do not"
+    lines = ["HOST SLOT B VERITY VERIFY FAILED (%s): slot %s data=%s hashes=%s roothash=%s rc=%d: %s" % (
+        cause, slot, data, hashes, roothash, first[0], (first[1] or "").strip() or "(empty)"),
+        " image files verify rc=%d: %s" % (source[0], (source[1] or "").strip() or "(empty)")]
+    lines += [" cmp partition %d rc=%d: %s" % (n, rc, (out or "").strip() or "(identical)") for n, (rc, out) in sorted(compared.items())]
+    lines.append(" second verify rc=%d: %s" % (second[0], (second[1] or "").strip() or "(empty)"))
+    return "\n".join(lines)
+
+
 run = tub.run
 
 
@@ -518,6 +545,35 @@ class EspMountFailure(unittest.TestCase):
 
     def test_an_empty_stderr_still_says_so(self):
         self.assertIn("stderr: (empty)", esp_mount_failure("/dev/loop7p1", None, 32, "", "", ""))
+
+
+class SlotBVerifyFailure(unittest.TestCase):
+    """regalia-kms-4h4: the host's check of slot B names its cause from what it measured."""
+    BAD = (2, "Verification failed at position 0.\nVerification of data area failed.\n")
+    OK = (0, "")
+
+    def why(self, first=BAD, source=OK, compared=None, second=BAD):
+        return slot_b_verify_failure("c", "/dev/loop0p4", "/dev/loop0p5", "d1" * 32, first, source,
+                                     compared if compared is not None else {4: (0, ""), 5: (0, "")}, second)
+
+    def test_a_first_verify_that_passes_is_no_failure(self):
+        self.assertIsNone(self.why(first=self.OK))
+
+    def test_each_cause_is_named(self):
+        for kwargs, cause in (({"source": self.BAD}, "SOURCE:"),
+                              ({"compared": {4: (1, "/dev/loop0p4 usr.erofs differ: byte 1, line 1"), 5: (0, "")}}, "WRITE:"),
+                              ({"second": self.OK}, "STALE READ:"),
+                              ({}, "UNEXPLAINED:")):
+            with self.subTest(cause=cause):
+                why = self.why(**kwargs)
+                self.assertTrue(why.startswith("HOST SLOT B VERITY VERIFY FAILED (" + cause), why)
+                self.assertIn("Verification failed at position 0.", why)
+
+    def test_the_measurements_are_reported(self):
+        why = self.why(compared={4: (1, "differ: byte 1, line 1"), 5: (0, "")})
+        for measured in ("data=/dev/loop0p4", "hashes=/dev/loop0p5", "rc=2", "cmp partition 4 rc=1: differ: byte 1",
+                         "cmp partition 5 rc=0: (identical)", "image files verify rc=0: (empty)", "second verify rc=2"):
+            self.assertIn(measured, why)
 
 
 class PreGenesisFixture(unittest.TestCase):
@@ -1731,10 +1787,14 @@ class OnQemuVerity(OnQemu):
                 done = run(["dd", "if=%s/usr-%s/%s" % (BOOT, slot, name), "of=" + part, "bs=4M", "conv=fsync", "status=none"], capture_output=True)
             finally:
                 run(["losetup", "-d", loop], capture_output=True)
+                # regalia-kms-4h4: losetup -d can return before the loop and its partition nodes are gone, and the next
+                # losetup --find reuses the name: wait for udev, so the reattach below is a fresh device
+                run(["udevadm", "settle", "--timeout=30"], capture_output=True)
             self.assertEqual(done.returncode, 0, "HOST SLOT B WRITE FAILED: slot %s partition %d (%s): %r" % (slot, number, name, done.stderr))
         for number, key in ((4, "usr_partuuid"), (5, "usr_verity_partuuid")):
             done = run(["sfdisk", "--part-uuid", self.image, str(number), self.usr[slot][key]], capture_output=True)
             self.assertEqual(done.returncode, 0, done.stderr)
+        run(["udevadm", "settle", "--timeout=30"], capture_output=True)
         # Reattach after the GPT writes so blkid reads the new partition table. Diagnose the fixture's on-disk pair
         # before QEMU starts, without activating dm-verity, formatting a tree, or repairing anything.
         record = self.usr[slot]
@@ -1749,9 +1809,21 @@ class OnQemuVerity(OnQemu):
                 observed = probe.stdout.strip().lower()
                 self.assertEqual(observed, record[key], "HOST SLOT B PARTUUID MISMATCH: slot %s partition %d (%s), expected %s, got %s" % (
                     slot, number, part, record[key], observed))
+            # no page of either node cached from before this attach (regalia-kms-4h4)
+            run(["blockdev", "--flushbufs", data, hashes], capture_output=True)
             verified = run(["veritysetup", "verify", data, hashes, record["roothash"]], capture_output=True, text=True)
-            self.assertEqual(verified.returncode, 0, "HOST SLOT B VERITY VERIFY FAILED: slot %s data=%s hashes=%s roothash=%s rc=%d: %s" % (
-                slot, data, hashes, record["roothash"], verified.returncode, verified.stderr))
+            if verified.returncode != 0:
+                files = {4: "%s/usr-%s/usr.erofs" % (BOOT, slot), 5: "%s/usr-%s/usr.verity" % (BOOT, slot)}
+                source = run(["veritysetup", "verify", files[4], files[5], record["roothash"]], capture_output=True, text=True)
+                compared = {}
+                for number, part in ((4, data), (5, hashes)):
+                    # the partition may be longer than its image: compare the image's length only
+                    done = run(["cmp", "-n", str(os.path.getsize(files[number])), files[number], part], capture_output=True, text=True)
+                    compared[number] = (done.returncode, done.stdout + done.stderr)
+                run(["blockdev", "--flushbufs", data, hashes], capture_output=True)
+                second = run(["veritysetup", "verify", data, hashes, record["roothash"]], capture_output=True, text=True)
+                self.fail(slot_b_verify_failure(slot, data, hashes, record["roothash"], (verified.returncode, verified.stderr),
+                                                (source.returncode, source.stderr), compared, (second.returncode, second.stderr)))
             print("HOST SLOT B VERIFIED: slot %s data=%s hashes=%s roothash=%s PARTUUIDs=%s/%s" % (
                 slot, data, hashes, record["roothash"], record["usr_partuuid"], record["usr_verity_partuuid"]), file=sys.stderr)
         finally:
