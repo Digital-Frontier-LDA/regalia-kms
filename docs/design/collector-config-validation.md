@@ -12,11 +12,18 @@ authorize a request. The caller must provide stable configuration files and reva
 they change or their validity interval ends. The returned material is not a persistent fact
 or an ownership/permission attestation.
 
-Single-node configuredness enforcement remains open: both daemon and node shipper configuration
-need a common contract that preserves private-key separation, and the request check must happen
-before policy reservation. Existing synchronous audit acknowledgement, backlog readiness and
-startup continuity checks remain in force. Collector downtime is not an additional offline
-configuration failure; those separate controls may still refuse an operation.
+Single-node configuredness enforcement is now in place (regalia-kms-dx7.9, PA decision D2): under a
+single-node admission with no audit collector configured, the daemon refuses every stateful operation
+(wrap, key-agreement, release-secret, seal-envelope) with `collector-not-configured` (503, retryable)
+before any policy or opstate reservation — the refusal is in the coordinator, before the spend.
+A sign carrying a Cosmos transaction (content type `application/vnd.cosmos.tx+protobuf`) is refused
+likewise: its allowed evaluation reserves the Cosmos account sequence, so the coordinator asks the
+policy engine before it routes — a plain sign reserves nothing the decision did not already accept.
+Stateless operations (plain sign, unwrap, certificate-sign) keep serving. A collector that is configured
+but unreachable does not refuse: the shipper retries, and the outage is an alert, not a refusal.
+Existing synchronous audit acknowledgement, backlog readiness and startup continuity checks remain in
+force. Collector downtime is not an additional offline configuration failure; those separate controls
+may still refuse an operation.
 
 Direct loader tests cover offline behavior and invalid configuration. Existing CLI check, probe
 and conformance tests retain the command contract. This extraction alone does not complete dx7.9.

@@ -38,10 +38,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -295,7 +297,7 @@ func (c *Collector) Close() error {
 	return firstErr
 }
 
-// Handler serves the three endpoints the sink talks to. Method dispatch is the mux's
+// Handler serves the endpoints the sink talks to. Method dispatch is the mux's
 // (Go 1.22 patterns): a GET to /v1/events is a 405, not a handler that forgot to check.
 func (c *Collector) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -308,6 +310,245 @@ func (c *Collector) Handler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
+}
+
+// MetricsHandler is the collector's own read-only metrics endpoint (regalia-kms-dx7.9, PA decision
+// D1=A): the monitoring service scrapes it over the SAME mTLS contract the sink's world uses (the
+// collector's listener, its client CA), so the reference the single-node behind rules compare
+// against comes from the off-host witness, not from the node it judges — a rolled-back or
+// withholding node cannot supply its own floor. It is mounted by the collector's binary on the same
+// listener as the sink protocol (one listener, one certificate, the sink's own discipline), because
+// a second listener would be a second door on the same state.
+//
+// ONE SERIES PER NODE, NOT PER TRAIL. The collector's streams are keyed <site>.<trail> (one per
+// trail the shipper ships), but the node the rules judge is the SITE: the gauges are therefore
+// labeled by the site alone (the stream's site minus its .<trail> suffix), and each node's
+// series takes its two values from its own two trails — the membership epoch from the node's sync
+// trail, the anchor epoch from its esp-advances trail — with no cross-trail inference. A node the
+// collector has not seen in a trail has no series for that trail, and the rules see it as absent:
+// RegaliaCollectorEpochMissing is the blind state, and a 0 the endpoint invented would not be one.
+//
+// The scrape job (job regalia-collector, MONITORING.md section 4.1) copies the site label onto
+// instance with a metric_relabel_configs rule — a series-label transform, the only place the
+// mapping can happen (relabel_configs rewrites TARGET labels before the scrape and cannot reach a
+// label in the scraped series). The reference then carries the node's own instance under the
+// collector's job, and the behind rules join one-to-one on instance, ignoring job and
+// topology_profile (the two labels the sides carry differently).
+//
+//	regalia_collector_witnessed_membership_epoch{site}  the highest manifest epoch committed in
+//	that node's sync trail, the reading recover.witness_epoch takes from the same lines
+//	regalia_collector_witnessed_anchor_epoch{site}      the highest epoch committed in that node's
+//	esp-advances trail
+//
+// The values are recomputed from the committed stream files on every scrape: the commit path is
+// append-only, the files verify on open, and a scrape opens its OWN read-only handle and walks
+// through the committed size — it shares no file offset with the commit path, and a stream whose
+// file cannot be read yields no series (the blind state), never a value the endpoint invented.
+func (c *Collector) MetricsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_membership_epoch The highest manifest epoch committed in the node's sync trail.")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_membership_epoch gauge")
+		fmt.Fprintln(w, "# HELP regalia_collector_witnessed_anchor_epoch The highest epoch committed in the node's esp-advances trail.")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witnessed_anchor_epoch gauge")
+		fmt.Fprintln(w, "# HELP regalia_collector_witness_stream_readable 1 when every identity's stream of the node's trail was read through its committed size, 0 when one could not be (its witnessed epoch is then withheld).")
+		fmt.Fprintln(w, "# TYPE regalia_collector_witness_stream_readable gauge")
+		// The streams' identity, site and committed size are snapshotted UNDER c.mu: the commit path
+		// updates size under the same lock, so reading it after Unlock would race an append (PR #783
+		// CodeRabbit r4685272685 follow-up). The walk below then reads each file only up to that size.
+		type streamSnapshot struct {
+			identity, site string
+			size           int64
+		}
+		c.mu.Lock()
+		streams := make([]streamSnapshot, 0, len(c.streams))
+		for _, stream := range c.streams {
+			streams = append(streams, streamSnapshot{identity: stream.identity, site: stream.site, size: stream.size})
+		}
+		c.mu.Unlock()
+		// One entry per node site, gathering every identity's stream for it. Streams are keyed by
+		// (identity, site), and the site is the X-Regalia-Site header, which the collector checks only
+		// for its charset, not against the identity: two client certificates that ship under the same
+		// site name therefore hold two streams for one node (binding a site to one identity is
+		// regalia-kms-dx7.9 follow-up NIT2). The endpoint must still emit ONE series per gauge per site
+		// (a duplicate metric-name/label set makes the scrape's value undefined — PR #783 r4685272669),
+		// and the value is the HIGHEST epoch any identity's committed trail holds: the behind rules
+		// fire when the node is below the witness, so the maximum is the sensitive choice, and a
+		// lagging stream's lower epoch can never mask a rollback below what another already shipped.
+		type witness struct {
+			identity string
+			site     string
+			size     int64
+		}
+		type nodeWitness struct {
+			sync []witness
+			esp  []witness
+		}
+		nodes := map[string]*nodeWitness{}
+		for _, stream := range streams {
+			nodeSite := splitWitnessTrail(stream.site)
+			if nodeSite == "" {
+				continue
+			}
+			node := nodes[nodeSite]
+			if node == nil {
+				node = &nodeWitness{}
+				nodes[nodeSite] = node
+			}
+			entry := witness{identity: stream.identity, site: stream.site, size: stream.size}
+			switch {
+			case strings.HasSuffix(stream.site, ".sync"):
+				node.sync = append(node.sync, entry)
+			case strings.HasSuffix(stream.site, ".esp-advances"):
+				node.esp = append(node.esp, entry)
+			}
+		}
+		// highest is the site's witness across its identities' streams. A stream that cannot be read
+		// through its committed size makes the WHOLE site report no epoch for that trail, never the
+		// other streams' lower maximum: an unreadable stream may hold the highest epoch, and a lower
+		// floor would hide a rollback (regalia-kms-1gv). That withheld epoch is not silent: readable is
+		// false, the endpoint publishes regalia_collector_witness_stream_readable 0 for the site and
+		// trail (RegaliaCollectorWitnessUnreadable), the missing series fires
+		// RegaliaCollectorEpochMissing or RegaliaCollectorAnchorEpochMissing, and the collector's log
+		// names the stream and the error (PR #783 GA review 6052752757).
+		highest := func(trails []witness) (epoch uint64, ok, readable bool) {
+			readable = true
+			for _, trail := range trails {
+				value, found, err := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine)
+				if err != nil {
+					log.Printf("audit collector: witness stream %s is unreadable through its committed size %d: %v; the %s epoch is withheld",
+						c.streamPath(trail.identity, trail.site), trail.size, err, trail.site)
+					readable = false
+					continue
+				}
+				if found && (!ok || value > epoch) {
+					epoch, ok = value, true
+				}
+			}
+			if !readable {
+				return 0, false, false
+			}
+			return epoch, ok, true
+		}
+		sites := make([]string, 0, len(nodes))
+		for site := range nodes {
+			sites = append(sites, site)
+		}
+		sort.Strings(sites)
+		readableValue := map[bool]int{false: 0, true: 1}
+		for _, site := range sites {
+			node := nodes[site]
+			if len(node.sync) > 0 {
+				membership, ok, readable := highest(node.sync)
+				if ok {
+					// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
+					fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", site, membership)
+				}
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- as above: text/plain exposition, validated site with %q, a fixed trail name, %d
+				fmt.Fprintf(w, "regalia_collector_witness_stream_readable{site=%q,trail=%q} %d\n", site, "sync", readableValue[readable])
+			}
+			if len(node.esp) > 0 {
+				anchor, ok, readable := highest(node.esp)
+				if ok {
+					// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- Prometheus text exposition (Content-Type text/plain, set above), not HTML; the site matches ^[A-Za-z0-9._-]{1,64}$ (collectorSitePattern, enforced on every request and stream file) and is written with %q, the epoch with %d; mTLS-only listener (PR #783 author evidence, GA verdict)
+					fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", site, anchor)
+				}
+				// nosemgrep: go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter -- as above: text/plain exposition, validated site with %q, a fixed trail name, %d
+				fmt.Fprintf(w, "regalia_collector_witness_stream_readable{site=%q,trail=%q} %d\n", site, "esp-advances", readableValue[readable])
+			}
+		}
+	})
+}
+
+// splitWitnessTrail is the node's site in a stream's site <site>.<trail>: the part before the
+// LAST dot, and only when something follows it. A stream the shipper named without a trail (an
+// empty or bare site) is not a node the witness gauges describe: it has no trail, and the
+// metrics endpoint has nothing to say about it. (The collector's own site charset admits dots —
+// <site>.<trail> is the shipper's naming, and the LAST dot is the trail's, not the node's.)
+func splitWitnessTrail(site string) string {
+	i := strings.LastIndexByte(site, '.')
+	if i <= 0 || i == len(site)-1 {
+		return ""
+	}
+	return site[:i]
+}
+
+// witnessedTrail reads one stream's committed lines through the committed size, from a FRESH
+// read-only handle: the commit path's file is O_WRONLY|O_APPEND and shares no offset with a
+// scrape. err is non-nil when the walk could not cover the committed size — the file could not be
+// opened, a read failed, or it ended before the committed size — and then no epoch is reported,
+// even one found before the failure: a partial walk can miss the highest epoch, and a value it
+// invented would suppress the missing-witness alerts (PR #783 r4685272685 follow-up). found says
+// whether an ALLOW epoch was seen in a fully read trail. The walk is one line at a time, bounded by
+// the committed size: a torn append is truncated back to it on commit, so the committed size is a
+// line boundary.
+func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf func(event *Event) (uint64, bool)) (epoch uint64, found bool, err error) {
+	if size <= 0 {
+		return 0, false, nil
+	}
+	file, err := os.Open(c.streamPath(identity, site))
+	if err != nil {
+		return 0, false, err
+	}
+	defer file.Close()
+	reader := bufio.NewReaderSize(io.LimitReader(file, size), 64*1024)
+	var read int64
+	for {
+		line, readErr := reader.ReadString('\n')
+		read += int64(len(line))
+		trimmed := strings.TrimSuffix(line, "\n")
+		if trimmed != "" {
+			var event Event
+			if json.Unmarshal([]byte(trimmed), &event) == nil {
+				// found tracks whether an epoch was FOUND, not whether the trail was committed: a
+				// committed trail with no ALLOW epoch reports absence (the blind state), never a
+				// zero floor. A genuine epoch 0 is found and published.
+				if value, ok := epochOf(&event); ok && (!found || value > epoch) {
+					epoch, found = value, true
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return 0, false, readErr
+			}
+			if read != size {
+				return 0, false, fmt.Errorf("the file ends at byte %d, before its committed size %d", read, size)
+			}
+			return epoch, found, nil
+		}
+	}
+}
+
+// epochFromLine is the reading recover.witness_epoch takes from a trail line: an ALLOW line that
+// names an epoch, the highest one the walk holds. A line that is not an allowed epoch is not an
+// epoch (its kind may not carry one), never an error: the walk keeps going to the next line.
+func epochFromLine(event *Event) (uint64, bool) {
+	if event.Outcome != "ALLOW" || event.Detail == nil {
+		return 0, false
+	}
+	var detail struct {
+		Line string `json:"line"`
+	}
+	if json.Unmarshal(event.Detail, &detail) != nil || detail.Line == "" {
+		return 0, false
+	}
+	var line struct {
+		Event   string `json:"event"`
+		Outcome string `json:"outcome"`
+		Epoch   int64  `json:"epoch"`
+	}
+	if json.Unmarshal([]byte(detail.Line), &line) != nil || line.Outcome != "ALLOW" {
+		return 0, false
+	}
+	// A negative epoch is not an epoch: it would wrap to the top of the uint64 range on
+	// conversion and stand as a spurious maximum the behind rules could never exceed. Zero and
+	// positive epochs keep their behavior (epoch 0 is a real, witnessed value).
+	if line.Epoch < 0 {
+		return 0, false
+	}
+	return uint64(line.Epoch), true
 }
 
 // peerIdentity extracts the client identity from the connection. The mTLS listener is

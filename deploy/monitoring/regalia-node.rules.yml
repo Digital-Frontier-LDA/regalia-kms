@@ -172,12 +172,9 @@ groups:
           severity: warning
         annotations:
           summary: "The chain on this node's ESP leaves the initrd nothing to render (no peer, or the node gone from the manifest): its next boot asks for the recovery key. update.py apply refuses to reboot it."
-      - alert: RegaliaOwnerAssistedReboot
-        expr: regalia_topology_nodes == 1
-        labels:
-          severity: info
-        annotations:
-          summary: "Owner presence is required at each boot of this single-node installation, including the next reboot."
+      # The owner-presence info rule moved to regalia-single-node.rules.yml as
+      # RegaliaNextBootNeedsOwner (regalia-kms-dx7.9, design 4.5), keyed on the external inventory
+      # like the rest of that file. A single-node installation is watched there, not here.
       - alert: RegaliaNodeMetricsStale
         expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease|membership)\\.prom"} > 120
         labels:

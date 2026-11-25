@@ -45,6 +45,9 @@ type Router interface {
 
 type Policy interface {
 	Evaluate(context.Context, policy.Request) policy.Decision
+	// ReservesCosmosSequence is the single-node collector requirement's view of the policy:
+	// will an allowed request of this content reserve a Cosmos account sequence?
+	ReservesCosmosSequence(objectID, operation, contentType string) bool
 }
 
 type Auditor interface {
@@ -79,6 +82,17 @@ type Coordinator struct {
 	// nodeID is this node as the membership manifest spells it (SetNodeID): the only signer an
 	// approval is verified for here (#432 G3).
 	nodeID string
+	// The single-node collector requirement (regalia-kms-dx7.9, SetSingleNodeCollectorRequirement):
+	// under the single-node profile's self-issued lease a stateful operation is refused while no
+	// audit collector is configured. The mode is the LIVE admission, read from the gate's own answer
+	// on each request (singleNodeMode: admission.ModeSingle when admitted): a node the lease service
+	// admits single AFTER the daemon started is refused from the first stateful operation, and a node
+	// the lease service stops admitting is no longer refused at all (it is not-admitted, and that
+	// refusal comes first). collectorConfigured is the configured sink; an outage is not a refusal.
+	// statelessOperations names what is served instead (SetStatelessOperations).
+	singleNodeMode      func(context.Context) bool
+	collectorConfigured bool
+	statelessOperations map[string]bool
 
 	// droppedMu guards droppedRecords, which Execute writes from concurrent request
 	// goroutines and the metrics handler reads.
@@ -125,6 +139,16 @@ type ObjectAdmission interface {
 	RefusesObject(ctx context.Context, objectID string) string
 }
 
+// ModeAdmission is an Admission that also reports the mode its answer was made under
+// (admission.Status.Mode: ModeLease, ModeRecovery, ModeSingle). The coordinator reads it to apply
+// the single-node collector requirement (regalia-kms-dx7.9) to the same answer it already checks,
+// without a second read of the file. An Admission that does not report a mode is not one: the
+// requirement is set only by SetSingleNodeCollectorRequirement, and only against a gate that does.
+type ModeAdmission interface {
+	Admission
+	Mode(ctx context.Context) string
+}
+
 // RequireAdmission makes every operation need a runtime lease. Call it before the coordinator
 // serves. The runner the coordinator was built with must be an admission runner over the same gate:
 // this check refuses before any policy state is spent, that one stops an operation whose lease
@@ -138,6 +162,38 @@ func (coordinator *Coordinator) RequireAdmission(gate Admission) {
 // another signer is refused by name.
 func (coordinator *Coordinator) SetNodeID(nodeID string) {
 	coordinator.nodeID = nodeID
+}
+
+// SetSingleNodeCollectorRequirement turns on the single-node collector requirement (regalia-kms-dx7.9,
+// PA decision D2): while the gate reports the single-node profile's self-issued lease (admission.ModeSingle)
+// and no audit collector is configured, a STATEFUL operation is refused, before any policy state is
+// reserved. The mode is read from the gate's own answer on every request, not snapshotted at startup:
+// the lease service writes the admission file after the daemon opens (main.go: the gate is opened
+// before the file exists), so a single node that starts unadmitted is still refused once it is
+// admitted, and a node that is no longer admitted is refused "not-admitted" instead, by the earlier
+// check, whatever it served as. The collector's presence is the configured sink (auditSinkFor), and
+// a collector that is configured but unreachable is not a refusal (it ships later and the backlog
+// alerts). The operations that reserve state are the stateless-operation set's complement, named by
+// SetStatelessOperations; everything the daemon serves that is not named there is stateful.
+// The gate must report its mode (ModeAdmission): the production gate does, and so does the test's.
+func (coordinator *Coordinator) SetSingleNodeCollectorRequirement(gate ModeAdmission, collectorConfigured bool) {
+	coordinator.singleNodeMode = func(ctx context.Context) bool {
+		return gate.Mode(ctx) == admission.ModeSingle
+	}
+	coordinator.collectorConfigured = collectorConfigured
+}
+
+// SetStatelessOperations names the operations that reserve no policy or opstate state and are
+// served under a single-node admission with no audit collector (regalia-kms-dx7.9): a sign and a
+// decrypt spend nothing the trail would record as done. Every other operation this daemon serves is
+// stateful — it reserves a spend-once nonce and quota, a Cosmos sequence, or a data key bound to
+// that spend — and is refused instead.
+func (coordinator *Coordinator) SetStatelessOperations(operations ...string) {
+	set := make(map[string]bool, len(operations))
+	for _, operation := range operations {
+		set[operation] = true
+	}
+	coordinator.statelessOperations = set
 }
 
 // RecordAdmission writes the audit event for a change in this node's admission: it began to hold a
@@ -185,6 +241,37 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	// while the operation runs and after it.
 	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
+		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+	}
+	// A SINGLE NODE'S ONE DISK IS ITS ONLY HISTORY (regalia-kms-dx7.9, PA decision D2). Under the
+	// single-node profile's self-issued lease a STATEFUL operation — one that reserves policy or
+	// opstate state: a spend-once nonce and quota, a Cosmos sequence, a data key bound to that spend —
+	// is refused while no audit collector is configured, BEFORE any of that state is reserved: a
+	// replayed disk would replay the spend, and with no off-host copy nothing could ever say so. The
+	// mode is the gate's LIVE answer, read above (the same answer whose admission this check just
+	// passed, and the same one the runner re-checks while the operation runs): the refusal follows
+	// the admission, not a startup reading of it. A collector that is configured but unreachable is
+	// not a refusal: the trail ships later and the backlog alerts. A stateless operation (named by
+	// SetStatelessOperations) keeps serving; ONE operation that name is not enough for — a sign that
+	// carries a Cosmos transaction also reserves the policy's state (the account sequence the
+	// trail records as spent), so it is refused like the rest, before the reservation. Multi-node
+	// and a single node with a configured collector are unchanged.
+	contentType := request.ContentType
+	if contentType == "" {
+		contentType = DataKeyContentType
+	}
+	// The requirement is one: single admission, no configured collector. Under it a request is
+	// refused when the POLICY says it will reserve a spend the trail records — a nonce, a quota,
+	// a Cosmos sequence, a data key — and the stateless set is that spend's own acceptance:
+	// what the PA decided a node without the collector may still spend (the D2 set's complement
+	// stays served, and its nonce and quota are the accepted spend). The one shape the name
+	// cannot cover is the sign that carries a Cosmos transaction: it is named stateless, but
+	// its policy also reserves the account sequence, and the sequence is the spend a replayed
+	// disk can make.
+	if coordinator.singleNodeMode != nil && !coordinator.collectorConfigured && coordinator.singleNodeMode(ctx) &&
+		(!coordinator.statelessOperations[request.Operation] ||
+			coordinator.policy.ReservesCosmosSequence(request.ObjectID, request.Operation, contentType)) {
+		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "collector-not-configured", started, false, nil)
 		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	// A KEY THE OWNER DISABLED ON A LONE SURVIVOR IS NOT SERVED (owner item 212), and no key is while the survivor's
@@ -282,10 +369,6 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
 		return api.Result{}, failure(code, status, retryable)
 	}
-	contentType := request.ContentType
-	if contentType == "" {
-		contentType = DataKeyContentType
-	}
 	policyRequest := policy.Request{
 		RequestID: request.RequestID, Principal: request.Principal, ObjectID: request.ObjectID,
 		Purpose: request.Context.Purpose, Environment: request.Context.Environment, Operation: request.Operation,
@@ -315,7 +398,7 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		Environment: request.Context.Environment, Nonce: request.Context.Nonce,
 		ExpiresAt: request.Context.ExpiresAt, Payload: approvalPayload(request), Signer: coordinator.nodeID,
 	})
-	if contentType == "application/vnd.cosmos.tx+protobuf" {
+	if contentType == policy.CosmosSignDocContentType {
 		parsed, err := policy.ParseCosmosSignDoc(request.Data)
 		if err != nil {
 			coordinator.recordOrCount(ctx, request, route, "deny", "policy-cosmos-malformed", started, false, policyRequest.VerifiedApprovers)

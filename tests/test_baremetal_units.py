@@ -193,7 +193,7 @@ class Units(unittest.TestCase):
         self.assertEqual(unit("regalia-wg-apply.service")["Unit"]["StartLimitIntervalSec"], "0")
         sync = self.service("regalia-sync")
         self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss regalia-audit-sync"))
-        self.assertEqual(sync["ReadWritePaths"], "-/run/regalia-metrics/sync")      # its metrics only (#305); the rest is StateDirectory
+        self.assertEqual(sync["ReadWritePaths"], "-/run/regalia-metrics/sync -/run/regalia-metrics/restore")   # its metrics only (#305), plus the restore-pending boot guard's gauge written at boot (regalia-kms-dx7.9); the rest is StateDirectory
         for name in SERVICES:
             service = self.service(name)
             with self.subTest(name):
@@ -458,6 +458,9 @@ class NodeMetricsDirectories(unittest.TestCase):
               "admission": ("regalia-admission.service", "regalia-admission"),
               "esp-advance": ("regalia-esp-advance.service", "root"),
               "site-check": ("regalia-site-check.service", "root"),
+              # the restore-pending boot guard's (regalia-kms-dx7.9): written at boot by the node
+              # (regalia-sync) and at mark/clear by restore.py (root, in its own mode)
+              "restore": ("regalia-sync.service", "regalia-sync"),
               "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
 
     def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):

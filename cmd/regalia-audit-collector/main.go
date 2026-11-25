@@ -71,7 +71,15 @@ func run(arguments []string, out *os.File) error {
 		}
 		collector.SetReceiptKey(key)
 	}
-	server, err := buildServer(*listen, *tlsCert, *tlsKey, *clientCA, collector.Handler())
+	// ONE LISTENER (regalia-kms-dx7.9): the sink's protocol and the monitoring scrape share the
+	// collector's mTLS listener and its client CA. The scrape job's certificate is issued by the
+	// same CA the sink's clients are, and a scrape that presents no chain-verified certificate never
+	// reaches a handler, as a stream that presents none never does. A second listener would be a
+	// second door on the same state.
+	mux := http.NewServeMux()
+	mux.Handle("/v1/", collector.Handler())
+	mux.Handle("GET /metrics", collector.MetricsHandler())
+	server, err := buildServer(*listen, *tlsCert, *tlsKey, *clientCA, mux)
 	if err != nil {
 		return err
 	}

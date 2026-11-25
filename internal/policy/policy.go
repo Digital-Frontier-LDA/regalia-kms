@@ -22,6 +22,11 @@ var (
 	// was replaced mid-window must not keep spending from it.
 	ErrEpoch     = errors.New("stale fencing epoch")
 	noncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+	// CosmosSignDocContentType is the ONE content type a policy that names a Cosmos section may
+	// sign: a SignDoc. A Cosmos policy cannot allow any other content (the loader refuses it),
+	// so the presence of a Cosmos section and the presence of this content type are the same
+	// fact, and the sign that carries it is the sign that can reserve a Cosmos sequence.
+	CosmosSignDocContentType = "application/vnd.cosmos.tx+protobuf"
 )
 
 type Code string
@@ -178,7 +183,12 @@ func (engine *Engine) QuotaRejections() uint64 {
 }
 
 type compiledPolicy struct {
-	policy       Policy
+	policy Policy
+	// cosmos is true when the policy names a Cosmos section: its content is CosmosSignDocContentType
+	// and it reserves a Cosmos sequence for an allowed request. The coordinator reads it through
+	// ReservesCosmosSequence (the single-node collector requirement, regalia-kms-dx7.9): the sign
+	// that can spend a Cosmos account sequence is refused without the off-host witness.
+	cosmos       bool
 	contentTypes map[string]struct{}
 	approvers    map[string]struct{}
 	chains       map[string]struct{}
@@ -215,10 +225,11 @@ func New(policies []Policy, state State, now func() time.Time) (*Engine, error) 
 			return nil, errors.New("policy lists are empty, duplicated or inconsistent")
 		}
 		if policy.Cosmos != nil {
+			compiled.cosmos = true
 			if _, generic := compiled.contentTypes["application/octet-stream"]; generic {
 				return nil, errors.New("Cosmos policy cannot allow opaque content")
 			}
-			if _, canonical := compiled.contentTypes["application/vnd.cosmos.tx+protobuf"]; !canonical {
+			if _, canonical := compiled.contentTypes[CosmosSignDocContentType]; !canonical {
 				return nil, errors.New("Cosmos policy requires canonical protobuf content")
 			}
 			compiled.chains = stringSet(policy.Cosmos.ChainIDs)
@@ -283,6 +294,26 @@ func (engine *Engine) GoverningPolicyID(objectID, operation string) (string, boo
 		return "", false
 	}
 	return compiled.policy.ID, true
+}
+
+// ReservesCosmosSequence says whether the policy governing this object and operation, IF this
+// request is allowed, will reserve a Cosmos account sequence: it is true for exactly one shape
+// of request — a sign whose content is a Cosmos SignDoc under a policy that names a Cosmos
+// section. The single-node collector requirement (regalia-kms-dx7.9, PA decision D2) refuses
+// that shape without an off-host witness, before the reservation: a sequence is spend-once state
+// whose replay a disk can make, and the trail is the only witness. It is NOT true for a plain
+// sign or a decrypt: they spend a nonce and quota only, and that spend is the D2 set's own
+// acceptance — the refusal is for the sequence, which only this shape can reserve.
+func (engine *Engine) ReservesCosmosSequence(objectID, operation, contentType string) bool {
+	if engine == nil {
+		return false
+	}
+	compiled, exists := engine.policies[policyKey(objectID, operation)]
+	if !exists || !compiled.cosmos {
+		return false
+	}
+	_, named := compiled.contentTypes[contentType]
+	return named
 }
 
 func (engine *Engine) Evaluate(ctx context.Context, request Request) Decision {

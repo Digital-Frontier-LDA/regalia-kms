@@ -158,6 +158,28 @@ func OperationPaths() []string {
 	return paths
 }
 
+// statelessOperations is the set of operations that reserve no policy or opstate state: they sign
+// or open, and nothing the trail would record as "done" is spent on them. Every operation in
+// operationPaths that is not here is stateful — it reserves a spend-once nonce and quota, a Cosmos
+// sequence, or a data key bound to that spend — and is the set a single-node admission with no
+// audit collector refuses (regalia-kms-dx7.9, PA decision D2: the restore-epoch set).
+var statelessOperations = map[string]bool{
+	"sign":             true,
+	"unwrap":           true, // opens under the KEK the envelope names; the reserve was spent when the envelope was sealed
+	"certificate-sign": true,
+}
+
+// StatelessOperations returns the stateless operations, sorted: the names the coordinator is told
+// to keep serving under a single-node admission with no collector.
+func StatelessOperations() []string {
+	names := make([]string, 0, len(statelessOperations))
+	for name := range statelessOperations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	operation, known := operationPaths[request.URL.Path]
 	if !known {
