@@ -172,16 +172,14 @@ Attacker cases on one node:
   copy of the chain plus the audit collector's highest epoch, not two independent TPM anchors.
 - **Provider or site failure (case 6):** a full outage.
 
-## Lab baseline (recorded 2026-10-01)
+## Lab baseline
+
+The lab's device inventory (which devices, how many, and whether each is attached) is kept with the operators'
+private records, as the secrets inventory is (regalia-4gw). What this software has and has not been run on is
+stated in [LIMITATIONS.md](LIMITATIONS.md). The software baseline is public:
 
 | Item | State |
 |---|---|
-| One Nitrokey HSM 2 (staging) | attached; firmware 4.1, hardware 24.13; PKCS#11 contract 14/0 (#62) |
-| Two more Nitrokey HSM 2 (staging) | on the bench, not attached |
-| Two PicoHSM staging units | not attached; firmware under disclosure GHSA-wq3w-g2fj-q2jq |
-| Three YubiKeys (staging) | not attached |
-| ACS ACR40U (SLE-4442) | attached; validated (regalia#43) |
-| HPE DL360 Gen9 ×3 with TPM 2.0 | **not delivered** at this baseline (expected mid-October). Since then: on 2026-11-03 one host's TPM EK certificates were measured with standard tooling (tpm2-tools and openssl), not this software (`LIMITATIONS.md`, #190); the other two are not measured. Every TPM, PCR, initramfs and LUKS phase of this software on real hardware is still open |
 | Software | Debian 13, OpenSC 0.26.1, pcscd 2.3.3, libccid 1.6.2, OpenSSL 3.5.1, cryptsetup 2.7.5, nftables 1.1.3, swtpm (kernel vTPM via tpm_vtpm_proxy for harness work) |
 
 Invariants under test are A1–A4 and S1–S6 above. Evidence format: each phase records device serials (in the operators' private records),
