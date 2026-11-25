@@ -56,6 +56,7 @@ jobs:
       # WITHOUT promtool THE ALERT-RULE FIRING TESTS SKIP, and a skip is a pass. They did, on every
       # run after regalia#487 moved this code out of the monorepo whose workflow installed it.
       - name: Install checksum-pinned promtool for alert-rule fault injection
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
           GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           PROMETHEUS_SHA256: 0e8c4d46101bd025ea8265e377d2caabc57f488fc1be1c367f37db69ea41be6f
@@ -126,6 +127,7 @@ jobs:
           python3 -Es -m unittest discover -v -s tests -p 'test_*.py'
 
       - name: Install checksum-pinned etcd v3.6.15 for the operational-state cache's real-store test (ADR-0002 D32)
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
           GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           ETCD_SHA256: b51d86e6bff2168de5ba8cd631c0fe6c785c7a1b32b083079f5677d6b7e2772c
@@ -760,6 +762,7 @@ jobs:
           echo "REGALIA_EXPECT_GPG=1" >> "$GITHUB_ENV"
 
       - name: Install checksum-pinned SOPS 3.13.3
+        timeout-minutes: 5  # fetch-pinned-asset.sh gives up by itself within 4 (regalia-kms-dq7)
         env:
           GH_TOKEN: ${{ github.token }}  # the REST asset API fallback (regalia-kms-dq7); read-only
           SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
