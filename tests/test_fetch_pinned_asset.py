@@ -165,7 +165,7 @@ class WorkflowsUseTheFallback(unittest.TestCase):
 
     def test_each_pinned_asset_names_its_rest_asset_id(self):
         text = (WORKFLOWS / "ci.yml").read_text()
-        calls = re.findall(r"fetch-pinned-asset\.sh(?:[^\n]*\n){4}", text)  # the call and its three continuation lines
+        calls = re.findall(r"\.github/scripts/fetch-pinned-asset\.sh \\\n(?:[^\n]*\n){3}", text)  # the call and its three continuation lines
         self.assertGreaterEqual(len(calls), 3)
         for call in calls:
             self.assertRegex(call, r"https://api\.github\.com/repos/[^/\s]+/[^/\s]+/releases/assets/\d+")
