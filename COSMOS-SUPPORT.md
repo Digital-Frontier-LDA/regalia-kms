@@ -111,7 +111,13 @@ Nothing else is supported.
 
 The parser exposes signer sequence, fee coins, and gas limit from `AuthInfo`. Cosmos policies require
 a positive gas limit at or below `max_gas_limit`, and every fee coin must be explicitly allowlisted at or below
-its `max_fee` cap. The durable policy journal requires each subsequent reservation for an object to
+its `max_fee` cap. Only `Fee.amount` and `Fee.gas_limit` are accepted in the fee: `Fee.payer` and
+`Fee.granter` (another account or a fee grant pays) are refused in any form, even empty, and so is
+`AuthInfo.tip` (a payment outside the fee). Each changes who pays, or how much is paid, beyond the fee
+the policy capped, and no policy dimension exists for it, so the document is refused as malformed
+(`ErrCosmosSignDoc`, audit outcome `policy-cosmos-malformed`) before policy and before any nonce,
+sequence or quota is spent. The fee policy judges is therefore the whole fee the chain charges, paid
+by the signer. The durable policy journal requires each subsequent reservation for an object to
 carry the next account sequence; gaps and repeats refuse before hardware use. A sequence is consumed
 when the reservation is durably committed, including an indeterminate later hardware result, so a
 retry cannot accidentally reuse it.

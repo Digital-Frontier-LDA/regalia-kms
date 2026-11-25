@@ -9,13 +9,13 @@ import (
 // behavior the parser implemented, but no test exercised it, so the join key reported it as an
 // orphan.
 //
-// Three siblings are NOT here: tip-field-present, unsupported-sign-mode-is-refused (the
-// direct_secp256r1 arm) and fee-payer-field-present. On this tree the parser accepts ModeInfo
-// arm 3 and a length-delimited Fee field 3 or 4 (cosmos-sdk tx.proto: Fee.payer = 3,
-// Fee.granter = 4), so a test that claimed those refusals would either fail or pass only on a
-// malformed-wire fixture. Those
-// refusals are pending work, and the scenarios stay unclaimed rather than claimed by a test
-// that does not exercise them.
+// Two siblings, tip-field-present and fee-payer-field-present, are claimed in
+// cosmos_fee_fields_test.go, where the parser now refuses Fee field 3 and 4 (regalia-kms-bim).
+// The spec calls Fee field 3 "tip" and field 4 "fee payer"; cosmos-sdk tx.proto says Fee.payer = 3
+// and Fee.granter = 4, and the tip is AuthInfo.tip = 3, a separate message. Those tests refuse all
+// three and say which is which. One sibling is still NOT here: unsupported-sign-mode-is-refused
+// (the direct_secp256r1 arm). The parser accepts ModeInfo arm 3, so that refusal is pending work,
+// and the scenario stays unclaimed rather than claimed by a test that does not exercise it.
 
 // signDocWithAuth builds a complete SignDoc around the given AuthInfo bytes.
 func signDocWithAuth(auth []byte) []byte {
