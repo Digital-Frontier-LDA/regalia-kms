@@ -341,6 +341,17 @@ class SingleNode(Case):
         self.assertEqual(self.trail[-1]["topology"], "single-node")
         self.assertEqual(self.host.rebooted, 1)                     # only the one that was planned went down
 
+    def test_apply_under_the_single_node_profile_reads_no_peer_verifier_state(self):
+        """dx7.10.2 (the one-node e2e): a single node verifies no peer, so it has no attest.json; apply must not
+        read it (Host.own_state would raise FileNotFoundError and stop the planned outage as a DENY)."""
+        def missing():
+            raise FileNotFoundError(2, "No such file or directory", "attest.json")
+        self.host.own_state = missing
+        done = self.apply(planned_outage=True)
+        self.assertEqual(done["state"]["next"], "0002")
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW"])
+        self.refused("a single-node host's reboot is a planned outage: give --planned-outage", self.apply)
+
     def test_apply_refuses_the_planned_outage_flag_under_another_profile(self):
         self.host._manifest, self.host._document, self.host.running = self.m2, BOTH, self.host.running
         self.refused("--planned-outage is a single-node decision", self.apply, planned_outage=True)
