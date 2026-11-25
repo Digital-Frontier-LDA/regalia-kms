@@ -110,6 +110,20 @@ def sysctl_path(key):
     return sysctl_paths(key, "eno1")[0]
 
 
+# sshd_absent (q-20: ABSENT, GA ruling under owner delegation 2026-11-25; regalia-kms-r1s.12): the unit files an SSH server
+# would bring, listed with the KMS unit (systemd 257 prints "name state preset"), and the TCP listeners (ss -Hltn)
+UNIT_FILES = ("systemctl", "list-unit-files", "--no-legend", "--no-pager", os_probe.SERVICE, *os_probe.SSH_UNIT_PATTERNS)
+LISTENERS = ("ss", "-Hltn")
+KMS_UNIT_FILE = "regalia-kms.service enabled enabled\n"
+NO_SSH_LISTENING = ("LISTEN 0      4096   192.0.2.10:8443   0.0.0.0:*\n"
+                    "LISTEN 0      4096   192.0.2.10:9100   0.0.0.0:*\n"
+                    "LISTEN 0      4096   127.0.0.1:2379    0.0.0.0:*\n")
+
+
+def stat_file(kind="regular file"):
+    return lambda g: g.commands.__setitem__(("stat", "-c", "%F", "/usr/sbin/sshd"), kind + "\n")
+
+
 class FakeHost:
     """A hardened KMS host by default; each test breaks exactly one thing and asks for the verdict."""
 
@@ -160,6 +174,10 @@ class FakeHost:
             # the client endpoint shows `*` and is found by inode.
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
+            # no SSH server: the KMS unit alone among the unit files listed, nothing on :22 (every stat of an SSH
+            # server's path answers 1, "no such file", as an unknown command does here)
+            UNIT_FILES: KMS_UNIT_FILE,
+            LISTENERS: NO_SSH_LISTENING,
         }
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
@@ -593,6 +611,133 @@ ENV_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "Environment,Environmen
 OPENSC = "/etc/regalia-kms/opensc.conf"
 BOTH_TOKENS = dict(ADMISSION, pkcs11_module_path="/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", yubikey_devices={"yubikey-site-a": "35718625"})
 IGNORE_YUBIKEY = (pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/ignore-yubikey.conf").read_text()
+
+
+class SshdAbsent(unittest.TestCase):
+    """sshd_absent: a production KMS host runs no SSH server (q-20: ABSENT, GA ruling under owner delegation 2026-11-25;
+    regalia-kms-r1s.12). Each fake host breaks one thing: a binary, a unit, a listener. It fails sshd_absent and no
+    other control, and every other control still passes."""
+
+    control = "sshd_absent"
+
+    def judged(self, host):
+        results = measure(host)
+        others = {k: v["value"] for k, v in results.items() if k != self.control}
+        self.assertTrue(all(others.values()), others)
+        return results[self.control]["value"], results[self.control]["why"]
+
+    def assert_fails(self, breakers, *reasons):
+        for index, breaker in enumerate(breakers):
+            with self.subTest(case=index):
+                host = FakeHost()
+                breaker(host)
+                value, why = self.judged(host)
+                self.assertFalse(value, why)
+                for reason in reasons:
+                    self.assertIn(reason, why)
+
+    def test_a_host_with_no_ssh_server_passes(self):
+        value, why = self.judged(FakeHost())
+        self.assertTrue(value, why)
+        self.assertIn("nothing listening on TCP :22", why)
+        # a port that only ends in 22, or only contains it, is not SSH's
+        host = FakeHost()
+        host.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 [::]:8422 [::]:*\n"
+        self.assertTrue(self.judged(host)[0])
+
+    def test_an_sshd_binary_fails_it(self):
+        """(a) an SSH server binary on the host, whatever else is absent: no unit, nothing listening."""
+        def at(path, kind="regular file"):
+            return lambda g: g.commands.__setitem__(("stat", "-c", "%F", path), kind + "\n")
+
+        def on_path(g):
+            g.which = lambda tool: "/opt/openssh/sbin/sshd" if tool == "sshd" else None
+        self.assert_fails([stat_file(), at("/usr/lib/openssh/sshd-session"), at("/usr/sbin/dropbear"),
+                           at("/usr/local/sbin/sshd"), at("/usr/sbin/sshd", "symbolic link"), on_path])
+        host = FakeHost()
+        stat_file()(host)
+        self.assertIn("/usr/sbin/sshd is present (regular file)", self.judged(host)[1])
+
+    def test_an_ssh_unit_fails_it(self):
+        """(b) a unit file an SSH server brings, enabled or not, masked or generated: no binary, nothing listening."""
+        def unit(line):
+            return lambda g: g.commands.__setitem__(UNIT_FILES, KMS_UNIT_FILE + line + "\n")
+        self.assert_fails([unit("ssh.service enabled enabled"), unit("ssh.socket disabled enabled"),
+                           unit("ssh@.service static -"), unit("sshd.service disabled disabled"),
+                           unit("sshd-vsock.socket generated -"), unit("ssh.service masked enabled"),
+                           unit("regalia-staging-sshd.service enabled enabled"), unit("dropbear.service enabled enabled")],
+                          "the unit ")
+        host = FakeHost()
+        unit("ssh.service enabled enabled")(host)
+        self.assertIn("the unit ssh.service exists (enabled)", self.judged(host)[1])
+
+    def test_a_listener_on_port_22_fails_it(self):
+        """(c) anything on TCP :22, on any address: no binary, no unit (a netcat, a container's sshd, a forwarder)."""
+        def listening(local):
+            return lambda g: g.commands.__setitem__(LISTENERS, NO_SSH_LISTENING + "LISTEN 0 128 %s 0.0.0.0:*\n" % local)
+        self.assert_fails([listening("0.0.0.0:22"), listening("[::]:22"), listening("192.0.2.10%eno1:22"), listening("*:22"),
+                           listening("127.0.0.1:22")], "is listening")
+
+    def test_a_read_that_does_not_answer_fails_it(self):
+        """Fail closed: a host that cannot be read is not a host with no SSH server."""
+        def stat_broken(g):
+            run = g.run
+            g.run = lambda argv: (127, "") if argv[:3] == ["stat", "-c", "%F"] else run(argv)   # the polkit check's stats still answer
+        self.assert_fails([lambda g: g.commands.pop(LISTENERS)], "the TCP listeners cannot be listed")
+        self.assert_fails([lambda g: g.commands.pop(UNIT_FILES), lambda g: g.commands.__setitem__(UNIT_FILES, "")],
+                          "the unit files cannot be listed")
+        self.assert_fails([stat_broken], "cannot be checked (stat exit 127)")
+
+    def test_every_problem_is_named(self):
+        host = FakeHost()
+        stat_file()(host)
+        host.commands[UNIT_FILES] = KMS_UNIT_FILE + "ssh.service enabled enabled\n"
+        host.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+        value, why = self.judged(host)
+        self.assertFalse(value)
+        for reason in ("/usr/sbin/sshd is present", "the unit ssh.service exists", "0.0.0.0:22 is listening", "q-20"):
+            self.assertIn(reason, why)
+
+    def test_the_staging_variant_fails_it_and_says_so(self):
+        """The staging image's operator sshd (image/staging/) is not a production host's: it fails the control, booted with
+        regalia.staging=1 or not, and the reason names the variant. A production image never holds the marker
+        (imagevariant.STAGING_PATHS)."""
+        from deploy.baremetal import imagevariant
+        self.assertIn("." + os_probe.STAGING_VARIANT, imagevariant.STAGING_PATHS)
+        self.assertIn("./usr/sbin/sshd", imagevariant.STAGING_PATHS)
+
+        def staging(booted):
+            def breaker(g):
+                g.files[os_probe.STAGING_VARIANT] = "staging\n"
+                stat_file()(g)
+                g.commands[UNIT_FILES] = KMS_UNIT_FILE + "regalia-staging-sshd.service enabled enabled\n"
+                if booted:
+                    g.files["/proc/cmdline"] = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/root ro quiet regalia.staging=1\n"
+                    g.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 192.0.2.10:22 0.0.0.0:*\n"
+            return breaker
+        self.assert_fails([staging(False), staging(True)], "STAGING image variant", "regalia-staging-sshd.service")
+        # without the marker, the same sshd reads as what it is on a production host: no word of staging
+        host = FakeHost()
+        stat_file()(host)
+        self.assertNotIn("STAGING", self.judged(host)[1])
+
+    def test_the_staging_unit_is_still_gated_as_it_was(self):
+        """The decision keeps the staging sshd as it is: refused without regalia.staging=1 and the staging install's /var
+        keys, and never in a production image."""
+        unit = configparser.ConfigParser(strict=False, interpolation=None)
+        unit.read_string((ROOT / "deploy/baremetal/image/staging/regalia-staging-sshd.service").read_text())
+        self.assertEqual(unit["Unit"]["ConditionKernelCommandLine"], "regalia.staging=1")
+        self.assertEqual(unit["Unit"]["ConditionPathExists"], "/var/lib/regalia-staging/authorized_keys")
+        packages = (ROOT / "deploy/baremetal/image/packages.txt").read_text()
+        self.assertNotIn("openssh-server", packages)
+
+    def test_ssh_md_records_the_ruling(self):
+        ssh_md = (ROOT / "deploy/baremetal/SSH.md").read_text(encoding="utf-8")
+        self.assertIn("q-20: ABSENT, GA ruling under owner delegation 2026-11-25", ssh_md)
+        # the open question and the admit-from-admin_cidrs sentence are gone
+        self.assertNotIn("Whether there is an sshd at all is open", ssh_md)
+        self.assertNotIn("admit it from `admin_cidrs`", ssh_md)
+        self.assertIn("sshd_absent", ssh_md)
 
 
 class ShippedHardening(unittest.TestCase):

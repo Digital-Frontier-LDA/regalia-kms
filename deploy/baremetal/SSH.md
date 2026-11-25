@@ -1,7 +1,38 @@
 # SSH to a KMS node: which host it is, and who may log in (#143)
 
-SSH is for administrators, from the admin zone the host firewall declares (`admin_cidrs`,
-`firewall.py`). Nodes do not SSH to each other: node-to-node traffic is WireGuard and mTLS.
+## Decided: a production KMS host has no sshd (q-20)
+
+**q-20: ABSENT, GA ruling under owner delegation 2026-11-25** (regalia-kms-r1s.12). The owner question was whether
+a production KMS host runs an sshd at all, and if so only inside WireGuard. The ruling is that it runs none:
+
+- **No sshd in any production image.** `image/packages.txt` has no SSH server, and `imagevariant.py` refuses a
+  production build that holds `/usr/sbin/sshd` or any other staging path.
+- **No SSH in the production firewall.** `firewall.py` admits SSH from no zone. `admin_cidrs` keeps only ping. Inside
+  the tunnels there was never any SSH, and there is none now. `ssh_port` stays in the site config as the port
+  `network_probe.py` checks is closed from every zone, the admin zone included.
+- **Measured on the running host.** `os_probe.py`'s `sshd_absent` is in MEASURED, so the signed evidence carries it.
+  It fails when an SSH server binary is present (`/usr/sbin/sshd`, OpenSSH's `sshd-session`, Dropbear), when a unit
+  file an SSH server brings exists (`ssh.service`, `ssh.socket`, `sshd@.service`, systemd's generated
+  `sshd-*.socket`, enabled or not), or when anything listens on TCP :22.
+- **Administration** goes through the console or the iLO, and through the owner-run flows (the ceremonies,
+  `enrol`, `site-advance`, the recovery runbooks). Some text written before the ruling still reaches a host over SSH:
+  `drill.py`'s partition drill (`ssh_runner`) and the chain copy in `MEMBERSHIP-RECOVERY.md`. On a production host
+  those steps go through the console. Where they need an sshd, they run on the staging variant. Rewriting them is
+  follow-up work, not part of this ruling.
+- **The STAGING image variant keeps its operator sshd, unchanged.** It is `image/staging/regalia-staging-sshd.service`:
+  key-only, for root, refused unless the signed kernel command line says `regalia.staging=1` and the staging
+  install has written `/var/lib/regalia-staging/authorized_keys`. Only the staging build (`build-rootfs.sh
+  --variant staging`) holds it, and that build is never a production image. A staging host fails `sshd_absent`
+  by design, and the reason names the variant (`/usr/lib/regalia-staging/VARIANT`). Its firewall is the staging
+  host's own TEST ruleset, written to `/var` by the staging install. It is not the production `firewall.py`
+  output.
+
+What follows is the design recorded for #143 before the ruling: how an administrator would pin a node's host key and
+how a login would be certified. It is not deployed on a production host. It stays because `ssh_trust.py` and the
+manifest's `ssh_host_pub` still exist, and because reopening q-20 would start from it. The firewall statement in it
+(SSH from `admin_cidrs`) is superseded by the ruling above.
+
+Nodes do not SSH to each other: node-to-node traffic is WireGuard and mTLS.
 
 Two questions, answered separately.
 
@@ -159,10 +190,11 @@ not the administrator being certified.
   effect on software keys, so what it refuses has to be shown with tokens.
 - **Not tested: a `Match` block or an earlier drop-in on a real host.** The example's header says what
   can defeat it; `host_probe.py` will have to measure the effective configuration with `sshd -T -C`.
-- **Whether there is an sshd at all is open.** The image ships none (`image/packages.txt`). #61 asks for
-  administrative SSH, if kept, to be WireGuard-only. This file and `firewall.py` admit it from `admin_cidrs` on the
-  host's own address, and never inside a tunnel. The choice between no sshd and sshd on WireGuard only is owner
-  question q-20 (regalia-kms-r1s.5).
-- **Not done here:** `host_probe.py` does not yet measure sshd (the host key on disk equals the
-  manifest's `ssh_host_pub`; this configuration is the one loaded). Nothing installs these files. The
-  user CA's public key reaches a node at commissioning; it is not in the manifest.
+- **Whether there is an sshd at all is decided: there is none** (q-20: ABSENT, GA ruling under owner delegation
+  2026-11-25; the first section). The production firewall admits SSH from no zone. `tests/test_baremetal_firewall.py`
+  checks the rendered ruleset, and `e2e/baremetal-firewall-netns.sh` checks that a listener on :22 answers no zone.
+  `os_probe.py`'s `sshd_absent` measures the running host. `tests/test_baremetal_os_probe.py` gives it one fake
+  host per failure: a binary, a unit, a listener on :22.
+- **Not done, and not needed while q-20 stands:** nothing measures the host key on disk against the manifest's
+  `ssh_host_pub`, or the effective sshd configuration, because no production host runs an sshd. Nothing installs
+  `sshd-regalia-kms.conf.example`.

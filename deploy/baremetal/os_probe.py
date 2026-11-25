@@ -80,6 +80,19 @@ and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
                               and pkcheck must say polkit admits the running daemon. That a user WITH a
                               console session is refused is not measured: it follows from the rule
 
+and that a production KMS host runs no SSH server (q-20: ABSENT, GA ruling under owner delegation 2026-11-25;
+regalia-kms-r1s.12). Administration goes through the console or the iLO and the owner-run flows:
+
+  sshd_absent                 no SSH server binary (SSHD_BINARIES, or sshd on PATH), no unit file whose name is an
+                              SSH server's (SSH_UNIT_PATTERNS: ssh.service, ssh.socket, sshd@.service, the
+                              systemd-ssh-generator's sshd-*.socket, the staging variant's regalia-staging-sshd.service,
+                              dropbear), and nothing listening on TCP :22, on any address. Each is read from the host
+                              (stat, systemctl list-unit-files, ss), never from what the image is supposed to hold, and
+                              a read that does not answer fails the control. The STAGING image variant carries a
+                              key-only operator sshd (image/staging/, gated by regalia.staging=1 and the /var files its
+                              staging install writes): it fails this control, by design. Its reason then names the
+                              variant, so a staging host's evidence cannot be read as a production host's
+
 Standard library only.
 """
 import hashlib
@@ -95,7 +108,8 @@ SERVICE = "regalia-kms.service"
 PROFILE = "regalia-kms"            # deploy/baremetal/apparmor/usr.sbin.regalia-kms, the unit's AppArmorProfile=
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
-            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule", "kernel_sysctl_baseline", "bootstrap_and_kms_users_separate")
+            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule", "kernel_sysctl_baseline", "bootstrap_and_kms_users_separate",
+            "sshd_absent")
 # The kernel settings the image ships as /usr/lib/sysctl.d/90-regalia-kms.conf (deploy/baremetal/regalia-kms.sysctl.conf,
 # with each value's reason there). Measured from /proc/sys on the running host, never from the file. A test holds this
 # table and the shipped file together.
@@ -843,9 +857,62 @@ def separate_users(host):
                   f"(uid {b_uid}, gid {b_gid}); neither process holds the other's group")
 
 
+# q-20: ABSENT, GA ruling under owner delegation 2026-11-25 (regalia-kms-r1s.12): no SSH server on a production KMS host.
+# Where an SSH server's programs live on Debian 13 (OpenSSH 10 runs each session as sshd-session, and sshd-auth for
+# authentication) and elsewhere, and Dropbear's. /sbin and /bin are links into /usr on a merged-/usr system.
+SSHD_BINARIES = ("/usr/sbin/sshd", "/usr/bin/sshd", "/usr/local/sbin/sshd", "/usr/local/bin/sshd",
+                 "/usr/lib/openssh/sshd-session", "/usr/lib/openssh/sshd-auth", "/usr/libexec/openssh/sshd-session",
+                 "/usr/sbin/dropbear")
+# The unit files an SSH server comes with (systemctl list-unit-files globs): Debian's ssh.service, ssh.socket and
+# ssh@.service; sshd.service and sshd@.service elsewhere; systemd-ssh-generator's sshd-vsock.socket and
+# sshd-unix-local.socket (systemd 256+, made when an sshd is installed); the staging variant's
+# regalia-staging-sshd.service; Dropbear's. The KMS unit is listed with them, so an empty answer cannot pass.
+SSH_UNIT_PATTERNS = ("ssh.*", "ssh@*", "*sshd*", "dropbear*")
+SSH_PORT = 22
+STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --variant staging writes it; imagevariant.py
+                                                       # refuses a production image that holds it
+
+
+def sshd_absent(host):
+    """No SSH server on the host: no binary, no unit, nothing on TCP :22. Every problem is named, not the first only."""
+    found = []
+    for path in SSHD_BINARIES:
+        # stat without -L: a link that points nowhere is still an SSH server's name, and is reported
+        rc, out = host.run(["stat", "-c", "%F", path])
+        if rc == 0:
+            found.append(f"{path} is present ({out.strip() or 'a file'})")
+        elif rc != 1:
+            found.append(f"{path} cannot be checked (stat exit {rc})")
+    on_path = host.which("sshd")
+    if on_path and on_path not in SSHD_BINARIES:
+        found.append(f"sshd is on PATH as {on_path}")
+    rc, out = host.run(["systemctl", "list-unit-files", "--no-legend", "--no-pager", SERVICE, *SSH_UNIT_PATTERNS])
+    units = [line.split() for line in out.splitlines() if line.split()]
+    if SERVICE not in [unit[0] for unit in units]:
+        found.append(f"the unit files cannot be listed (systemctl list-unit-files does not show {SERVICE})")
+    else:
+        found += [f"the unit {unit[0]} exists ({unit[1] if len(unit) > 1 else 'state unknown'})" for unit in units if unit[0] != SERVICE]
+    rc, out = host.run(["ss", "-Hltn"])
+    if rc != 0:
+        found.append("the TCP listeners cannot be listed (ss failed)")
+    else:
+        # ss -Hltn: State Recv-Q Send-Q Local-Address:Port Peer-Address:Port. The port is after the last colon of the
+        # local address (0.0.0.0:22, [::]:22, 0.0.0.0%eth0:22, *:22)
+        found += [f"{fields[3]} is listening" for fields in (line.split() for line in out.splitlines())
+                  if len(fields) >= 4 and fields[3].rpartition(":")[2] == str(SSH_PORT)]
+    if found:
+        why = "this host is not shown to be free of an SSH server (a production KMS host has none, q-20): " + "; ".join(found)
+        if host.read(STAGING_VARIANT) is not None:
+            why += (f". This is the STAGING image variant ({STAGING_VARIANT}): its operator sshd is staging-only, and "
+                    "a staging host is never a production host")
+        return False, why
+    return True, f"no SSH server binary, no ssh or sshd unit file, nothing listening on TCP :{SSH_PORT} (q-20: absent)"
+
+
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
           "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
           "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule,
-          "kernel_sysctl_baseline": sysctl_baseline, "bootstrap_and_kms_users_separate": separate_users}
+          "kernel_sysctl_baseline": sysctl_baseline, "bootstrap_and_kms_users_separate": separate_users,
+          "sshd_absent": sshd_absent}

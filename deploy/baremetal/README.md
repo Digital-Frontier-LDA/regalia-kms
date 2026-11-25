@@ -186,8 +186,11 @@ an authenticated update from the OS, at the cost of a key ceremony; it is not pa
   group. Measured: `bootstrap_and_kms_users_separate`, from the units, from `getent` and from the kernel for each
   running main process. It needs two users, neither root, with different uids and different primary groups. Each
   process's uids must be its own user's, and neither process may hold the other's primary group.
-- **SSH.** The image has no sshd (`image/packages.txt`). Whether a KMS host ever runs one, and if so whether it is
-  bound to WireGuard only, is an open owner question (q-20, regalia-kms-r1s.5). Nothing measures sshd yet.
+- **No SSH** (q-20: ABSENT, GA ruling under owner delegation 2026-11-25; regalia-kms-r1s.12). A production KMS
+  host runs no sshd: the image ships none (`image/packages.txt`), the host firewall admits SSH from no zone, and
+  administration goes through the console or the iLO and the owner-run flows (`SSH.md`). Measured: `sshd_absent`.
+  It fails on an SSH server binary, on a unit file an SSH server brings (enabled or not), and on anything listening
+  on TCP :22. The staging image variant's operator sshd (`image/staging/`) fails it by design, and its reason says so.
 - **Token clients root-only.** This host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
@@ -383,7 +386,8 @@ the unit fails it too: what it sets is not seen.
 
 The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` and `"service_mesh": null` for a single-site
 host, section 7 otherwise) declares the host's address, the
-KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
+KMS port and the zones allowed to reach it, the SSH port that no zone may reach (q-20: no sshd; the admin zone may
+only ping), and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
 
 ```sh
@@ -826,7 +830,8 @@ the client are on the console with no kernel argument. It is not secret. When a 
   (regalia-kms-bcw); a failed or missing mount still fails it at setup, by the document's path.
   - Seen as `RegaliaSiteMismatch` (`regalia_site_check_ok == 0`: it ran and refused) or
     `RegaliaSiteCheckMetricsMissing` (no `site-check.prom` since boot: it never ran). Both are `warning` for now.
-  - **Recovering a refused node**, at its console or over SSH (the tunnels are down, the host is not):
+  - **Recovering a refused node**, at its console or the iLO's (the tunnels are down, the host is not; a production
+    host has no sshd, q-20):
     `journalctl -u regalia-site-check` names the differing keys and both files. After a move, the ESP's
     document is the new site's: replace `/etc/regalia`'s site configuration with the new site's (the move
     sheet's), then `systemctl restart regalia-site-check regalia-wg-apply`. Never edit the ESP's document to

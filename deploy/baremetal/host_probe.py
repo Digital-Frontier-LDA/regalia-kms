@@ -148,7 +148,8 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
 
 The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too, and so are the
 kernel's sysctl baseline (kernel_sysctl_baseline) and the separate bootstrap and KMS users
-(bootstrap_and_kms_users_separate), regalia-kms-r1s.5. Every os_probe control is in MEASURED, so the signed
+(bootstrap_and_kms_users_separate), regalia-kms-r1s.5, and the absence of any SSH server (sshd_absent; q-20: ABSENT,
+GA ruling under owner delegation 2026-11-25, regalia-kms-r1s.12). Every os_probe control is in MEASURED, so the signed
 evidence must carry each one (evidence.validate holds its host section to MEASURED exactly).
 
 NOT MEASURED YET: a signed PCR 11 policy on the ROOT DISK. root_disk_tpm_unlocked still requires a
