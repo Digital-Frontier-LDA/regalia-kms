@@ -42,6 +42,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -356,18 +357,22 @@ func (c *Collector) MetricsHandler() http.Handler {
 			streams[key] = stream
 		}
 		c.mu.Unlock()
-		// One entry per (identity, node site): the committed sizes of the node's two witness
-		// trails — sync (the membership epoch) and esp-advances (the anchor epoch) — under the
-		// stream sites that hold them.
+		// One entry per node site, gathering every identity's stream for it: a certificate
+		// hand-over (handover.go) leaves the retired identity's streams beside its successor's, so
+		// two identities can hold the same node's trails. The endpoint must still emit ONE series per
+		// gauge per site (a duplicate metric-name/label set makes the scrape's value undefined —
+		// PR #783 r4685272669), and the value is the HIGHEST epoch any identity's committed trail
+		// holds: the behind rules fire when the node is below the witness, so the maximum is the
+		// sensitive choice, and a stale predecessor's lower epoch can never mask a rollback below
+		// what the successor already shipped.
 		type witness struct {
 			identity string
 			site     string
 			size     int64
 		}
 		type nodeWitness struct {
-			sync *witness
-			esp  *witness
-			node string
+			sync []witness
+			esp  []witness
 		}
 		nodes := map[string]*nodeWitness{}
 		for _, stream := range streams {
@@ -375,29 +380,39 @@ func (c *Collector) MetricsHandler() http.Handler {
 			if nodeSite == "" {
 				continue
 			}
-			key := stream.identity + "\x1f" + nodeSite
-			node := nodes[key]
+			node := nodes[nodeSite]
 			if node == nil {
-				node = &nodeWitness{node: nodeSite}
-				nodes[key] = node
+				node = &nodeWitness{}
+				nodes[nodeSite] = node
 			}
+			entry := witness{identity: stream.identity, site: stream.site, size: stream.size}
 			switch {
 			case strings.HasSuffix(stream.site, ".sync"):
-				node.sync = &witness{identity: stream.identity, site: stream.site, size: stream.size}
+				node.sync = append(node.sync, entry)
 			case strings.HasSuffix(stream.site, ".esp-advances"):
-				node.esp = &witness{identity: stream.identity, site: stream.site, size: stream.size}
+				node.esp = append(node.esp, entry)
 			}
 		}
-		for _, node := range nodes {
-			if node.sync != nil {
-				if membership, ok := c.witnessedTrail(node.sync.identity, node.sync.site, node.sync.size, epochFromLine); ok {
-					fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", node.node, membership)
+		highest := func(trails []witness) (epoch uint64, ok bool) {
+			for _, trail := range trails {
+				if value, found := c.witnessedTrail(trail.identity, trail.site, trail.size, epochFromLine); found && (!ok || value > epoch) {
+					epoch, ok = value, true
 				}
 			}
-			if node.esp != nil {
-				if anchor, ok := c.witnessedTrail(node.esp.identity, node.esp.site, node.esp.size, epochFromLine); ok {
-					fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", node.node, anchor)
-				}
+			return epoch, ok
+		}
+		sites := make([]string, 0, len(nodes))
+		for site := range nodes {
+			sites = append(sites, site)
+		}
+		sort.Strings(sites)
+		for _, site := range sites {
+			node := nodes[site]
+			if membership, ok := highest(node.sync); ok {
+				fmt.Fprintf(w, "regalia_collector_witnessed_membership_epoch{site=%q} %d\n", site, membership)
+			}
+			if anchor, ok := highest(node.esp); ok {
+				fmt.Fprintf(w, "regalia_collector_witnessed_anchor_epoch{site=%q} %d\n", site, anchor)
 			}
 		}
 	})
