@@ -470,6 +470,23 @@ def main(argv=None):
                    help="an owner card's decryption subkey fingerprint (the card record's ownerauth_recipients); twice")
     c.add_argument("--envelope-out", required=True, help="the OpenPGP envelope to keep, for both owner cards")
     c.add_argument("--wrapped-out", required=True, help="the answer to carry to the node's console")
+    ab = sub.add_parser("attest-booted", help="(off the nodes) judge a single-node host's boot on the new image: --nonce "
+                    "prints a nonce for its system-phase quote; --evidence verifies that quote under the tip's measurements "
+                    "and records it as the retire evidence (dx7.8)")
+    ab.add_argument("--chain", required=True, help="the signed chain this machine holds (a JSON list of envelopes)")
+    ab.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    ab.add_argument("--measurements", required=True, help="the measurement document the chain's tip commits to (policy_version)")
+    ab.add_argument("--state", required=True, help="this machine's directory for the node's verifier state (its AK, nonces, "
+                   "sessions): the same attest.json unlock uses, so the nonce it issues is the one the node's quote answers")
+    ab.add_argument("--node", required=True, help="the single-node host's node ID")
+    ab.add_argument("--nonce", action="store_true", help="issue a nonce from the verifier and print it (64 hex) for the node to "
+                   "quote against; do this AFTER the host is up on the new image (the owner has already unlocked it): the "
+                   "nonce lives 120 s, so the node's quote-for-owner and the owner's --evidence run follow it within that "
+                   "window, and it is evicted by eight other nonces the same verifier issues in the meantime")
+    ab.add_argument("--session", help="the boot session ID (64 hex), as the node's console shows it (needed only with --evidence)")
+    ab.add_argument("--evidence", help="the node's system-phase quote for the owner's nonce (JSON: ephemeral_public, nonce, "
+                   "quote, signature, and phase -- stamped by the node's quote-for-owner, and refused if it says initrd); "
+                   "with this flag, --session is required")
     u = sub.add_parser("unlock", help="(off the nodes, on the boot mesh) answer a single-node host's boot unlock as its peer (dx7.5)")
     u.add_argument("--contribution-fd", type=int, required=True,
                    help="the decrypted envelope, on a pipe: --contribution-fd 3 3< <(gpg --decrypt ENVELOPE)")
@@ -534,6 +551,34 @@ def main(argv=None):
             request = manifest_tool.read_json(args.request, 65536)
             typed = keyfd.tty_line("The enrolment key's SHA-256, as the node's console shows it: ")   # never standard input
             contribute_path(tip, document, request, typed, args.state, args.recipient, args.envelope_out, args.wrapped_out)
+            return 0
+        if args.op == "attest-booted":
+            off_the_nodes()
+            from deploy.baremetal import manifest as manifest_tool, measurements, ownerunlock
+            tip = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key))
+            with open(args.measurements, "rb") as f:
+                document = measurements.load(f.read(measurements.MAX_BYTES + 1))
+            # the owner's ONE verifier for this host: the attest.json contribute and unlock use, where the node's AK is
+            # enrolled. --nonce issues from it (so the node's quote answers it); --evidence verifies under it. A separate
+            # state would hold no AK and no nonce: the quote would refuse with "the nonce is not outstanding".
+            attester = ownerunlock.verifier(tip, document, os.path.join(args.state, "attest.json"))
+            if args.nonce:
+                require(args.evidence is None, "--nonce and --evidence are two steps: issue the nonce first, then verify "
+                        "the quote it answers")
+                node = ownerunlock.single_node(tip, args.node)
+                nonce = attester.nonce(args.node)
+                print(nonce.hex())
+                print("NONCE: %s for %s -- carry it to the node, whose console quotes it (update quote-for-owner "
+                      "--nonce <hex>), and verify the resulting evidence with --evidence" % (nonce.hex(), node["node_id"]))
+                return 0
+            require(args.evidence is not None, "give --nonce to issue a nonce, or --evidence FILE (with --session) to verify "
+                    "the quote it answers")
+            require(args.session is not None, "--evidence needs --session: the boot session ID the node's console shows")
+            evidence = manifest_tool.read_json(args.evidence, 65536)
+            record = ownerunlock.attest_booted(tip, document, os.path.join(args.state, "attest.json"),
+                                               args.node, args.session, evidence, attester)
+            print("BOOTED: %s on %s (epoch %d, phase %s) -- recorded as the retire evidence"
+                  % (args.node, record["label"], record["epoch"], record["phase"]))
             return 0
         if args.op == "beat" and os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
