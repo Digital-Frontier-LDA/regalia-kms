@@ -121,7 +121,7 @@ for t in mmdebstrap git python3 gpgv curl tar; do command -v "$t" >/dev/null || 
 case "$VARIANT" in production|staging) ;; *) die "--variant must be production or staging, not '$VARIANT'" ;; esac
 [ "$VARIANT" = production ] || REPO_FILES+=("$STAGING_DIR"/packages.txt "$STAGING_DIR"/regalia-staging-sshd.service \
   "$STAGING_DIR"/sshd_config "$STAGING_DIR"/banner "$STAGING_DIR"/journald.conf "$STAGING_DIR"/networkd.conf \
-  "$STAGING_DIR"/regalia-staging.tmpfiles.conf "$STAGING_DIR"/issue "$STAGING_DIR"/sshd-dropins-check.sh)
+  "$STAGING_DIR"/regalia-staging.tmpfiles.conf "$STAGING_DIR"/issue "$STAGING_DIR"/sshd-dropins-check.sh "$STAGING_DIR"/sshd-hostkey-check.sh)
 
 # the commit, clean, read as its owner (build-initrd.sh's rules, the same file)
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
@@ -394,6 +394,7 @@ if [ "$VARIANT" = staging ]; then
   install -D -m 0644 "$SRC/$STAGING_DIR/sshd_config" "$ROOT/usr/lib/regalia-staging/sshd_config"
   install -D -m 0644 "$SRC/$STAGING_DIR/banner" "$ROOT/usr/lib/regalia-staging/banner"
   install -D -m 0755 "$SRC/$STAGING_DIR/sshd-dropins-check.sh" "$ROOT/usr/lib/regalia-staging/sshd-dropins-check.sh"
+  install -D -m 0755 "$SRC/$STAGING_DIR/sshd-hostkey-check.sh" "$ROOT/usr/lib/regalia-staging/sshd-hostkey-check.sh"
   install -D -m 0644 "$SRC/$STAGING_DIR/journald.conf" "$ROOT/usr/lib/systemd/journald.conf.d/90-regalia-staging.conf"
   install -D -m 0644 "$SRC/$STAGING_DIR/regalia-staging.tmpfiles.conf" "$ROOT/usr/lib/tmpfiles.d/regalia-staging.conf"
   install -D -m 0644 "$SRC/$STAGING_DIR/issue" "$ROOT/etc/issue"

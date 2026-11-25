@@ -17,7 +17,9 @@ RuntimeDirectory=sshd
 RuntimeDirectoryMode=0755
 # the per-host drop-ins may hold ONLY ListenAddress and AllowUsers: any other keyword, Match included, refuses the start
 ExecStartPre=/usr/lib/regalia-staging/sshd-dropins-check.sh
-ExecStartPre=/bin/sh -c 'test -e /var/lib/regalia-staging/ssh/ssh_host_ed25519_key || /usr/bin/ssh-keygen -q -t ed25519 -N "" -f /var/lib/regalia-staging/ssh/ssh_host_ed25519_key'
+# the host key is the bundled one stage-perhost installed (regalia-kms-u2t): sshd never makes one, so a missing key
+# refuses the start by name instead of serving a new key the operator would have to trust on first use
+ExecStartPre=/usr/lib/regalia-staging/sshd-hostkey-check.sh
 ExecStartPre=/usr/sbin/sshd -t -f /usr/lib/regalia-staging/sshd_config
 ExecStart=/usr/sbin/sshd -D -e -f /usr/lib/regalia-staging/sshd_config
 Restart=on-failure

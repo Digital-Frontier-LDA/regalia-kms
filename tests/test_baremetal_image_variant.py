@@ -210,6 +210,67 @@ class TheSshdDropIns(unittest.TestCase):
         self.assertIn("Match included", head)
 
 
+HOSTKEY_CHECK = STAGING / "sshd-hostkey-check.sh"
+
+
+class TheSshdHostKeyIsTheBundledOne(unittest.TestCase):
+    """regalia-kms-u2t: the 2026-11-25 --wipe reinstall made a NEW host key at first start (the unit ran ssh-keygen
+    when the key was missing), so the operator trusted it on first use. The key is made once off-box and installed by
+    stage-perhost; the unit never makes one, and a missing or exposed key refuses the start by name."""
+
+    def judge(self, setup):
+        with tempfile.TemporaryDirectory() as d:
+            key = pathlib.Path(d) / "ssh_host_ed25519_key"
+            setup(key)
+            p = subprocess.run(["sh", str(HOSTKEY_CHECK), str(key)], capture_output=True, text=True, timeout=30)
+            return p.returncode, p.stderr
+
+    @staticmethod
+    def pair(key, mode=0o600, private=b"TEST PRIVATE\n", public=b"ssh-ed25519 AAAATEST test\n"):
+        key.write_bytes(private)
+        key.chmod(mode)
+        if public is not None:
+            key.with_name(key.name + ".pub").write_bytes(public)
+
+    def test_the_unit_never_makes_a_key_and_checks_it_before_sshd(self):
+        unit = (STAGING / "regalia-staging-sshd.service").read_text()
+        self.assertNotIn("ssh-keygen", unit)
+        pre = [l for l in unit.splitlines() if l.startswith("ExecStartPre=")]
+        self.assertEqual(pre, ["ExecStartPre=/usr/lib/regalia-staging/sshd-dropins-check.sh",
+                               "ExecStartPre=/usr/lib/regalia-staging/sshd-hostkey-check.sh",
+                               "ExecStartPre=/usr/sbin/sshd -t -f /usr/lib/regalia-staging/sshd_config"])
+        self.assertIn('install -D -m 0755 "$SRC/$STAGING_DIR/sshd-hostkey-check.sh" '
+                      '"$ROOT/usr/lib/regalia-staging/sshd-hostkey-check.sh"', BUILD.read_text())
+        self.assertIn("./usr/lib/regalia-staging/sshd-hostkey-check.sh", v.STAGING_PATHS)
+        # the check judges the very key sshd_config serves
+        self.assertIn("HostKey /var/lib/regalia-staging/ssh/ssh_host_ed25519_key", (STAGING / "sshd_config").read_text())
+        self.assertIn("key=${1:-/var/lib/regalia-staging/ssh/ssh_host_ed25519_key}", HOSTKEY_CHECK.read_text())
+
+    def test_the_bundled_pair_passes(self):
+        for mode in (0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                self.assertEqual(self.judge(lambda k: self.pair(k, mode=mode)), (0, ""))
+
+    def test_each_wrong_key_refuses_by_name(self):
+        cases = (
+            (lambda k: None, "no host key at"),
+            (lambda k: self.pair(k, private=b""), "is empty"),
+            (lambda k: self.pair(k, mode=0o644), "is mode 644, not 0600"),
+            (lambda k: self.pair(k, mode=0o640), "is mode 640, not 0600"),
+            (lambda k: self.pair(k, public=None), "no public half at"),
+            (lambda k: (k.with_name("real").write_bytes(b"x"), k.symlink_to(k.with_name("real"))), "is not a regular file"),
+            (lambda k: k.symlink_to(k.with_name("nowhere")), "is not a regular file"),
+            (lambda k: k.mkdir(), "is not a regular file"),
+        )
+        for setup, why in cases:
+            with self.subTest(why=why):
+                rc, err = self.judge(setup)
+                self.assertEqual(rc, 1, err)
+                self.assertIn(why, err)
+                self.assertIn("refusing to start regalia-staging-sshd", err)
+                self.assertIn("stage-perhost", err)
+
+
 class TheSshdWaitsForItsAddress(unittest.TestCase):
     """regalia-kms-dx7.36: on build 8, sshd bound the static ListenAddress at 16.1s; eno1 gained carrier at 18.7s, and
     five quick restarts had run out the start limit at 17.1s."""

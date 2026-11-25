@@ -30,6 +30,7 @@ STAGING_PATHS = (
     "./usr/lib/regalia-staging/sshd_config",
     "./usr/lib/regalia-staging/banner",
     "./usr/lib/regalia-staging/sshd-dropins-check.sh",
+    "./usr/lib/regalia-staging/sshd-hostkey-check.sh",
     "./usr/lib/systemd/system/regalia-staging-sshd.service",
     "./usr/lib/systemd/system/multi-user.target.wants/regalia-staging-sshd.service",
     "./usr/lib/systemd/system/multi-user.target.wants/systemd-networkd.service",
