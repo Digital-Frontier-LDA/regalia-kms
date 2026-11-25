@@ -500,13 +500,17 @@ func (c *Collector) witnessedTrail(identity, site string, size int64, epochOf fu
 		trimmed := strings.TrimSuffix(line, "\n")
 		if trimmed != "" {
 			var event Event
-			if json.Unmarshal([]byte(trimmed), &event) == nil {
-				// found tracks whether an epoch was FOUND, not whether the trail was committed: a
-				// committed trail with no ALLOW epoch reports absence (the blind state), never a
-				// zero floor. A genuine epoch 0 is found and published.
-				if value, ok := epochOf(&event); ok && (!found || value > epoch) {
-					epoch, found = value, true
-				}
+			// The commit path appends only validated events, so a committed line that does not
+			// parse is corruption, and it may be the one holding the highest epoch: the stream is
+			// unreadable, never skipped past to a lower floor (regalia-kms-wac).
+			if parseErr := json.Unmarshal([]byte(trimmed), &event); parseErr != nil {
+				return 0, false, fmt.Errorf("the committed line ending at byte %d does not parse: %w", read, parseErr)
+			}
+			// found tracks whether an epoch was FOUND, not whether the trail was committed: a
+			// committed trail with no ALLOW epoch reports absence (the blind state), never a
+			// zero floor. A genuine epoch 0 is found and published.
+			if value, ok := epochOf(&event); ok && (!found || value > epoch) {
+				epoch, found = value, true
 			}
 		}
 		if readErr != nil {

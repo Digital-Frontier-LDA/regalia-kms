@@ -339,3 +339,31 @@ func TestScrapesConcurrentWithCommitsAreRaceFreeAndMonotone(t *testing.T) {
 		t.Fatalf("only %d scrapes ran", scrapes)
 	}
 }
+
+// A CORRUPTED LINE INSIDE THE COMMITTED SIZE IS UNREADABLE, NOT SKIPPED (regalia-kms-wac, GA nit 4
+// on #783 review 6052811402): the commit path appends only validated events, so a committed line
+// that does not parse as an Event is corruption, and it may be the one holding the highest epoch.
+// Skipping it would publish a lower floor and hide a rollback, the same silent blindness as review
+// 6052752757. The byte length is kept, so the committed size still matches.
+func TestACorruptedCommittedLineMarksTheStreamUnreadable(t *testing.T) {
+	f := newWitnessFixture(t)
+	identity := strings.Repeat("4", 64)
+	f.commit(identity, "nodea.sync", 3, 9)
+	path := f.collector.streamPath(identity, "nodea.sync")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := strings.IndexByte(string(data), '\n') + 1
+	data[second] = 'X' // the epoch-9 line no longer parses; its length is unchanged
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := f.scrape()
+	if strings.Contains(body, "regalia_collector_witnessed_membership_epoch{") {
+		t.Fatalf("a corrupted committed line was skipped and a lower epoch published:\n%s", body)
+	}
+	if !strings.Contains(body, `regalia_collector_witness_stream_readable{site="nodea",trail="sync"} 0`+"\n") {
+		t.Fatalf("a corrupted committed line did not say readable 0:\n%s", body)
+	}
+}
