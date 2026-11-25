@@ -113,6 +113,23 @@ All of it lives under `/etc/regalia/audit-ship/` and `/etc/regalia/audit-ship.en
   verified against the pinned key(s), for this node's identity and stream, and with the line chain recomputed
   over the archive (`trails.py prune`). A collector that is down or does not sign means trails grow; nothing is
   lost.
+- **Single-node: the collector is the floor.** Under a single-node admission with no audit collector
+  configured, the daemon refuses every stateful operation (wrap, key-agreement, release-secret,
+  seal-envelope) with `collector-not-configured` (503, retryable): stateful operations spend a nonce, a
+  quota, or a data key that the trail would record as done, and without an off-host witness there is no
+  durable copy of that spend — a replayed or rolled-back node could un-spend it. A sign carrying a Cosmos
+  transaction is refused like them: its allowed policy evaluation reserves the account sequence
+  (content type `application/vnd.cosmos.tx+protobuf`, the one content type a Cosmos policy may allow), so the
+  judgment is the policy engine's own, not a name. Plain sign, unwrap and certificate-sign keep serving: they
+  reserve no policy or opstate state beyond the nonce and quota the single-node decision accepts. A collector that is
+  configured but unreachable does NOT refuse: the trail's shipper retries, and the outage is an alert
+  (`RegaliaAuditTrailBehind`), not a refusal. The collector's own `/metrics` endpoint (scraped by the
+  monitoring service, job `regalia-collector`) is the reference the single-node behind rules compare against
+  (MONITORING.md, section 4.1): a configured collector that is not scraping is the blind state
+  `RegaliaCollectorEpochMissing` / `RegaliaCollectorAnchorEpochMissing`, not a refusal. A witness stream the collector
+  cannot read through its committed size withholds that trail's epoch and is named by
+  `RegaliaCollectorWitnessUnreadable`; the collector's log line ("witness stream <path> is unreadable through its
+  committed size") names the file and the error. Restore the stream from the collector's backup.
 
 ## 5. How to check a candidate service
 

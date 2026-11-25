@@ -38,6 +38,10 @@ func (value orderedPolicy) Evaluate(context.Context, policy.Request) policy.Deci
 	return value.decision
 }
 
+func (orderedPolicy) ReservesCosmosSequence(objectID, operation, contentType string) bool {
+	return false
+}
+
 func TestADenyingAuthorizerIsDecidedBeforePolicyIsEvaluated(t *testing.T) {
 	allow := policy.Decision{Allowed: true, Code: policy.CodeAllowed, PolicyID: "sops"}
 	deny := policy.Decision{Allowed: false, Code: policy.CodeLimitExceeded, PolicyID: "sops", Rule: "rate"}

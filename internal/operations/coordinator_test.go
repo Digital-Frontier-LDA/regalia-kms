@@ -68,12 +68,21 @@ type fakePolicy struct {
 	decision    policy.Decision
 	calls       int
 	lastRequest policy.Request
+	// cosmos makes this policy the one shape that reserves a Cosmos sequence: a sign whose
+	// content is a Cosmos SignDoc (the collector-required refusal, regalia-kms-dx7.9).
+	cosmos bool
 }
 
 func (value *fakePolicy) Evaluate(_ context.Context, request policy.Request) policy.Decision {
 	value.calls++
 	value.lastRequest = request
 	return value.decision
+}
+
+// ReservesCosmosSequence defaults to false: a policy that is not a Cosmos policy. The
+// collector-required tests set cosmos to true for the one sign they judge.
+func (value *fakePolicy) ReservesCosmosSequence(objectID, operation, contentType string) bool {
+	return value.cosmos
 }
 
 type fakeAudit struct {

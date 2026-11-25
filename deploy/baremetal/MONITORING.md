@@ -47,13 +47,32 @@ the target's live samples are unavailable.
 `metrics_path: /v1/metrics` for the daemon. Use `scheme: https` and the respective TLS configuration on
 each job. Use these exact names and keep one cluster per rule evaluation environment. Fleet comparisons
 group on `job`, so combining multiple clusters under the name would skew those comparisons.
+**The collector scrape job is `regalia-collector`.** Configure `job_name: regalia-collector` with
+`metrics_path: /metrics` for the audit collector's own witness (regalia-kms-dx7.9, D1=A): the off-host
+reference the single-node behind rules compare a node against. It is scraped on the owner's monitoring
+service (not the node), and a `metric_relabel_configs` rule copies each series' `site` label onto
+`instance` so the reference carries the node's instance under the collector's job (section 4.1).
 
 As a commissioning prerequisite, register **both** endpoints for every node in persistent external scrape
 inventory. Set the target label `topology_profile` to the fixed value `single-node` or `multi-node` on both jobs.
 Set `honor_labels: false` on both jobs so an endpoint cannot override inventory labels. Keep both targets
 registered during reboots, failed scrapes and outages, including before their first successful scrape. A
-profile is an external label for monitoring, not an admission decision. The two endpoints can have different
-`instance` values. Keep each `job`, `instance` pair unique so that no other endpoint supplies its health evidence.
+profile is an external label for monitoring, not an admission decision. Keep each `job`, `instance` pair unique
+so that no other endpoint supplies its health evidence.
+
+**The node's `instance` is the shipper's site, and the two sides carry no other differing labels.** The
+single-node behind rules compare a node's epoch series against the collector's witness on `instance` (the fleet
+rules join on `job`, which may differ; the behind rules do not), and the comparison is
+`ignoring(job, topology_profile)` — every other label must match on both sides. So the `regalia-node` target's
+`instance` label must be set, in the inventory, to the node's shipper site (the same value the collector's stream
+site carries, `nodea` for node-a) — not left at Prometheus's default of the scrape address (`192.0.2.10:9100`) — and
+the collector's `metric_relabel_configs` (section 4.1) maps its `site` label to that same `instance` and drops
+`site`, so both sides carry one shared `instance` and nothing else the join does not ignore. Inventory labels attach
+to every series a target exposes, so do not add an extra inventory label (such as `cluster="west"`) to one target
+only: a label present on the node's series and absent on the witness series breaks the join for that node, the
+behind rules stop firing for it, and `RegaliaCollectorEpochMissing` fires. A target whose `instance` is the bare
+address never matches its own witness for the same reason: the behind rules stay silent and
+`RegaliaCollectorEpochMissing` fires.
 
 The rule tests hold job matchers to these names. New registrations require the profile label on both jobs. Older
 unlabeled targets keep the legacy multi-node alert behavior while the metadata warning is active.
@@ -95,8 +114,9 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   and recovery-key alerts. Sync's own topology gauge cannot exempt a target or remove a comparison reference;
   in particular, it cannot silence the root-produced anchor alert. Missing inventory labels retain legacy
   coverage. Correct registration is a commissioning requirement; repair metadata when the consistency warning
-  fires. Live size one emits informational `RegaliaOwnerAssistedReboot`: an owner must be present on each boot.
-  It does not page or change which other alerts apply.
+  fires. Live size one on a single-node target emits informational `RegaliaNextBootNeedsOwner` (renamed from
+  `RegaliaOwnerAssistedReboot`, regalia-kms-dx7.9): an owner must be present on each boot. It does not page or
+  change which other alerts apply.
 - **Other targets** that cannot be scraped still raise `RegaliaNodeExporterDown` (critical, after 2 minutes).
   The delayed `RegaliaNotServing` and `RegaliaNotReady` rules also retain legacy coverage. The three shared
   alerts exclude explicitly registered single-node targets, which have the earlier composite page.
@@ -108,10 +128,84 @@ Everything comes from the node's validated site configuration (`/etc/regalia/sit
   shipper's file of any trail in `trails.py`'s registry (an instance never enabled, or refused its trail's path).
 - **A file node_exporter cannot read** drops its series: `RegaliaNodeTextfileUnreadable`.
 - **Limits.** No rule can detect an endpoint omitted from scrape inventory, and an offline monitoring service
-  cannot send a page. Collector configuration enforcement and comparison against the collector's observed
-  epoch remain separate work (regalia-kms-dx7.9).
+  cannot send a page.
 - On the node, nothing waits for the service: the metrics are written whether or not anyone scrapes them,
   and no node behaviour depends on monitoring.
+
+### 4.1 The single-node rule set (regalia-kms-dx7.9)
+
+`deploy/monitoring/regalia-single-node.rules.yml` is the set of alerts that watches a one-node installation.
+Every rule in it matches on the external inventory label `topology_profile="single-node"`, set on both scrape
+jobs by the service's inventory; the fleet rules in `regalia-node.rules.yml` carry the mirror exclusion
+(`topology_profile!="single-node"`), so a target is watched by exactly one set. The cross-profile matrix in
+`tests/test_single_node_alert_firing.py` holds the two files to each other: every rule here is faulted on a
+multi-node fixture and must stay silent, and every multi-node-only rule is faulted on a single-node fixture and
+must stay silent.
+
+The rules:
+
+| alert | severity | what it is |
+|---|---|---|
+| `RegaliaSingleNodeDown` | critical | the composite page for a one-node installation: either endpoint not scraped, or a successful scrape that cannot confirm health (no fresh `regalia_admission_serving`/`lease.prom` mtime for the node, no fresh `regalia_ready`/`regalia_readiness_last_check_seconds` for the daemon). |
+| `RegaliaTopologyProfileInvalid` | warning | the `topology_profile` inventory label is missing or not `single-node`/`multi-node` on either job, for five minutes. |
+| `RegaliaTopologyMetricMissing` | warning | a scraped target with valid metadata has no `regalia_topology_nodes` series (the verified-topology gauge is absent), for five minutes. |
+| `RegaliaTopologyProfileMismatch` | warning | the verified `regalia_topology_nodes` disagrees with the external inventory profile (single-node target reports a size other than one, or a multi-node target reports size one or less), for five minutes. |
+| `RegaliaMembershipBehindCollector` | warning | the node's `regalia_membership_epoch` is older than the highest epoch the audit collector already committed in its sync trail (the off-host witness, D1=A), for thirty minutes. The reference is the collector's, not the node's own telemetry: a rolled-back or withholding node cannot supply its own floor. |
+| `RegaliaAnchorBehindCollector` | warning | the same, from the collector's `esp-advances` witness: the node's TPM anchor lags what it has already shipped, for thirty minutes. |
+| `RegaliaCollectorEpochMissing` | warning | the blind state of `RegaliaMembershipBehindCollector`: a scraped single-node target whose collector membership reference is absent (collector not configured, its scrape job missing, no witness committed yet, or its sync stream unreadable) has no right-hand side and the rule silently cannot fire. Warns after fifteen minutes. |
+| `RegaliaCollectorAnchorEpochMissing` | warning | the same blind state for `RegaliaAnchorBehindCollector`: the anchor reference (`regalia_collector_witnessed_anchor_epoch`) is absent while the target is scraped (no esp-advances witness committed yet, or that stream unreadable), so the ESP rollback comparison cannot fire. Warns after fifteen minutes. |
+| `RegaliaCollectorWitnessUnreadable` | warning | `regalia_collector_witness_stream_readable{trail} == 0` for a scraped single-node target, for ten minutes: the collector holds the node's stream for that trail but cannot read it through its committed size (a vanished or truncated file, a disk error). It withholds that trail's epoch (a partial maximum could hide a rollback), so a missing-epoch rule above fires too; this one names the cause, and the collector's log names the stream file and the error. |
+| `RegaliaNextBootCannotRender` | warning | `regalia_esp_boot_renderable == 0` under single-node: the chain on the ESP leaves the initrd nothing to render, and there is no peer to ask, so the next boot cannot be unlocked without the owner's recovery path. |
+| `RegaliaNextBootNeedsOwner` | info | renamed from `RegaliaOwnerAssistedReboot` (design 4.5): `regalia_topology_nodes == 1` under single-node. Owner presence is required at each boot, including the next reboot. |
+| `RegaliaRestorePending` | critical | the boot guard (regalia-kms-dx7.26) seen from monitoring: `regalia_restore_pending == 1` means `/etc/regalia/restore-pending` holds etcd and the daemon SKIPPED at every boot (a replacement disk awaiting its restore). The page names the cause. |
+| `RegaliaRestoreMetricsMissing` | warning | a scraped single-node target has no `pending.prom` textfile: the restore-pending marker's state is not watched (the writer died before its first write, or the file is unreadable), for five minutes. |
+
+**The collector's reference (D1=A).** `regalia_collector_witnessed_membership_epoch` and
+`regalia_collector_witnessed_anchor_epoch` are scraped from the audit collector's own `/metrics` endpoint, on
+the collector's mTLS listener (the same listener and client CA the sink's protocol uses — one door, not a
+second). The endpoint emits ONE series per node: the membership series (from the node's sync trail) and the
+anchor series (from its esp-advances trail) share the label `site` = the node's own site (the stream's site
+minus its trail suffix), so a node's two gauges agree on identity and a node the collector has not seen gets
+no series. The scrape job `regalia-collector` adds its own `job`, copies `site` onto `instance`, and drops `site`
+(`metric_relabel_configs` — series labels are rewritten only there; `relabel_configs` rewrites target
+metadata, which a scraped series no longer has), so the reference carries the node's `instance` under the
+collector's job and no label the node's own series lack. The node's `instance` is set to the shipper's site in the
+inventory (section 2), so the two sides agree on it. The behind rules compare on the full label set minus `job` and
+`topology_profile` (the two labels the sides carry differently), so one-to-one on `instance`: a node is judged
+against its own off-host witness, and another node's witness cannot be its floor. While the collector is not
+configured or not scraping, the comparisons have no right-hand side and stay silent: that blind state is
+`RegaliaCollectorEpochMissing` (membership) and `RegaliaCollectorAnchorEpochMissing` (anchor). The endpoint also
+publishes `regalia_collector_witness_stream_readable{site,trail}` (1 or 0) for each node trail it holds: a stream it
+cannot read through its committed size withholds that trail's epoch rather than publish a partial maximum, and
+`RegaliaCollectorWitnessUnreadable` names it. The monitoring service must configure the scrape job:
+
+```yaml
+- job_name: regalia-collector
+  metrics_path: /metrics
+  scheme: https
+  # mTLS: the service's client certificate, issued by the collector's client CA (the same CA the
+  # sink's clients are). The collector's listener is RequireAndVerifyClientCert; a scrape with no
+  # chain-verified certificate never reaches a handler.
+  # Copy the collector's site label onto the node's instance so the behind rules' one-to-one
+  # match on instance works, then drop the site label: the node's own epoch series carry no
+  # site, and the rules' ignoring(job, topology_profile) join requires the sides to agree on
+  # every other label, so a leftover site would keep the operands apart (the behind alerts stay
+  # silent, and the missing-reference warning fires on every node). Distinct nodes keep distinct
+  # instance values. This is metric_relabel_configs (series labels, post-scrape): relabel_configs
+  # only rewrites target metadata at discovery time and cannot touch a label the endpoint emits.
+  metric_relabel_configs:
+    - source_labels: [site]
+      target_label: instance
+      action: replace
+    - regex: site
+      action: labeldrop
+```
+
+**The restore-pending metric.** `regalia_restore_pending` (0 or 1) is written by `deploy/baremetal/metrics.py`
+into the node_exporter textfile directory (`/run/regalia-metrics/restore/pending.prom`). It is 1 while
+`/etc/regalia/restore-pending` exists (the boot guard of regalia-kms-dx7.26 holds etcd and the daemon SKIPPED
+at every boot) and 0 otherwise. `deploy/baremetal/restore.py` updates it at `mark_pending` and `clear_pending`;
+`deploy/baremetal/node.py` publishes it on every sync.
 
 ## 5. How to check a candidate service
 

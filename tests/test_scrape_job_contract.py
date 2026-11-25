@@ -26,12 +26,26 @@ RULE_FILES = sorted((ROOT / "deploy" / "monitoring").glob("*.rules.yml"))
 
 DOCUMENTED_NODE = re.compile(r"\*\*The scrape job is `([^`]+)`\.\*\*")
 DOCUMENTED_KMS = re.compile(r"\*\*The daemon scrape job is `([^`]+)`\.\*\*")
+DOCUMENTED_COLLECTOR = re.compile(r"\*\*The collector scrape job is `([^`]+)`\.\*\*")
 COMPOSITE = "regalia-single-node.rules.yml"
+# Every composite (single-node) alert's up selectors, by job. The behind-collector rules compare
+# against the collector's witness and select no up (their applicability is the node's own series,
+# not a scrape's liveness); the collector's blind-state and the pending-file rules select the node
+# exporter (the scraped target whose series or file is absent). regalia-kms-dx7.9.
 UP_JOBS = {
     "RegaliaSingleNodeDown": {"regalia-node", "regalia-kms"},
     "RegaliaTopologyProfileInvalid": {"regalia-node", "regalia-kms"},
     "RegaliaTopologyMetricMissing": {"regalia-node"},
     "RegaliaTopologyProfileMismatch": {"regalia-node"},
+    "RegaliaMembershipBehindCollector": set(),
+    "RegaliaAnchorBehindCollector": set(),
+    "RegaliaCollectorEpochMissing": {"regalia-node"},
+    "RegaliaCollectorAnchorEpochMissing": {"regalia-node"},
+    "RegaliaCollectorWitnessUnreadable": {"regalia-node"},
+    "RegaliaNextBootCannotRender": set(),
+    "RegaliaNextBootNeedsOwner": set(),
+    "RegaliaRestorePending": set(),
+    "RegaliaRestoreMetricsMissing": {"regalia-node"},
 }
 UP_SELECTOR = re.compile(r"(?<![\w:])up(?![\w:])\s*(\{[^}]*\})?")
 # any matcher on the job label: =, !=, =~, !~, quoted either way
@@ -52,12 +66,17 @@ class ScrapeJobContract(unittest.TestCase):
         doc = MONITORING.read_text(encoding="utf-8")
         self.assertEqual(DOCUMENTED_NODE.findall(doc), ["regalia-node"])
         self.assertEqual(DOCUMENTED_KMS.findall(doc), ["regalia-kms"])
+        # The single-node behind rules (regalia-kms-dx7.9, D1=A) compare a node against the audit
+        # collector's own witness, scraped on the owner's monitoring service under its own job.
+        self.assertEqual(DOCUMENTED_COLLECTOR.findall(doc), ["regalia-collector"])
         matchers = [(file, alert, op, value)
                     for file, alert, expr in rule_expressions()
                     for op, _, value in JOB_MATCHER.findall(expr)]
         self.assertTrue(matchers, "no rule selects a job: the pattern no longer matches the rules")
         wrong = [m for m in matchers if m[2] != "="
-                 or (m[3] != "regalia-node" and (m[0], m[3]) != (COMPOSITE, "regalia-kms"))]
+                 or (m[3] != "regalia-node"
+                     and (m[0], m[3]) != (COMPOSITE, "regalia-kms")
+                     and (m[0], m[3]) != (COMPOSITE, "regalia-collector"))]
         self.assertEqual(wrong, [], "job matchers must use exact documented job identities")
 
     def test_every_up_selector_names_the_job(self):

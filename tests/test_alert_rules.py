@@ -15,7 +15,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "deploy" / "monitoring" / "regalia-kms.rules.yml"
+SINGLE_NODE_RULES_PATH = ROOT / "deploy" / "monitoring" / "regalia-single-node.rules.yml"
 CONTRACT_PATH = ROOT / "OBSERVABILITY.md"
+MONITORING_PATH = ROOT / "deploy" / "baremetal" / "MONITORING.md"
 
 METRIC_REFERENCE = re.compile(r"regalia_[a-z_]+")
 
@@ -94,6 +96,27 @@ class AlertRuleTests(unittest.TestCase):
                 for rule in self.rules()
             )
             self.assertTrue(matched, f"{name} is a freshness gauge no rule consumes")
+
+    def test_every_single_node_alert_is_documented(self):
+        """AC3: every alert in regalia-single-node.rules.yml appears in MONITORING.md's single-node subsection.
+
+        A rule the operator's page does not name is a page the operator cannot triage: the
+        alert fires, the owner reads the summary, and the documented rule set (the only thing
+        an owner is promised to see) has no entry for it. This holds the file to the doc.
+        """
+        document = yaml.safe_load(SINGLE_NODE_RULES_PATH.read_text(encoding="utf-8"))
+        alerts = {rule["alert"] for group in document["groups"] for rule in group["rules"] if "alert" in rule}
+        self.assertTrue(alerts, "no single-node alerts were parsed: this test would pass while checking nothing")
+        monitoring = MONITORING_PATH.read_text(encoding="utf-8")
+        # The single-node subsection is the one that names the file; the doc test asserts every
+        # alert in the file appears anywhere in MONITORING.md (the subsection is where it lives,
+        # but a doc test on the whole file is the durable pin: an alert moved out of the
+        # subsection but left in the doc is still documented, and one deleted from both is the
+        # gap the firing test catches).
+        for alert in alerts:
+            self.assertIn(alert, monitoring,
+                          f"{alert} is in regalia-single-node.rules.yml but not in MONITORING.md: "
+                          "a single-node alert the operator's page does not name cannot be triaged")
 
     def test_every_fencing_state_has_a_rule_that_can_actually_fire(self):
         """Fencing has three distinguishable bad states and each needs its own rule.
