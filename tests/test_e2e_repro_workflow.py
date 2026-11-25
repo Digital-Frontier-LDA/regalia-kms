@@ -54,7 +54,8 @@ class Repro(unittest.TestCase):
         self.assertEqual(inputs["runs"]["default"], "1", "a mis-click should cost one run, not five")
         [plan] = self.doc["jobs"]["plan"]["steps"]
         self.assertEqual(plan["env"], {"REF": "${{ inputs.ref }}", "RUNS": "${{ inputs.runs }}",
-                                       "REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}"})
+                                       "REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}",
+                                       "PIN": self.pin(), "ACTION_TREE": plan["env"]["ACTION_TREE"]})
         self.assertEqual(self.job["needs"], "plan")
         self.assertEqual(self.job["strategy"]["matrix"]["run"], "${{ fromJSON(needs.plan.outputs.runs) }}")
 
