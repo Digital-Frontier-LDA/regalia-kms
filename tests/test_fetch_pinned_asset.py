@@ -43,6 +43,7 @@ case $mode in
   ok) printf 'pinned tool bytes\n' > "$out"; code 200; exit 0;;
   wrong) printf 'tampered\n' > "$out"; code 200; exit 0;;
   timeout) echo "curl: (28) Operation timed out" >&2; code 000; exit 28;;
+  truncated) printf 'pinned' > "$out"; echo "curl: (18) transfer closed with bytes remaining" >&2; code 200; exit 18;;
   *) printf 'error body' > "$out"; code "$mode"; exit 0;;
 esac
 """
@@ -104,7 +105,8 @@ class FetchPinnedAsset(unittest.TestCase):
         self.assertIn("sha256", done.stderr.lower())
 
     def test_a_rate_limit_or_timeout_on_the_release_url_falls_back(self):
-        for mode in ("429", "timeout"):
+        # truncated: a 200 whose body dies mid-transfer (curl 18/28/56) is an outage too (council SHOULD).
+        for mode in ("429", "timeout", "truncated"):
             with self.subTest(mode=mode):
                 self.log.unlink(missing_ok=True)
                 done, out, calls = self.run_fetch(mode, "ok")
