@@ -1,0 +1,88 @@
+# regalia-kms-9xw: reproduce a three-node e2e flake on GitHub-hosted runners, by hand, at one commit. The three-node
+# e2e changes the machine as root (namespaces, loop devices, dm-crypt, transient units), so it cannot run on the
+# shared heavy pool; this is the one place it is re-run on purpose (GA exception to the pre-run rule, 2026-11-25).
+# Dispatch only: no pull_request, push or schedule. One dispatch at a time, never cancelled.
+#
+# Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
+# (a) the checkout takes the dispatched commit, (b) each run's TPM diagnostics have their own name.
+name: e2e repro
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The full 40-hex commit SHA to run at (nothing else is accepted)"
+        required: true
+        type: string
+      runs:
+        description: "How many runs of three-node-leases (1-5)"
+        required: true
+        type: choice
+        options: ["1", "2", "3", "4", "5"]
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-repro
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      runs: ${{ steps.plan.outputs.runs }}
+    steps:
+      - name: The commit is a full SHA and the run count is 1-5
+        id: plan
+        env:
+          REF: ${{ inputs.ref }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
+          [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
+          echo "runs=[$(seq -s, 1 "$RUNS")]" >> "$GITHUB_OUTPUT"
+
+  three-node-leases:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(needs.plan.outputs.runs) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: Runtime leases, renewal and failover, a running node revoked
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-leases: 20 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the three-node lease test did not pass all 20 checks" >&2; exit 1; }
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: ./.github/actions/tpm-diagnostics
+        with:
+          name: three-node-leases-run-${{ matrix.run }}
