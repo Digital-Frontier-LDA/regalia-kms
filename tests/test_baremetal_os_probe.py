@@ -115,6 +115,13 @@ def sysctl_path(key):
 UNIT_FILES = ("systemctl", "list-unit-files", "--no-legend", "--no-pager", os_probe.SERVICE, *os_probe.SSH_UNIT_PATTERNS)
 LISTENERS = ("ss", "-Hltn")
 KMS_UNIT_FILE = "regalia-kms.service enabled enabled\n"
+PROC_TCP_HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+# the same listeners as NO_SSH_LISTENING, as /proc/net/tcp holds them (192.0.2.10 is 0A0200C0 little-endian; 8443 is 20FB)
+PROC_TCP = (PROC_TCP_HEAD + "   0: 0A0200C0:20FB 00000000:0000 0A 00000000:00000000 00:00000000 00000000   995        0 101 1\n"
+            "   1: 0A0200C0:238C 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 102 1\n"
+            "   2: 0100007F:094B 00000000:0000 0A 00000000:00000000 00:00000000 00000000   990        0 103 1\n"
+            "   3: 0A0200C0:20FB 0B0200C0:D431 01 00000000:00000000 00:00000000 00000000   995        0 104 1\n")
+PROC_TCP6 = PROC_TCP_HEAD
 NO_SSH_LISTENING = ("LISTEN 0      4096   192.0.2.10:8443   0.0.0.0:*\n"
                     "LISTEN 0      4096   192.0.2.10:9100   0.0.0.0:*\n"
                     "LISTEN 0      4096   127.0.0.1:2379    0.0.0.0:*\n")
@@ -141,6 +148,8 @@ class FakeHost:
             os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
             "/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE,
             "/proc/40/status": sync_status(),
+            "/proc/net/tcp": PROC_TCP,
+            "/proc/net/tcp6": PROC_TCP6,
         }
         # the kernel as the image's sysctl.d leaves it (the kernel writes each value with a newline)
         for key, value in os_probe.SYSCTL_BASELINE.items():
@@ -178,6 +187,7 @@ class FakeHost:
             # server's path answers 1, "no such file", as an unknown command does here)
             UNIT_FILES: KMS_UNIT_FILE,
             LISTENERS: NO_SSH_LISTENING,
+            ("stat", "-c", "%F", "/"): "directory\n",
         }
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
@@ -687,6 +697,36 @@ class SshdAbsent(unittest.TestCase):
         self.assert_fails([lambda g: g.commands.pop(UNIT_FILES), lambda g: g.commands.__setitem__(UNIT_FILES, "")],
                           "the unit files cannot be listed")
         self.assert_fails([stat_broken], "cannot be checked (stat exit 127)")
+
+    def test_a_listener_the_kernel_holds_fails_it_even_when_ss_shows_none(self):
+        """#791 review: an ss that exits 0 and prints nothing read as "nothing on :22". The kernel's tables are read
+        beside it, so a listener on :22 is found either way, on IPv4 or IPv6, on any address; a connection that is not
+        listening, or a port that only contains 22, is not SSH's."""
+        def kernel(table, row):
+            return lambda g: (g.commands.__setitem__(LISTENERS, ""),
+                              g.files.__setitem__(table, g.files[table] + row))
+        v4 = "   9: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 109 1\n"
+        v4_one_address = "   9: 0A0200C0:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 109 1\n"
+        v6 = ("   0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A "
+              "00000000:00000000 00:00000000 00000000     0        0 110 1\n")
+        self.assert_fails([kernel("/proc/net/tcp", v4), kernel("/proc/net/tcp", v4_one_address)], "/proc/net/tcp shows a listener on :22")
+        self.assert_fails([kernel("/proc/net/tcp6", v6)], "/proc/net/tcp6 shows a listener on :22")
+        host = FakeHost()
+        host.files["/proc/net/tcp"] += ("  10: 0A0200C0:0016 0B0200C0:D431 01 00000000:00000000 00:00000000 00000000 0 0 111 1\n"   # established, not listening
+                                        "  11: 00000000:08AE 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 112 1\n")  # :2222
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_kernel_table_that_cannot_be_read_fails_it(self):
+        self.assert_fails([lambda g: g.files.pop("/proc/net/tcp"), lambda g: g.files.pop("/proc/net/tcp6")], "cannot be read")
+
+    def test_a_stat_that_answers_1_to_everything_fails_it(self):
+        """#791 review: GNU stat exits 1 for a missing path and for most other errors, so "exit 1 = absent" alone is not
+        a read that answered. A stat that cannot stat "/" shows nothing absent."""
+        def stat_says_1(g):
+            run = g.run
+            g.run = lambda argv: (1, "") if argv[:3] == ["stat", "-c", "%F"] else run(argv)
+        self.assert_fails([stat_says_1, lambda g: g.commands.__setitem__(("stat", "-c", "%F", "/"), "regular file\n")],
+                          "stat does not answer")
 
     def test_every_problem_is_named(self):
         host = FakeHost()

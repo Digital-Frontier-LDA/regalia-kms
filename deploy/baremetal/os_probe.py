@@ -869,6 +869,7 @@ SSHD_BINARIES = ("/usr/sbin/sshd", "/usr/bin/sshd", "/usr/local/sbin/sshd", "/us
 # regalia-staging-sshd.service; Dropbear's. The KMS unit is listed with them, so an empty answer cannot pass.
 SSH_UNIT_PATTERNS = ("ssh.*", "ssh@*", "*sshd*", "dropbear*")
 SSH_PORT = 22
+PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
 STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --variant staging writes it; imagevariant.py
                                                        # refuses a production image that holds it
 
@@ -876,6 +877,10 @@ STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --varia
 def sshd_absent(host):
     """No SSH server on the host: no binary, no unit, nothing on TCP :22. Every problem is named, not the first only."""
     found = []
+    # stat exits 1 for a missing path AND for most other errors: a stat that cannot stat "/" cannot say "absent" either
+    rc, out = host.run(["stat", "-c", "%F", "/"])
+    if rc != 0 or out.strip() != "directory":
+        found.append(f"stat does not answer (stat / exit {rc}: {out.strip() or 'no output'}), so no path can be shown absent")
     for path in SSHD_BINARIES:
         # stat without -L: a link that points nowhere is still an SSH server's name, and is reported
         rc, out = host.run(["stat", "-c", "%F", path])
@@ -900,6 +905,15 @@ def sshd_absent(host):
         # local address (0.0.0.0:22, [::]:22, 0.0.0.0%eth0:22, *:22)
         found += [f"{fields[3]} is listening" for fields in (line.split() for line in out.splitlines())
                   if len(fields) >= 4 and fields[3].rpartition(":")[2] == str(SSH_PORT)]
+    # the kernel's own tables, read independently of ss: an ss that exits 0 and prints nothing must not read as
+    # "nothing on :22". Each row: sl local_address(hex IP:hex port) rem_address st(0A = LISTEN) ...
+    for table in PROC_TCP_TABLES:
+        text = host.read(table)
+        if text is None:
+            found.append(f"{table} cannot be read")
+            continue
+        found += [f"{table} shows a listener on :{SSH_PORT} ({fields[1]})" for fields in (line.split() for line in text.splitlines()[1:])
+                  if len(fields) >= 4 and fields[3] == "0A" and fields[1].rpartition(":")[2].upper() == "%04X" % SSH_PORT]
     if found:
         why = "this host is not shown to be free of an SSH server (a production KMS host has none, q-20): " + "; ".join(found)
         if host.read(STAGING_VARIANT) is not None:
