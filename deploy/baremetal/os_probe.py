@@ -918,6 +918,17 @@ UNIT_DIRECTORIES = ("/etc/systemd/system.control", "/run/systemd/system.control"
 UNIT_EXEC_KEYS = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecReload", "ExecStop", "ExecStopPost",
                   "ExecStopPre")
 UNIT_EXEC_PATH_KEYS = ("ExecSearchPath", "ExecPaths")
+# Where systemd finds a command given by bare name (#791 CodeRabbit): in the unit's ExecSearchPath= directories when it
+# sets them, otherwise in its compiled path; the unit's Environment=PATH= never takes part (systemd 257:
+# src/core/exec-invoke.c calls find_executable_full with use_path_envvar false; src/basic/path-util.h DEFAULT_PATH_*).
+# A bare name is looked for in every ExecSearchPath= directory any unit sets, in all of these and on this probe's own
+# PATH: a superset of where systemd may find it, so an SSH server under any of them fails the control (fail closed).
+SYSTEMD_COMMAND_PATH = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+# The words that end one command of an Exec*= value and start the next (config_parse_exec, systemd 257: a bare ";", and
+# in first-word position a quoted or escaped one too). Each is taken as a separator wherever it stands, so a command
+# systemd runs is never missed; the prefixes each command may carry are dropped before its program is read.
+EXEC_SEPARATORS = (";", "\\;", '";"', "';'")
+EXEC_PREFIXES = "@-:+!|"
 SOCKET_LISTEN_KEYS = ("ListenStream", "ListenSequentialPacket")
 SSH_PORT = 22
 PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
@@ -931,23 +942,44 @@ STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --varia
                                                        # refuses a production image that holds it
 
 
-def _ssh_executable(host, argv0, seen):
+def _ssh_executable(host, argv0, seen, search=()):
     """Why argv0 is an SSH server's program, or None: by its path, by its name or its target's, or by what its bytes say.
-    A path that cannot be looked up, or read when it is there, is named too: unknown is not absent."""
+    A bare name is every program of that name where systemd may find it (search: the ExecSearchPath= directories; then
+    SYSTEMD_COMMAND_PATH) or on this probe's PATH. A path that cannot be looked up, or read when it is there, is named
+    too: unknown is not absent."""
     if not argv0:
         return None
-    path = argv0 if argv0.startswith("/") else host.which(argv0)
+    if argv0.startswith("/"):
+        paths = [argv0]
+    else:
+        on_path = host.which(argv0)
+        paths = [on_path] if on_path else []
+        for directory in tuple(search) + SYSTEMD_COMMAND_PATH:
+            candidate = directory.rstrip("/") + "/" + argv0
+            if candidate in paths:
+                continue
+            state, detail = host.lookup(candidate)
+            if state == "error":
+                return "%s cannot be looked up (%s)" % (candidate, detail)
+            if state == "present":
+                paths.append(candidate)
     names = {os.path.basename(argv0)}
-    if path:
+    for path in paths:
         real = host.realpath(path)
         names.add(os.path.basename(real))
         if path in SSHD_BINARIES or real in SSHD_BINARIES:
             return "%s runs an SSH server's program (%s)" % (argv0, real)
     if names & set(SSH_SERVER_NAMES):
         return "%s is named as an SSH server's program" % argv0
-    if not path:
-        return None                      # not installed: named nothing an SSH server is called, and there are no bytes
-    real = host.realpath(path)
+    for path in paths:                   # none: not installed, named nothing an SSH server is called, and no bytes
+        why = _ssh_bytes(host, host.realpath(path), seen)
+        if why:
+            return why
+    return None
+
+
+def _ssh_bytes(host, real, seen):
+    """Why the program at real is an SSH server's by what its bytes say, or None; a lookup or read that fails is named."""
     if real in seen:
         return seen[real]
     state, detail = host.lookup(real)
@@ -982,14 +1014,33 @@ def _unit_lines(text):
     return out
 
 
-def _exec_argv0(value):
-    """The program of an Exec*= line: its special prefixes (@ - : + !) dropped; None for an empty reset."""
-    value = value.lstrip("@-:+!")
+def _exec_programs(value):
+    """The program of every command in an Exec*= value (#791 CodeRabbit: "ExecStop=/usr/bin/true ; /opt/remote-shell"
+    runs both), each with its prefixes (@ - : + ! |) dropped and its quotes taken off; none for an empty reset. Words
+    are read as written, so a ";" inside a quoted argument does not divide a command."""
+    lexer = shlex.shlex(value, posix=False)
+    lexer.whitespace_split, lexer.commenters = True, ""
     try:
-        words = shlex.split(value)
+        words = list(lexer)
     except ValueError:
         words = value.split()
-    return words[0] if words else None
+    def unquoted(word):
+        try:
+            return "".join(shlex.split(word))
+        except ValueError:
+            return word.strip("\"'")
+    programs, command = [], []
+    for word in words + [";"]:
+        if word not in EXEC_SEPARATORS:
+            command.append(word)
+            continue
+        if not command:                  # two separators in a row, or one at the start: no command between
+            continue
+        # systemd takes the quotes off the first word, then its prefixes; prefixes alone leave the program to the next
+        first = [w for w in [unquoted(command[0]).lstrip(EXEC_PREFIXES)] + [unquoted(w) for w in command[1:2]] if w]
+        programs += first[:1]
+        command = []
+    return programs
 
 
 def _ssh_units(host):
@@ -1012,6 +1063,7 @@ def _ssh_units(host):
                     found.append("the drop-in directory %s cannot be listed" % path)
                     continue
                 files += [(name[:-2], path + "/" + d) for d in drop_ins if d.endswith(".conf")]
+    units = []
     for unit, path in files:
         text = host.read(path)
         if text is None:
@@ -1019,11 +1071,24 @@ def _ssh_units(host):
             if state != "missing":       # a link that points nowhere (a dead alias) carries nothing to run
                 found.append("the unit file %s cannot be read%s" % (path, " (%s)" % detail if detail else ""))
             continue
-        for key, value in _unit_lines(text):
+        units.append((unit, path, _unit_lines(text)))
+    # every ExecSearchPath= directory any unit or drop-in sets, as one list (a superset of any one unit's: fail closed);
+    # an entry this cannot resolve (a specifier such as %h, a relative path) fails the control
+    search = []
+    for unit, path, lines in units:
+        for entry in (e.strip("\"'") for key, value in lines if key == "ExecSearchPath" for e in re.split(r"[:\s]+", value)):
+            if entry and (entry[0] != "/" or "%" in entry):
+                found.append("the unit %s (%s) sets ExecSearchPath= to %s, a directory this probe cannot resolve: a "
+                             "command found there is not checked" % (unit, path, entry))
+            elif entry and entry not in search:
+                search.append(entry)
+    for unit, path, lines in units:
+        for key, value in lines:
             if key in UNIT_EXEC_KEYS:
-                why = _ssh_executable(host, _exec_argv0(value), seen)
-                if why:
-                    found.append("the unit %s (%s): %s" % (unit, path, why))
+                for program in _exec_programs(value):
+                    why = _ssh_executable(host, program, seen, search)
+                    if why:
+                        found.append("the unit %s (%s): %s" % (unit, path, why))
             elif key.startswith("Exec") and key not in UNIT_EXEC_PATH_KEYS:
                 found.append("the unit %s (%s) carries %s=, an Exec key this probe does not know: its command is not "
                              "checked" % (unit, path, key))

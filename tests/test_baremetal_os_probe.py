@@ -897,6 +897,70 @@ class SshdAbsent(unittest.TestCase):
                   "[Service]\nExecStart=/usr/bin/true\nExecSearchPath=/usr/local/bin\nExecPaths=/usr/lib/regalia\n")(host)
         self.assertTrue(self.judged(host)[0], self.judged(host)[1])
 
+    def test_every_command_of_an_exec_line_is_checked(self):
+        """#791 CodeRabbit: systemd runs each command a ";" word divides in one Exec*= value (config_parse_exec, systemd
+        257), each with its own prefixes, and takes a first word's quotes off before its prefixes. A renamed SSH server
+        that is a later command fails the control. A quoted or escaped ";" word is a separator too (systemd takes it as
+        one in first-word position; here everywhere, fail closed); a ";" inside a quoted argument, or glued to a word,
+        divides nothing."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        for line in ("ExecStop=/usr/bin/true ; /opt/remote-shell -D -p 2222",
+                     "ExecStartPost=/usr/bin/true --quiet ; -/opt/remote-shell -D",
+                     "ExecStart=/usr/bin/true ; /usr/bin/true ; @/opt/remote-shell admin -D",
+                     'ExecStop=/usr/bin/true ";" /opt/remote-shell -D',
+                     'ExecStop="-/opt/remote-shell" -D'):
+            with self.subTest(line=line):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service", "[Service]\n%s\n" % line,
+                                             "/opt/remote-shell", openssh)],
+                                  "the unit remote-admin.service", "/opt/remote-shell is an SSH server's program")
+        self.assertEqual(os_probe._exec_programs('/usr/bin/true ; -/opt/a x ; @/opt/b b-name ; "/opt/c d" e'),
+                         ["/usr/bin/true", "/opt/a", "/opt/b", "/opt/c d"])
+        self.assertEqual(os_probe._exec_programs('/usr/bin/logger "a ; /opt/remote-shell" x;/opt/remote-shell'),
+                         ["/usr/bin/logger"])
+        self.assertEqual(os_probe._exec_programs(""), [])
+        self.assertEqual(os_probe._exec_programs("; ; /opt/a ; ; - /opt/b"), ["/opt/a", "/opt/b"])
+        for line in ('ExecStart=/usr/bin/logger "starting ; /opt/remote-shell -D"',
+                     "ExecStart=/usr/bin/logger x;/opt/remote-shell"):
+            with self.subTest(passes=line):
+                host = FakeHost()
+                unit_file("/etc/systemd/system", "kms-helper.service", "[Service]\n%s\n" % line, "/opt/remote-shell", openssh)(host)
+                self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_bare_command_is_looked_for_where_systemd_finds_it(self):
+        """#791 CodeRabbit: systemd finds a command given by bare name in the unit's ExecSearchPath= directories, or in
+        its own compiled path, not on this probe's PATH (src/core/exec-invoke.c: use_path_envvar false). A renamed SSH
+        server found there fails the control, wherever the ExecSearchPath= is set; an entry this cannot resolve (a
+        specifier, a relative path) fails it too; the same names resolving to unrelated programs pass."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                     "[Service]\nExecSearchPath=/opt/admin\nExecStop=remote-shell -D -p 2222\n",
+                                     "/opt/admin/remote-shell", openssh)],
+                          "the unit remote-admin.service", "/opt/admin/remote-shell is an SSH server's program")
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "remote-admin.service", "[Service]\nExecStart=remote-shell -D\n")(host)
+        unit_file("/etc/systemd/system/remote-admin.service.d", "50-path.conf", "[Service]\nExecSearchPath=/srv/x:/opt/admin\n",
+                  "/opt/admin/remote-shell", openssh)(host)
+        host.dirs["/etc/systemd/system"].append("remote-admin.service.d")
+        self.assertFalse(self.judged(host)[0])
+        self.assertIn("/opt/admin/remote-shell is an SSH server's program", self.judged(host)[1])
+        for directory in os_probe.SYSTEMD_COMMAND_PATH:
+            with self.subTest(directory=directory):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                             "[Service]\nExecStart=remote-shell -D -p 2222\n", directory + "/remote-shell", openssh)],
+                                  "%s/remote-shell is an SSH server's program" % directory)
+        for entry in ("%h/bin", "bin", "/opt/%i"):
+            with self.subTest(entry=entry):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                             "[Service]\nExecSearchPath=%s\nExecStart=/usr/bin/true\n" % entry)],
+                                  "sets ExecSearchPath= to %s, a directory this probe cannot resolve" % entry)
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "kms-helper.service",
+                  "[Service]\nExecSearchPath=/opt/admin\nExecStart=helper --once\n", "/opt/admin/helper",
+                  "\x7fELF ... a backup tool ...\n")(host)
+        unit_file("/etc/systemd/system", "kms-other.service", "[Service]\nExecStart=other\n", "/usr/local/bin/other",
+                  "\x7fELF ... a log shipper ...\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
     def test_a_type_wide_drop_in_fails_it(self):
         """#791 CodeRabbit: service.d/*.conf applies to every service (socket.d to every socket), so an ExecStartPost
         there runs on the KMS unit too; a prefix drop-in (regalia-.service.d) applies to every regalia- unit."""

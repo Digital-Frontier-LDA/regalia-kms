@@ -2569,6 +2569,29 @@ class FirewallAfterQ20(unittest.TestCase):
                 h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
                 self.assertEqual(host_probe.firewall(h)[0], closed, host_probe.firewall(h)[1])
 
+    def test_a_comment_or_a_string_is_never_read_as_a_match(self):
+        """#791 CodeRabbit: nft reads everything after a "#" outside a string as a comment, and a log prefix (or any other
+        quoted string) as data. Neither may supply an exclusion: an accept whose only "exclusion" sits there admits :22.
+        A commented-out rule is no rule; a "#" inside a string comments nothing out; iifname "lo" still reads."""
+        persisted = {"tcp dport 22 accept # udp dport 53": False,
+                     "ip saddr 203.0.113.1 accept # ct state established": False,
+                     "ip saddr 203.0.113.1 accept #iif lo": False,
+                     'ip saddr 203.0.113.1 log prefix "audit ct state established packet " accept': False,
+                     'ip saddr 203.0.113.1 log prefix "tcp dport 80 " accept': False,
+                     'ip saddr 203.0.113.1 log prefix "udp dport 53" accept': False,
+                     'ip saddr 203.0.113.1 log prefix "#" accept': False,
+                     "# tcp dport 22 accept": True,
+                     "  #ip saddr 203.0.113.1 accept": True,
+                     'ct state established log prefix "in # out " accept': True,
+                     'iifname "lo" accept': True,
+                     'ip saddr 203.0.113.1 log prefix "accept ssh " drop': True}
+        for line, closed in persisted.items():
+            with self.subTest(persisted=line):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                self.assertEqual(host_probe.firewall(h)[0], closed, host_probe.firewall(h)[1])
+        self.assertEqual(host_probe._logical_rules('a # b; c\nd "x # y" e\n# f\ng "#"'), ["a", 'd "x # y" e', "", 'g "#"'])
+
     def test_a_semicolon_ends_a_rule_and_a_continuation_does_not(self):
         """#791 council: ";" and continuation lines never merge two rules into one or split one into two, in both
         directions: an admitting rule beside a UDP one on the same line fails it, in either order; one rule continued

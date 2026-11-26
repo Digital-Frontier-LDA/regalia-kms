@@ -1467,10 +1467,12 @@ TEXT_OPS = {"eq": "==", "ne": "!=", "le": "<=", "ge": ">=", "lt": "<", "gt": ">"
 def _logical_rules(text):
     """nft's text form as whole rules: a backslash at the end of a line continues the rule on the next, and a ";"
     outside a quoted string ends one (nft(8)), so two rules on one line are judged apart and a continued rule whole
-    (#791 council: a "udp dport 53 accept; ip saddr X accept" line must not pass as one UDP rule)."""
+    (#791 council: a "udp dport 53 accept; ip saddr X accept" line must not pass as one UDP rule). A "#" outside a
+    quoted string starts a comment that runs to the end of its line, so nothing after it is read (#791 CodeRabbit:
+    "tcp dport 22 accept # udp dport 53" accepts :22, and a commented-out rule is no rule)."""
     out, pending = [], ""
     for raw in text.splitlines():
-        line = pending + raw.strip()
+        line = pending + _strip_comment(raw).strip()
         pending = ""
         if line.endswith("\\"):
             pending = line[:-1] + " "
@@ -1479,6 +1481,18 @@ def _logical_rules(text):
     if pending:
         out.extend(_split_statements(pending.strip()))
     return out
+
+
+def _strip_comment(line):
+    """One line of nft's text form up to its first "#" outside a double-quoted string (nft's scanner reads the rest of
+    the line as a comment; its strings hold no escapes and never span lines)."""
+    quoted = False
+    for index, char in enumerate(line):
+        if char == '"':
+            quoted = not quoted
+        elif char == "#" and not quoted:
+            return line[:index]
+    return line
 
 
 def _split_statements(line):
@@ -1564,7 +1578,12 @@ NON_TCP_L4 = ("udp", "icmp", "ipv6-icmp")
 # The nft -j expressions that are not a verdict and send no packet anywhere; any other one (a verdict map, a queue, a
 # kind nft adds later) counts as a verdict that may admit (council: vmap and unknown verdict expressions fail closed).
 INERT_EXPRS = ("match", "counter", "log", "limit", "drop", "reject", "return", "continue")
-TEXT_COMMENT = re.compile(r'(^|\s)comment\s+"[^"]*"')
+# A double-quoted string is data, never a match: a comment, a log prefix, a set element's or a helper's name. Its text
+# is put out of the way before a match is read (#791 CodeRabbit: 'log prefix "audit ct state established " accept'
+# accepts :22). A string that is one bare word (an interface name such as "lo") cannot hold a match and is kept, so
+# iifname "lo" reads.
+TEXT_STRING = re.compile(r'"([^"]*)"')
+TEXT_BARE_WORD = re.compile(r"[\w.*-]*")
 # the text verdicts that may admit: the three above, a verdict map and a queue (both decided outside this rule)
 TEXT_MAY_ADMIT = re.compile(r"(^|\s)(accept|jump|goto|vmap|queue)(\s|;|$)")
 # The same exclusions in nft's text form: each a positive equality (no operator, == or eq) on a literal or a set of
@@ -1585,7 +1604,7 @@ def _text_admits_ssh(rule):
     """A whole rule of nft's text form that may let TCP to port 22 through: it accepts, jumps, goes to a chain, or
     decides by a verdict map or a queue, and it does not provably exclude :22 (one excluding match, above; or tcp/th
     dport matches that all leave 22 out); or it carries the pre-q-20 rule's comment."""
-    body = TEXT_COMMENT.sub(" ", rule)
+    body = TEXT_STRING.sub(lambda s: s.group(0) if TEXT_BARE_WORD.fullmatch(s.group(1)) else '"_"', rule)
     if not TEXT_MAY_ADMIT.search(body):
         return False
     if 'comment "ssh' in rule:
