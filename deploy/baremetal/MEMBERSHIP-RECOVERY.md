@@ -115,7 +115,10 @@ The command checks signatures, the chain, and that the sources agree. It cannot 
 are what the two peers really hold. That is the operator's part, before typing the phrase:
 
 1. **Fetch each chain yourself, from its holder**, over the channel you already trust for that host
-   (each peer over SSH under its manifest-pinned host key, `SSH.md`). Do not
+   (each peer over SSH under its manifest-pinned host key, `SSH.md`). **On a production host there is no SSH
+   (q-20, `SSH.md`):** the chain leaves each peer at that peer's own local console, on a
+   **per-peer transfer USB stick**, freshly formatted, labelled with that peer's name, and written only at that
+   peer. One stick per peer, never one stick for both. The SSH form applies to the STAGING variant only. Do not
    take both files from one place, and never from the node being re-anchored. The command refuses the
    node as its own peer by name; it cannot tell that two files with different names came from one place.
 2. **Compare the epoch and digest the command prints with what a healthy peer reports for itself**
@@ -203,7 +206,10 @@ they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-n
    one of them runs alone.
 3. **Take each one's chain from it:** `/var/lib/regalia-sync/chain.json` (`node.PUBLISHED`: the chain its
    sync verified and published), copied from a, and from c, over SSH under each one's manifest-pinned host
-   key. Never both from one place, never from b. Both must end at the same epoch; if
+   key. **On a production host (no SSH, q-20):** copy it at a's console onto a's transfer USB stick, and at c's
+   console onto c's, as in "Deciding that the sources are right" (one freshly formatted stick per peer, labelled
+   with its name). The SSH form applies to the STAGING
+   variant only. Never both from one place, never from b. Both must end at the same epoch; if
    one is behind, let them sync and take both again.
 4. **Check the sources** ("Deciding that the sources are right", above): each peer's own `rollout epoch`,
    the last signing record, and why b's anchor is unusable.

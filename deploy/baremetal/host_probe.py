@@ -1458,8 +1458,9 @@ def firewall(host):
 # The per-host fragment every boot loads (README "Host firewall"; /etc/nftables.d/regalia-kms.nft links here on a verity host)
 PERSISTED_FIREWALL = "/var/lib/regalia-etc/nftables.d/regalia-kms.nft"
 SSH_PORT = 22
-# a tcp dport match in nft's text form: its operator (none is ==) and its operand (a port, a set, a range, or a name)
-TCP_DPORT = re.compile(r"tcp dport\s+(?:(==|!=|<=|>=|<|>|eq|ne|le|ge|lt|gt)\s*)?(\{[^}]*\}|[^\s;]+)")
+# a TCP destination-port match in nft's text form, "tcp dport" or the transport-header "th dport" (which matches TCP too):
+# its operator (none is ==) and its operand (a port, a set, a range, or a name)
+TCP_DPORT = re.compile(r"(?<![\w.-])(?:tcp|th) dport\s+(?:(==|!=|<=|>=|<|>|eq|ne|le|ge|lt|gt)\s*)?(\{[^}]*\}|[^\s;]+)")
 TEXT_OPS = {"eq": "==", "ne": "!=", "le": "<=", "ge": ">=", "lt": "<", "gt": ">"}
 
 
@@ -1525,10 +1526,17 @@ def _match_admits(op, right, port):
     return True
 
 
+# The verdicts that can let a packet through: accept, and a jump or goto, whose target chain this check does not read, so
+# it counts as an admission (#791 delta review: a "tcp dport 22 jump admin" was passed as closed). Fail closed.
+ADMITTING_VERDICTS = ("accept", "jump", "goto")
+TEXT_VERDICT = re.compile(r"(^|\s)(%s)(\s|;|$)" % "|".join(ADMITTING_VERDICTS))
+
+
 def _text_admits_ssh(rule):
-    """A whole rule of nft's text form that accepts TCP to port 22 (alone, in a set or a range, or past a != or a
-    comparison that does not exclude it), or carries the pre-q-20 rule's comment."""
-    if not re.search(r"(^|\s)accept(\s|;|$)", rule):
+    """A whole rule of nft's text form that accepts TCP to port 22, or jumps or goes to a chain with it (alone, in a set
+    or a range, or past a != or a comparison that does not exclude it; by tcp dport or th dport), or carries the
+    pre-q-20 rule's comment."""
+    if not TEXT_VERDICT.search(rule):
         return False
     if 'comment "ssh' in rule:
         return True
@@ -1536,13 +1544,13 @@ def _text_admits_ssh(rule):
 
 
 def _admits_ssh(rule):
-    """A rule of nft -j that accepts TCP to port 22 (by its dport match's operator and operand), or carries the old
-    rule's comment."""
+    """A rule of nft -j that accepts TCP to port 22, or jumps or goes to a chain with it (by its tcp or th dport match's
+    operator and operand), or carries the old rule's comment."""
     exprs = rule.get("expr") or []
-    accepts = any(isinstance(e, dict) and "accept" in e for e in exprs)
+    accepts = any(isinstance(e, dict) and any(v in e for v in ADMITTING_VERDICTS) for e in exprs)
     port = any(isinstance(e, dict) and isinstance(e.get("match"), dict)
                and (e["match"].get("left") or {}).get("payload", {}).get("field") == "dport"
-               and (e["match"].get("left") or {}).get("payload", {}).get("protocol") == "tcp"
+               and (e["match"].get("left") or {}).get("payload", {}).get("protocol") in ("tcp", "th")
                and _match_admits(e["match"].get("op"), e["match"].get("right"), SSH_PORT) for e in exprs)
     return accepts and (port or str(rule.get("comment", "")).lower().startswith("ssh"))
 

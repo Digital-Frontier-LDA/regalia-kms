@@ -16,9 +16,10 @@ a production KMS host runs an sshd at all, and if so only inside WireGuard. The 
   `sshd-*.socket`, enabled or not), or when anything listens on TCP :22.
 - **Administration** goes through the console or the iLO, and through the owner-run flows (the ceremonies,
   `enrol`, `site-advance`, the recovery runbooks). Some text written before the ruling still reaches a host over SSH:
-  `drill.py`'s partition drill (`ssh_runner`) and the chain copy in `MEMBERSHIP-RECOVERY.md`. On a production host
-  those steps go through the console. Where they need an sshd, they run on the staging variant. Rewriting them is
-  follow-up work, not part of this ruling.
+  `drill.py`'s partition drill (`ssh_runner`) and the chain copy in `MEMBERSHIP-RECOVERY.md`. Both are now marked:
+  `drill.py partition`, `unpartition` and `restore` are STAGING ONLY and refuse (exit 2) without `--staging`; the
+  chain copy says that on production each peer's chain leaves at its own local console on a per-peer transfer USB
+  stick. The full console procedures for production are follow-up work (regalia-kms-bpb), not part of this ruling.
 - **The STAGING image variant keeps its operator sshd, unchanged.** It is `image/staging/regalia-staging-sshd.service`:
   key-only, for root, refused unless the signed kernel command line says `regalia.staging=1` and the staging
   install has written `/var/lib/regalia-staging/authorized_keys`. Only the staging build (`build-rootfs.sh

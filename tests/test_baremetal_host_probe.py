@@ -2388,6 +2388,39 @@ class FirewallAfterQ20(unittest.TestCase):
                 if label in admits:
                     self.assertIn("would load it back", why)
 
+    def test_a_jump_goto_or_th_dport_to_22_fails_it(self):
+        """#791 delta review (GA ruling): a check that claims to fail closed missed "tcp dport 22 jump/goto" (the target
+        chain may accept) and "th dport 22" (the transport header matches TCP too). Both, loaded or persisted, fail it;
+        the same rules on another port, or a th/tcp 22 that drops, do not."""
+        def loaded(proto, verdict, right=22):
+            return {"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": right}},
+                             verdict]}
+        for label, rule in {"tcp 22 jump": loaded("tcp", {"jump": {"target": "admin"}}),
+                            "tcp 22 goto": loaded("tcp", {"goto": {"target": "admin"}}),
+                            "th 22 accept": loaded("th", {"accept": None}),
+                            "th 22 jump": loaded("th", {"jump": {"target": "admin"}}),
+                            "th in a set holding 22": loaded("th", {"accept": None}, {"set": [8443, 22]})}.items():
+            with self.subTest("loaded: " + label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(rule)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value, why)
+                self.assertIn("the loaded inet regalia_kms still admits TCP :22", why)
+        for label, line in {"tcp 22 jump": "tcp dport 22 jump admin", "tcp 22 goto": "tcp dport 22 goto admin",
+                            "th 22 accept": "meta l4proto tcp th dport 22 accept", "th 22 jump": "th dport 22 jump admin",
+                            "a th range holding 22": "th dport 20-30 accept", "continued, jump on the next line": "tcp dport 22 \\\n      jump admin"}.items():
+            with self.subTest("persisted: " + label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value, why)
+                self.assertIn("would load it back", why)
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with(loaded("th", {"jump": {"target": "admin"}}, 2222), loaded("th", {"drop": None}))
+        h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace(
+            "  }\n}\n", "    th dport 2222 jump admin\n    tcp dport 22 drop\n    th dport != 22 goto admin\n  }\n}\n")
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
     def test_a_persisted_fragment_that_cannot_be_read_fails_it(self):
         h = FakeHost()
         del h.files[host_probe.PERSISTED_FIREWALL]
