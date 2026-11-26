@@ -870,6 +870,33 @@ class SshdAbsent(unittest.TestCase):
         self.assert_fails([unit_file(d, "remote-admin.service", "[Service]\nExecStart=/opt/remote-shell -D -p 2222\n",
                                      "/opt/remote-shell", openssh) for d in directories], "the unit remote-admin.service")
 
+    def test_every_exec_key_systemd_runs_is_checked(self):
+        """#791 CodeRabbit + council: systemd runs ExecStop= and ExecStopPost= too (systemd.service(5)), and a socket's
+        ExecStopPre= (systemd.socket(5)). A renamed SSH server named only there fails the control by its own bytes; the
+        same keys naming an unrelated program pass. An Exec key the probe does not know fails it (fail closed); the path
+        lists ExecSearchPath= and ExecPaths= are not commands and pass."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        self.assertEqual(set(os_probe.UNIT_EXEC_KEYS), {"ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost",
+                                                        "ExecReload", "ExecStop", "ExecStopPost", "ExecStopPre"})
+        for kind, key in (("service", "ExecStop"), ("service", "ExecStopPost"), ("socket", "ExecStopPre"),
+                          ("socket", "ExecStopPost")):
+            with self.subTest(key=key, kind=kind):
+                text = "[%s]\nExecStart=/usr/bin/true\n%s=/opt/remote-shell -D -p 2222\n" % (kind.capitalize(), key)
+                if kind == "socket":
+                    text = "[Socket]\nListenStream=8443\n%s=/opt/remote-shell -D -p 2222\n" % key
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin." + kind, text, "/opt/remote-shell", openssh)],
+                                  "the unit remote-admin.%s" % kind, "/opt/remote-shell is an SSH server's program")
+                host = FakeHost()
+                unit_file("/etc/systemd/system", "remote-admin." + kind, text, "/opt/remote-shell", "\x7fELF ... a backup tool ...\n")(host)
+                self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+        self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                     "[Service]\nExecStart=/usr/bin/true\nExecTeleport=/opt/remote-shell -D\n")],
+                          "ExecTeleport=, an Exec key this probe does not know")
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "kms-helper.service",
+                  "[Service]\nExecStart=/usr/bin/true\nExecSearchPath=/usr/local/bin\nExecPaths=/usr/lib/regalia\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
     def test_a_type_wide_drop_in_fails_it(self):
         """#791 CodeRabbit: service.d/*.conf applies to every service (socket.d to every socket), so an ExecStartPost
         there runs on the KMS unit too; a prefix drop-in (regalia-.service.d) applies to every regalia- unit."""

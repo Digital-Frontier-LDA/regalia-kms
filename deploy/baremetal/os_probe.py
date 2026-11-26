@@ -909,7 +909,15 @@ UNIT_DIRECTORIES = ("/etc/systemd/system.control", "/run/systemd/system.control"
                     "/run/systemd/system", "/run/systemd/system.attached", "/run/systemd/generator",
                     "/usr/local/lib/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system",
                     "/run/systemd/generator.late")
-UNIT_EXEC_KEYS = ("ExecStart", "ExecStartPre", "ExecStartPost", "ExecReload", "ExecCondition")
+# Every key whose value systemd runs as a command, taken from systemd's own set (#791 CodeRabbit, council): the
+# service keys of systemd.service(5) (ExecCondition=, ExecStartPre=, ExecStart=, ExecStartPost=, ExecReload=,
+# ExecStop=, ExecStopPost=) and the socket keys of systemd.socket(5) (ExecStartPre=, ExecStartPost=, ExecStopPre=,
+# ExecStopPost=), each parsed by config_parse_exec in systemd's src/core/load-fragment-gperf.gperf.in. The other Exec*
+# keys there are path lists systemd never runs (systemd.exec(5): ExecSearchPath=, ExecPaths=). A unit key that starts
+# with Exec and is in neither list is one this probe cannot judge, and fails it (fail closed).
+UNIT_EXEC_KEYS = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecReload", "ExecStop", "ExecStopPost",
+                  "ExecStopPre")
+UNIT_EXEC_PATH_KEYS = ("ExecSearchPath", "ExecPaths")
 SOCKET_LISTEN_KEYS = ("ListenStream", "ListenSequentialPacket")
 SSH_PORT = 22
 PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
@@ -1016,6 +1024,9 @@ def _ssh_units(host):
                 why = _ssh_executable(host, _exec_argv0(value), seen)
                 if why:
                     found.append("the unit %s (%s): %s" % (unit, path, why))
+            elif key.startswith("Exec") and key not in UNIT_EXEC_PATH_KEYS:
+                found.append("the unit %s (%s) carries %s=, an Exec key this probe does not know: its command is not "
+                             "checked" % (unit, path, key))
             elif key in SOCKET_LISTEN_KEYS and value.rpartition(":")[2].strip() == str(SSH_PORT):
                 found.append("the socket %s (%s) listens on %s" % (unit, path, value))
     return found
