@@ -11,6 +11,11 @@ ConditionPathExists=/var/lib/regalia-staging/authorized_keys
 # waits for network-online (systemd-networkd-wait-online, which the staging variant enables) (regalia-kms-dx7.36)
 Wants=network-online.target
 After=network-online.target
+# a refused host key (or drop-in) is deterministic: five starts within two minutes, then the unit stays failed, naming
+# the cause in its journal, instead of retrying every RestartSec forever (regalia-kms-u2t); a late address (dx7.36)
+# still has its five tries
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 RuntimeDirectory=sshd
