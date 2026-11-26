@@ -2,9 +2,13 @@
 """The production burn-in and recurring failure drills on the real three servers (#495; the procedure is the private
 RUNBOOK-KMS-FAULT-DRILLS.md, "Production burn-in and recurring drills").
 
-    python3 -Es -m deploy.baremetal.drill partition --node b --ttl 600        # S3's cut, with its dead-man timer
-    python3 -Es -m deploy.baremetal.drill unpartition --node b
+    python3 -Es -m deploy.baremetal.drill partition --node b --ttl 600 --staging   # S3's cut, with its dead-man timer
+    python3 -Es -m deploy.baremetal.drill unpartition --node b --staging
     (preflight, run S1..S5, restore and the report come with their pieces: below)
+
+STAGING ONLY over SSH (q-20, SSH.md): a production host runs no sshd, so partition, unpartition and restore refuse
+(exit 2) unless --staging says every target is a staging host. On production, drills go through the console
+(regalia-kms-bpb).
 
 It runs on an operator workstation on the management network, never on the offline signing laptop or a server. It
 INJECTS faults and records evidence; the pass criteria are the predicates shared with tier N (e2e/lib/drills.py,
@@ -366,6 +370,14 @@ def power_on_by_hand(node):
     raise Refused("the Redfish client is not built yet: power %s on through its iLO by hand, then run restore again" % node)
 
 
+# q-20 (#791 delta review, GA ruling): a production host runs no sshd, so this drill's SSH runner reaches only the STAGING
+# variant's operator sshd. Run over SSH it refuses unless --staging says the targets are staging hosts; the console
+# procedure for production is regalia-kms-bpb.
+STAGING_ONLY = ("drill: STAGING ONLY. Its partition, unpartition and restore reach a server over SSH, and a production host runs "
+                "no sshd (q-20, SSH.md). Pass --staging if every target is a staging host; on production, drills go through "
+                "the console (regalia-kms-bpb).")
+
+
 def main(argv=None, ssh=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.drill", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="op", required=True)
@@ -374,18 +386,23 @@ def main(argv=None, ssh=None):
         p.add_argument("--node", required=True)
         p.add_argument("--host", help="the node's SSH address (default: the node name)")
         p.add_argument("--journal", required=True, help="the workstation's fault journal (restore --journal replays it)")
+        p.add_argument("--staging", action="store_true", help="every target is a STAGING host (production runs no sshd)")
         if name == "partition":
             p.add_argument("--ttl", type=int, default=600, help="the dead-man timer, seconds (%d to %d)" % (TTL_MIN, TTL_MAX))
     p = sub.add_parser("restore", help="undo every fault the journal holds that is not marked undone, newest first")
     p.add_argument("--journal", required=True)
     p.add_argument("--torn-checked", action="store_true", help="after a torn journal write: every server was checked by hand")
     p.add_argument("--host", action="append", default=[], metavar="NODE=ADDRESS", help="a node's SSH address")
+    p.add_argument("--staging", action="store_true", help="every target is a STAGING host (production runs no sshd)")
     args = ap.parse_args(argv)
     if args.op == "restore":
         hosts = dict(h.split("=", 1) for h in args.host)
         address = lambda node: hosts.get(node, node)                                  # noqa: E731
     else:
         address = lambda node: args.host or node                                       # noqa: E731
+    if ssh is None and not args.staging:
+        print(STAGING_ONLY, file=sys.stderr)
+        return 2
     cut = Partition(ssh or ssh_runner(address))
     journal = Journal(args.journal)
     try:

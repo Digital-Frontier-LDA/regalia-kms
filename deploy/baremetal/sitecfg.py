@@ -7,10 +7,10 @@ network_probe.py checks the result from each zone, so the two can never describe
       "schema": "regalia.baremetal-site/v1",
       "site": "site-a",
       "host_ipv4": "192.0.2.10",
-      "kms_port": 8443, "ssh_port": 22,
+      "kms_port": 8443, "ssh_port": 22,             # ssh_port: closed from every zone (q-20: no sshd; network_probe checks it)
       "client_cidrs": ["198.51.100.0/24"],          # may reach kms_port
       "monitoring_cidrs": ["203.0.113.128/32"],     # may reach kms_port (health, metrics)
-      "admin_cidrs": ["203.0.113.0/28"],            # may reach ssh_port, and ping
+      "admin_cidrs": ["203.0.113.0/28"],            # may ping; no SSH (q-20: ABSENT, GA ruling under owner delegation 2026-11-25)
       "outbound": [                                  # the ONLY destinations the host may reach
         {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
         {"name": "dns", "cidr": "203.0.113.194/32", "proto": "udp", "port": 53}
@@ -74,6 +74,9 @@ TIME_KEYS = ("nts",)
 NTS_KEYS = ("name", "cidrs")
 NTS_MINIMUM, NTS_MAXIMUM = 2, 8        # authtime.MINIMUM agreeing sources; a bound on what is rendered
 NTS_PORTS = (("tcp", 4460), ("udp", 123))   # NTS-KE, then NTP: rendered from `time` only, never an `outbound` entry
+# TCP :22 is SSH's, reserved whatever ssh_port says (q-20, #791 independent review MUST 4): no service of this host may
+# listen on it, so os_probe.sshd_absent (which finds anything on :22) and this config can never disagree
+SSH_PORT = 22
 NTS_SERVER = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+"      # a host name, or an IPv4 address
 OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
 MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers")
@@ -131,13 +134,14 @@ def validate(doc):
     require(not (host.is_unspecified or host.is_loopback or host.is_multicast), "host_ipv4 must be a host address")
     kms, ssh = _port(doc["kms_port"], "kms_port"), _port(doc["ssh_port"], "ssh_port")
     require(kms != ssh, "kms_port and ssh_port must differ")
+    require(kms != SSH_PORT, "kms_port must not be %d: TCP :%d is SSH's, and a production KMS host has none (q-20)" % (SSH_PORT, SSH_PORT))
     require(NODE_EXPORTER_PORT not in (kms, ssh), "kms_port and ssh_port must not be %d, node_exporter's (#305)" % NODE_EXPORTER_PORT)
     cfg = {"schema": SCHEMA, "site": doc["site"], "host_ipv4": str(host), "kms_port": kms, "ssh_port": ssh,
            "client_cidrs": _networks(doc["client_cidrs"], "client_cidrs"),
            "monitoring_cidrs": _networks(doc["monitoring_cidrs"], "monitoring_cidrs"),
            "admin_cidrs": _networks(doc["admin_cidrs"], "admin_cidrs"), "outbound": []}
-    # The zones carry different permissions (admin: SSH only; client and monitoring: the KMS port only),
-    # so an address in both would be allowed both and fail the probe matrix: admin must not overlap them.
+    # The zones carry different permissions (admin: ping only, no SSH since q-20; client and monitoring: the KMS port
+    # only), so an address in both would be allowed both and fail the probe matrix: admin must not overlap them.
     for a in cfg["admin_cidrs"]:
         for c in cfg["client_cidrs"] + cfg["monitoring_cidrs"]:
             require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
@@ -214,8 +218,8 @@ def _boot_mesh(mesh, cfg):
     listen, unlock = _port(mesh["listen_port"], "boot_mesh.listen_port"), _port(mesh["unlock_port"], "boot_mesh.unlock_port")
     # the host listens on unlock_port only as a node peer's unlock service; on a single-node host it is the owner's port, at
     # the owner's address (dx7.6, CodeRabbit on #740), so the local conflict check is the node-peer mesh's alone
-    require(single or unlock not in (cfg["kms_port"], cfg["ssh_port"], NODE_EXPORTER_PORT),
-            "boot_mesh.unlock_port must differ from kms_port, ssh_port and node_exporter's %d" % NODE_EXPORTER_PORT)
+    require(single or unlock not in (cfg["kms_port"], cfg["ssh_port"], NODE_EXPORTER_PORT, SSH_PORT),
+            "boot_mesh.unlock_port must differ from kms_port, ssh_port and node_exporter's %d, and not be SSH's %d" % (NODE_EXPORTER_PORT, SSH_PORT))
     out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
            "address": _address(mesh["address"], "boot_mesh.address"), "peers": []}
     # Where the initrd's own traffic goes (#66, regalia.boot-env): its card by MAC address (an interface name
@@ -260,8 +264,8 @@ def _boot_mesh(mesh, cfg):
                 "boot_mesh.peers[%d]: no two nodes share an address, inside or outside the tunnel, and no address is both" % i)
         nodes.add(entry["node_id"]), inside.add(entry["address"]), outside.add(entry["underlay"])
         out["peers"].append(entry)
-    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port or
-    # SSH, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
+    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port, or
+    # the admin zone's ping, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
     # everything else that arrives on the mesh interface; this refuses the configuration that needs it.)
     zones = [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]
     for address in sorted(inside):
@@ -288,9 +292,9 @@ def _service_mesh(mesh, cfg):
             "and not the boot mesh's)")
     listen, sync = _port(mesh["listen_port"], "service_mesh.listen_port"), _port(mesh["sync_port"], "service_mesh.sync_port")
     require(listen != boot["listen_port"], "service_mesh.listen_port must differ from boot_mesh.listen_port: two interfaces, two ports")
-    require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"], NODE_EXPORTER_PORT),
-            "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d: one number, "
-            "one service" % NODE_EXPORTER_PORT)
+    require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"], NODE_EXPORTER_PORT, SSH_PORT),
+            "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d, and not be SSH's %d: one number, "
+            "one service" % (NODE_EXPORTER_PORT, SSH_PORT))
     return {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync}
 
 
@@ -311,7 +315,7 @@ def require_profile(cfg, manifest_profile):
 
 def _unique(pairs):
     """json object_pairs_hook: a repeated key is refused at every level. json.load would keep only the
-    last value, so a second admin_cidrs could silently replace the SSH allowlist."""
+    last value, so a second admin_cidrs could silently replace the admin zone."""
     out = {}
     for k, v in pairs:
         require(k not in out, "duplicate field %r in the site config" % k)

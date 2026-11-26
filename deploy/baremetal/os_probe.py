@@ -80,14 +80,29 @@ and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
                               and pkcheck must say polkit admits the running daemon. That a user WITH a
                               console session is refused is not measured: it follows from the rule
 
+and that a production KMS host runs no SSH server (q-20: ABSENT, GA ruling under owner delegation 2026-11-25;
+regalia-kms-r1s.12). Administration goes through the console or the iLO and the owner-run flows:
+
+  sshd_absent                 no SSH server binary (SSHD_BINARIES, or sshd on PATH), no unit file whose name is an
+                              SSH server's (SSH_UNIT_PATTERNS: ssh.service, ssh.socket, sshd@.service, the
+                              systemd-ssh-generator's sshd-*.socket, the staging variant's regalia-staging-sshd.service,
+                              dropbear), and nothing listening on TCP :22, on any address. Each is read from the host
+                              (stat, systemctl list-unit-files, ss), never from what the image is supposed to hold, and
+                              a read that does not answer fails the control. The STAGING image variant carries a
+                              key-only operator sshd (image/staging/, gated by regalia.staging=1 and the /var files its
+                              staging install writes): it fails this control, by design. Its reason then names the
+                              variant, so a staging host's evidence cannot be read as a production host's
+
 Standard library only.
 """
+import errno
 import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -95,7 +110,8 @@ SERVICE = "regalia-kms.service"
 PROFILE = "regalia-kms"            # deploy/baremetal/apparmor/usr.sbin.regalia-kms, the unit's AppArmorProfile=
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
-            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule", "kernel_sysctl_baseline", "bootstrap_and_kms_users_separate")
+            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule", "kernel_sysctl_baseline", "bootstrap_and_kms_users_separate",
+            "sshd_absent")
 # The kernel settings the image ships as /usr/lib/sysctl.d/90-regalia-kms.conf (deploy/baremetal/regalia-kms.sysctl.conf,
 # with each value's reason there). Measured from /proc/sys on the running host, never from the file. A test holds this
 # table and the shipped file together.
@@ -194,6 +210,31 @@ class Host:
             return os.readlink(path)
         except OSError:
             return None
+
+    def lookup(self, path):
+        """("missing", None) only when the path is not there (ENOENT); ("present", kind) when lstat answers (a link that
+        points nowhere is present); ("error", errno name) for anything else (EACCES, EIO, ENOTDIR, ...): that is not
+        absence, and a check that passes on absence must not pass on it (host_probe.Host.missing, kms#644)."""
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return "missing", None
+        except OSError as error:
+            return "error", errno.errorcode.get(error.errno, str(error.errno))
+        return "present", ("symbolic link" if stat.S_ISLNK(st.st_mode) else "regular file" if stat.S_ISREG(st.st_mode)
+                           else "directory" if stat.S_ISDIR(st.st_mode) else "other")
+
+    def entries(self, path):
+        """A directory's names: [] when the directory is not there, None when it cannot be listed (fail closed)."""
+        try:
+            return sorted(os.listdir(path))
+        except FileNotFoundError:
+            return []
+        except OSError:
+            return None
+
+    def realpath(self, path):
+        return os.path.realpath(path)
 
 
 def unit_properties(host, *names, service=SERVICE):
@@ -843,9 +884,289 @@ def separate_users(host):
                   f"(uid {b_uid}, gid {b_gid}); neither process holds the other's group")
 
 
+# q-20: ABSENT, GA ruling under owner delegation 2026-11-25 (regalia-kms-r1s.12): no SSH server on a production KMS host.
+# Where an SSH server's programs live on Debian 13 (OpenSSH 10 runs each session as sshd-session, and sshd-auth for
+# authentication) and elsewhere, and Dropbear's. /sbin and /bin are links into /usr on a merged-/usr system.
+SSHD_BINARIES = ("/usr/sbin/sshd", "/usr/bin/sshd", "/usr/local/sbin/sshd", "/usr/local/bin/sshd",
+                 "/usr/lib/openssh/sshd-session", "/usr/lib/openssh/sshd-auth", "/usr/libexec/openssh/sshd-session",
+                 "/usr/sbin/dropbear")
+# What an SSH server's program is called, whatever directory it was put in (an executable named after any of these
+# is an SSH server's, on PATH or in a unit's Exec line), and what its bytes say it is when it was renamed: OpenSSH's
+# programs carry their version banner, Dropbear's and tinysshd's their names (#791 independent review, MUST 1).
+SSH_SERVER_NAMES = ("sshd", "sshd-session", "sshd-auth", "dropbear", "dropbearmulti", "tinysshd", "lshd")
+SSH_SERVER_MARKERS = (b"OpenSSH_", b"dropbear_", b"Dropbear", b"tinysshd")
+# The unit files an SSH server comes with (systemctl list-unit-files globs): Debian's ssh.service, ssh.socket and
+# ssh@.service; sshd.service and sshd@.service elsewhere; systemd-ssh-generator's sshd-vsock.socket and
+# sshd-unix-local.socket (systemd 256+, made when an sshd is installed); the staging variant's
+# regalia-staging-sshd.service; Dropbear's. The KMS unit is listed with them, so an empty answer cannot pass.
+SSH_UNIT_PATTERNS = ("ssh.*", "ssh@*", "*sshd*", "dropbear*")
+# Every directory a unit file or a drop-in can come from (systemd.unit(5), system manager, systemd 257): the control
+# and attached directories (systemctl set-property, portablectl), transient units (systemd-run), generators (#791,
+# CodeRabbit). Each service and socket in them is read, masked or not and whatever its name: a masked unit's vendor
+# file is still here.
+UNIT_DIRECTORIES = ("/etc/systemd/system.control", "/run/systemd/system.control", "/run/systemd/transient",
+                    "/run/systemd/generator.early", "/etc/systemd/system", "/etc/systemd/system.attached",
+                    "/run/systemd/system", "/run/systemd/system.attached", "/run/systemd/generator",
+                    "/usr/local/lib/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system",
+                    "/run/systemd/generator.late")
+# Every key whose value systemd runs as a command, taken from systemd's own set (#791 CodeRabbit, council): the
+# service keys of systemd.service(5) (ExecCondition=, ExecStartPre=, ExecStart=, ExecStartPost=, ExecReload=,
+# ExecStop=, ExecStopPost=) and the socket keys of systemd.socket(5) (ExecStartPre=, ExecStartPost=, ExecStopPre=,
+# ExecStopPost=), each parsed by config_parse_exec in systemd's src/core/load-fragment-gperf.gperf.in. The other Exec*
+# keys there are path lists systemd never runs (systemd.exec(5): ExecSearchPath=, ExecPaths=). A unit key that starts
+# with Exec and is in neither list is one this probe cannot judge, and fails it (fail closed).
+UNIT_EXEC_KEYS = ("ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost", "ExecReload", "ExecStop", "ExecStopPost",
+                  "ExecStopPre")
+UNIT_EXEC_PATH_KEYS = ("ExecSearchPath", "ExecPaths")
+# Where systemd finds a command given by bare name (#791 CodeRabbit): in the unit's ExecSearchPath= directories when it
+# sets them, otherwise in its compiled path; the unit's Environment=PATH= never takes part (systemd 257:
+# src/core/exec-invoke.c calls find_executable_full with use_path_envvar false; src/basic/path-util.h DEFAULT_PATH_*).
+# A bare name is looked for in every ExecSearchPath= directory any unit sets, in all of these and on this probe's own
+# PATH: a superset of where systemd may find it, so an SSH server under any of them fails the control (fail closed).
+SYSTEMD_COMMAND_PATH = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+# The words that end one command of an Exec*= value and start the next (config_parse_exec, systemd 257: a bare ";", and
+# in first-word position a quoted or escaped one too). Each is taken as a separator wherever it stands, so a command
+# systemd runs is never missed; the prefixes each command may carry are dropped before its program is read.
+EXEC_SEPARATORS = (";", "\\;", '";"', "';'")
+EXEC_PREFIXES = "@-:+!|"
+SOCKET_LISTEN_KEYS = ("ListenStream", "ListenSequentialPacket")
+SSH_PORT = 22
+PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")   # the listeners as the kernel holds them, beside ss's answer
+# each table's header: the kernel spells the remote column rem_address in tcp and remote_address in tcp6 (#791, CodeRabbit)
+PROC_TCP_HEADER = {"/proc/net/tcp": ("sl", "local_address", "rem_address", "st"),
+                   "/proc/net/tcp6": ("sl", "local_address", "remote_address", "st")}
+# one row of /proc/net/tcp (8 hex digits of address) or tcp6 (32): "sl: local:port remote:port st ..."
+PROC_TCP_ROW = re.compile(r"\s*\d+: ([0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):([0-9A-Fa-f]{4}) "
+                          r"(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{32}):[0-9A-Fa-f]{4} ([0-9A-Fa-f]{2}) ")
+STAGING_VARIANT = "/usr/lib/regalia-staging/VARIANT"   # build-rootfs.sh --variant staging writes it; imagevariant.py
+                                                       # refuses a production image that holds it
+
+
+def _ssh_executable(host, argv0, seen, search=()):
+    """Why argv0 is an SSH server's program, or None: by its path, by its name or its target's, or by what its bytes say.
+    A bare name is every program of that name where systemd may find it (search: the ExecSearchPath= directories; then
+    SYSTEMD_COMMAND_PATH) or on this probe's PATH. A path that cannot be looked up, or read when it is there, is named
+    too: unknown is not absent."""
+    if not argv0:
+        return None
+    if argv0.startswith("/"):
+        paths = [argv0]
+    else:
+        on_path = host.which(argv0)
+        paths = [on_path] if on_path else []
+        for directory in tuple(search) + SYSTEMD_COMMAND_PATH:
+            candidate = directory.rstrip("/") + "/" + argv0
+            if candidate in paths:
+                continue
+            state, detail = host.lookup(candidate)
+            if state == "error":
+                return "%s cannot be looked up (%s)" % (candidate, detail)
+            if state == "present":
+                paths.append(candidate)
+    names = {os.path.basename(argv0)}
+    for path in paths:
+        real = host.realpath(path)
+        names.add(os.path.basename(real))
+        if path in SSHD_BINARIES or real in SSHD_BINARIES:
+            return "%s runs an SSH server's program (%s)" % (argv0, real)
+    if names & set(SSH_SERVER_NAMES):
+        return "%s is named as an SSH server's program" % argv0
+    for path in paths:                   # none: not installed, named nothing an SSH server is called, and no bytes
+        why = _ssh_bytes(host, host.realpath(path), seen)
+        if why:
+            return why
+    return None
+
+
+def _ssh_bytes(host, real, seen):
+    """Why the program at real is an SSH server's by what its bytes say, or None; a lookup or read that fails is named."""
+    if real in seen:
+        return seen[real]
+    state, detail = host.lookup(real)
+    why = None
+    if state == "error":
+        why = "%s cannot be looked up (%s)" % (real, detail)
+    elif state == "present":
+        data = host.read_bytes(real)
+        if data is None:
+            why = "%s cannot be read, so it is not shown not to be an SSH server" % real
+        else:
+            marks = [m.decode() for m in SSH_SERVER_MARKERS if m in data]
+            if marks:
+                why = "%s is an SSH server's program by its contents (%s)" % (real, ", ".join(marks))
+    seen[real] = why
+    return why
+
+
+def _unit_lines(text):
+    """(key, value) for each assignment in a unit file, continuation lines joined."""
+    out, pending = [], ""
+    for raw in (text or "").splitlines():
+        line = pending + raw.strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1] + " "
+            continue
+        if not line or line[0] in "#;[" or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        out.append((key.strip(), value.strip()))
+    return out
+
+
+def _exec_programs(value):
+    """The program of every command in an Exec*= value (#791 CodeRabbit: "ExecStop=/usr/bin/true ; /opt/remote-shell"
+    runs both), each with its prefixes (@ - : + ! |) dropped and its quotes taken off; none for an empty reset. Words
+    are read as written, so a ";" inside a quoted argument does not divide a command."""
+    lexer = shlex.shlex(value, posix=False)
+    lexer.whitespace_split, lexer.commenters = True, ""
+    try:
+        words = list(lexer)
+    except ValueError:
+        words = value.split()
+    def unquoted(word):
+        try:
+            return "".join(shlex.split(word))
+        except ValueError:
+            return word.strip("\"'")
+    programs, command = [], []
+    for word in words + [";"]:
+        if word not in EXEC_SEPARATORS:
+            command.append(word)
+            continue
+        if not command:                  # two separators in a row, or one at the start: no command between
+            continue
+        # systemd takes the quotes off the first word, then its prefixes; prefixes alone leave the program to the next
+        first = [w for w in [unquoted(command[0]).lstrip(EXEC_PREFIXES)] + [unquoted(w) for w in command[1:2]] if w]
+        programs += first[:1]
+        command = []
+    return programs
+
+
+def _ssh_units(host):
+    """Every service and socket file, and drop-in, in every unit directory, read whatever its name and masked or not:
+    an Exec line that runs an SSH server's program, or a socket that listens on TCP :22, is an SSH unit."""
+    found, seen, files = [], {}, []
+    for directory in UNIT_DIRECTORIES:
+        names = host.entries(directory)
+        if names is None:
+            found.append("the unit directory %s cannot be listed" % directory)
+            continue
+        for name in names:
+            path = directory + "/" + name
+            if name.endswith((".service", ".socket")):
+                files.append((name, path))
+            elif name.endswith((".service.d", ".socket.d")) or name in ("service.d", "socket.d"):
+                # a unit's own drop-ins, a prefix's (ssh-.service.d) and the type-wide ones (service.d: every service)
+                drop_ins = host.entries(path)
+                if drop_ins is None:
+                    found.append("the drop-in directory %s cannot be listed" % path)
+                    continue
+                files += [(name[:-2], path + "/" + d) for d in drop_ins if d.endswith(".conf")]
+    units = []
+    for unit, path in files:
+        text = host.read(path)
+        if text is None:
+            state, detail = host.lookup(path)
+            if state != "missing":       # a link that points nowhere (a dead alias) carries nothing to run
+                found.append("the unit file %s cannot be read%s" % (path, " (%s)" % detail if detail else ""))
+            continue
+        units.append((unit, path, _unit_lines(text)))
+    # every ExecSearchPath= directory any unit or drop-in sets, as one list (a superset of any one unit's: fail closed);
+    # an entry this cannot resolve (a specifier such as %h, a relative path) fails the control
+    search = []
+    for unit, path, lines in units:
+        for entry in (e.strip("\"'") for key, value in lines if key == "ExecSearchPath" for e in re.split(r"[:\s]+", value)):
+            if entry and (entry[0] != "/" or "%" in entry):
+                found.append("the unit %s (%s) sets ExecSearchPath= to %s, a directory this probe cannot resolve: a "
+                             "command found there is not checked" % (unit, path, entry))
+            elif entry and entry not in search:
+                search.append(entry)
+    for unit, path, lines in units:
+        for key, value in lines:
+            if key in UNIT_EXEC_KEYS:
+                for program in _exec_programs(value):
+                    why = _ssh_executable(host, program, seen, search)
+                    if why:
+                        found.append("the unit %s (%s): %s" % (unit, path, why))
+            elif key.startswith("Exec") and key not in UNIT_EXEC_PATH_KEYS:
+                found.append("the unit %s (%s) carries %s=, an Exec key this probe does not know: its command is not "
+                             "checked" % (unit, path, key))
+            elif key in SOCKET_LISTEN_KEYS and value.rpartition(":")[2].strip() == str(SSH_PORT):
+                found.append("the socket %s (%s) listens on %s" % (unit, path, value))
+    return found
+
+
+def _kernel_listeners(host, table):
+    """The rows of one kernel TCP table that LISTEN on :22, or the reason the table is not a table. A header with no
+    rows is a valid empty address family; a blank or malformed table is not one (#791 review, MUST 3)."""
+    text = host.read(table)
+    if text is None:
+        return ["%s cannot be read" % table]
+    lines = text.splitlines()
+    if not lines or tuple(lines[0].split()[:4]) != PROC_TCP_HEADER[table]:
+        return ["%s is not a kernel TCP table (its header is %r)" % (table, lines[0][:60] if lines else "")]
+    found = []
+    for number, line in enumerate(lines[1:], 2):
+        if not line.strip():
+            continue
+        row = PROC_TCP_ROW.match(line)
+        if not row:
+            found.append("%s line %d is not a kernel TCP row (%r)" % (table, number, line.strip()[:60]))
+        elif row.group(3).upper() == "0A" and int(row.group(2), 16) == SSH_PORT:
+            found.append("%s shows a listener on :%d (%s:%s)" % (table, SSH_PORT, row.group(1), row.group(2)))
+    return found
+
+
+def sshd_absent(host):
+    """No SSH server on the host: no binary, no unit, nothing on TCP :22. Every problem is named, not the first only."""
+    found = []
+    for path in SSHD_BINARIES:
+        # lstat, not stat -L: a link that points nowhere is still an SSH server's name, and is reported. Only ENOENT is
+        # absence: EACCES, EIO or a path component that is not a directory is a lookup that did not answer
+        state, detail = host.lookup(path)
+        if state == "present":
+            found.append(f"{path} is present ({detail})")
+        elif state == "error":
+            found.append(f"{path} cannot be checked ({detail})")
+    for name in SSH_SERVER_NAMES:
+        on_path = host.which(name)
+        if on_path and on_path not in SSHD_BINARIES:
+            found.append(f"{name} is on PATH as {on_path}")
+    found += _ssh_units(host)
+    rc, out = host.run(["systemctl", "list-unit-files", "--no-legend", "--no-pager", SERVICE, *SSH_UNIT_PATTERNS])
+    units = [line.split() for line in out.splitlines() if line.split()]
+    if rc != 0 or SERVICE not in [unit[0] for unit in units]:
+        found.append(f"the unit files cannot be listed (systemctl list-unit-files exit {rc}"
+                     f"{'' if SERVICE in [unit[0] for unit in units] else f', and it does not show {SERVICE}'})")
+    else:
+        found += [f"the unit {unit[0]} exists ({unit[1] if len(unit) > 1 else 'state unknown'})" for unit in units if unit[0] != SERVICE]
+    rc, out = host.run(["ss", "-Hltn"])
+    if rc != 0:
+        found.append("the TCP listeners cannot be listed (ss failed)")
+    else:
+        # ss -Hltn: State Recv-Q Send-Q Local-Address:Port Peer-Address:Port. The port is after the last colon of the
+        # local address (0.0.0.0:22, [::]:22, 0.0.0.0%eth0:22, *:22)
+        found += [f"{fields[3]} is listening" for fields in (line.split() for line in out.splitlines())
+                  if len(fields) >= 4 and fields[3].rpartition(":")[2] == str(SSH_PORT)]
+    # the kernel's own tables, read independently of ss: an ss that exits 0 and prints nothing must not read as
+    # "nothing on :22"
+    for table in PROC_TCP_TABLES:
+        found += _kernel_listeners(host, table)
+    if found:
+        why = "this host is not shown to be free of an SSH server (a production KMS host has none, q-20): " + "; ".join(found)
+        if host.read(STAGING_VARIANT) is not None:
+            why += (f". This is the STAGING image variant ({STAGING_VARIANT}): its operator sshd is staging-only, and "
+                    "a staging host is never a production host")
+        return False, why
+    return True, (f"no SSH server binary, no service or socket that runs one or listens on :{SSH_PORT} (every unit file "
+                  f"read), no ssh or sshd unit file, nothing listening on TCP :{SSH_PORT} (q-20: absent)")
+
+
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
           "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
           "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule,
-          "kernel_sysctl_baseline": sysctl_baseline, "bootstrap_and_kms_users_separate": separate_users}
+          "kernel_sysctl_baseline": sysctl_baseline, "bootstrap_and_kms_users_separate": separate_users,
+          "sshd_absent": sshd_absent}

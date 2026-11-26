@@ -123,7 +123,27 @@ class Render(unittest.TestCase):
 
     def test_each_port_only_from_its_zones(self):
         self.assertIn("tcp dport 8443 ip saddr { 198.51.100.0/24, 203.0.113.128/32 } accept", self.text)
-        self.assertIn("tcp dport 22 ip saddr { 203.0.113.0/28 } accept", self.text)
+        self.assertIn('ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment "ping: admin only"', self.text)
+
+    def test_no_zone_is_admitted_to_ssh(self):
+        """q-20: ABSENT, GA ruling under owner delegation 2026-11-25 (regalia-kms-r1s.12): a production KMS host runs no
+        sshd, and its firewall admits SSH from no zone, admin_cidrs included. The admin zone keeps ping and nothing else."""
+        input_chain = re.search(r"chain input \{\n(.*?)\n  \}", self.text, re.S).group(1)
+        self.assertNotIn("dport %d" % self.cfg["ssh_port"], self.text)
+        self.assertNotIn("dport 22", self.text)
+        self.assertNotIn("ssh", self.text.lower())
+        admin_rules = [line.strip() for line in input_chain.splitlines() if "203.0.113.0/28" in line]
+        self.assertEqual(admin_rules, ['ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment "ping: admin only"'])
+        # and whatever the site's ssh_port is, it is not opened
+        doc = json.loads(EXAMPLE.read_text())
+        doc["ssh_port"] = 2222
+        self.assertNotIn("dport 2222", firewall.render(sitecfg.validate(doc)))
+
+    def test_network_probe_expects_ssh_closed_from_every_zone(self):
+        from deploy.baremetal import network_probe
+        for role in network_probe.ROLES:
+            with self.subTest(role=role):
+                self.assertIs(network_probe.expected_ports(self.cfg, role)[self.cfg["ssh_port"]], False)
 
     def test_outbound_only_to_declared_sinks(self):
         self.assertIn('ip daddr 203.0.113.192/32 tcp dport 6514 accept comment "audit"', self.text)
@@ -132,7 +152,7 @@ class Render(unittest.TestCase):
         for name, net in (("nts.netnod.se", "194.58.200.0/24"), ("ptbtime1.ptb.de", "192.53.103.0/24"), ("time.cloudflare.com", "162.159.200.0/24")):
             self.assertIn('ip daddr { %s } tcp dport 4460 accept comment "time: %s, NTS-KE"' % (net, name), self.text)
             self.assertIn('ip daddr { %s } udp dport 123 accept comment "time: %s, NTP"' % (net, name), self.text)
-        self.assertEqual(self.text.count(" dport "), 11)   # kms, node metrics, ssh, audit, dns, and 2 per NTS server: nothing else opens
+        self.assertEqual(self.text.count(" dport "), 10)   # kms, node metrics, audit, dns, and 2 per NTS server: nothing else opens (no ssh, q-20)
         # #305: node_exporter from the monitoring zone only, to this host's address only
         self.assertIn('ip daddr 192.0.2.10 tcp dport 9100 ip saddr { 203.0.113.128/32 } accept comment "node metrics: monitoring only (#305)"', self.text)
         self.assertEqual(self.text.count("dport 9100"), 1)
@@ -266,3 +286,47 @@ class ServiceMesh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SshPortReserved(unittest.TestCase):
+    """#791 independent review (MUST 4): TCP :22 is SSH's whatever the site's ssh_port says. With ssh_port moved to
+    another number, no listener of this host may take 22 (the KMS, a node peer's unlock service, the sync service),
+    so the config can never render a ruleset that opens :22, and sshd_absent (which finds anything on :22) and the
+    site config cannot disagree. A single-node host's unlock_port is the owner's, at the owner's address: it may be 22."""
+
+    def other_ssh(self, doc):
+        doc["ssh_port"] = 2222
+        return doc
+
+    def test_no_listener_of_this_host_may_take_22_with_another_ssh_port(self):
+        cases = {
+            "the KMS on 22": (lambda d: d.__setitem__("kms_port", 22), "kms_port must not be 22"),
+            "a node peer's unlock service on 22": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 22), "not be SSH's 22"),
+            "the sync service on 22": (lambda d: d["service_mesh"].__setitem__("sync_port", 22), "not be SSH's 22"),
+        }
+        for label, (breakit, why) in cases.items():
+            with self.subTest(label):
+                d = self.other_ssh(meshed())
+                breakit(d)
+                with self.assertRaises(sitecfg.InvalidSite) as ctx:
+                    sitecfg.validate(d)
+                self.assertIn(why, str(ctx.exception))
+        # with ssh_port elsewhere and nothing on 22, the config is valid and the ruleset opens neither port
+        text = firewall.render(sitecfg.validate(self.other_ssh(meshed())))
+        self.assertNotIn("dport 22 ", text)
+        self.assertNotIn("dport 2222", text)
+
+    def test_a_single_node_host_s_unlock_port_is_the_owner_s_and_may_be_22(self):
+        from tests.test_baremetal_single_node_network import single_site
+        doc = self.other_ssh(single_site(unlock_port=22))
+        self.assertEqual(sitecfg.validate(doc)["boot_mesh"]["unlock_port"], 22)
+        self.assertNotIn("dport 22 ", firewall.render(sitecfg.validate(doc)))
+
+    def test_network_probe_expects_22_closed_from_every_zone_whatever_ssh_port_is(self):
+        from deploy.baremetal import network_probe
+        cfg = sitecfg.validate(self.other_ssh(json.loads(EXAMPLE.read_text())))
+        for role in network_probe.ROLES:
+            with self.subTest(role=role):
+                ports = network_probe.expected_ports(cfg, role)
+                self.assertIs(ports[22], False)
+                self.assertIs(ports[2222], False)

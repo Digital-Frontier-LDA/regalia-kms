@@ -9,6 +9,7 @@ import sys
 import hashlib
 import io
 import json
+import pathlib
 import os
 import re
 import struct
@@ -121,6 +122,9 @@ NFT_JSON = json.dumps({"nftables": [
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "input", "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "forward", "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "output", "type": "filter", "hook": "output", "prio": 0, "policy": "drop"}}]})
+PERSISTED_RULESET = ("table inet regalia_kms {\n  chain input {\n    type filter hook input priority filter; policy drop;\n"
+                     "    ip daddr 192.0.2.10 tcp dport 8443 ip saddr { 198.51.100.0/24 } accept comment \"kms\"\n"
+                     "    ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment \"ping: admin only\"\n  }\n}\n")
 # cryptsetup luksDump --dump-json-metadata, trimmed: the TPM2 slot 1 with the token
 # systemd-cryptenroll --tpm2-device --tpm2-pcrlock writes (NV-backed: the one shape today under which
 # a retired boot image stops unlocking the disk, #135; captured from e2e/pcrlock-luks-swtpm.sh), and the
@@ -198,6 +202,8 @@ class FakeHost:
             # sealed to the host key and the TPM under PCR 7 and the signed PCR 11 policy (#198 requires it)
             PIN_FILE: cred("host-pk-7-11.cred"),
             host_probe.PCRLOCK_POLICY: json.dumps(PCRLOCK),
+            # the per-host fragment every boot reloads, as firewall.py renders it since q-20: no SSH rule
+            host_probe.PERSISTED_FIREWALL: PERSISTED_RULESET,
         }
         self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.DB_VAR: DB, host_probe.KMS_BINARY: KMS_BYTES}
         self.dirs = {"/sys/class/tpm/tpm0/pcr-sha256": [str(i) for i in range(24)], USB: ["1-1", "1-1.4", "usb1"],
@@ -2287,3 +2293,362 @@ class SignedEvidence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FirewallAfterQ20(unittest.TestCase):
+    """#791 independent review (MUST 5): a host enrolled before q-20 keeps its old "ssh: admin only" rule loaded and in
+    the fragment on /var that every boot reloads, until the fragment is re-rendered. firewall_default_deny fails while
+    either still admits TCP :22, in any form, and passes once both are the q-20 ruleset."""
+
+    OLD_RULE = 'ip daddr 192.0.2.10 tcp dport 22 ip saddr { 203.0.113.0/28 } accept comment "ssh: admin only"'
+
+    def nft_with(self, *rules):
+        d = json.loads(NFT_JSON)
+        d["nftables"] += [{"rule": dict({"family": "inet", "table": "regalia_kms", "chain": "input", "handle": 7 + i}, **r)}
+                          for i, r in enumerate(rules)]
+        return 0, json.dumps(d)
+
+    @staticmethod
+    def dport(right, comment=None, op="=="):
+        rule = {"expr": [{"match": {"op": op, "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": right}},
+                         {"accept": None}]}
+        if comment:
+            rule["comment"] = comment
+        return rule
+
+    def test_the_q20_host_passes(self):
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with(self.dport(8443, "kms"))
+        value, why = host_probe.firewall(h)
+        self.assertTrue(value, why)
+        self.assertIn("admitted neither", why)
+
+    def test_a_loaded_rule_that_admits_22_fails_it_in_every_form(self):
+        for label, rule in {"the old rule": self.dport(22, "ssh: admin only"), "22 alone": self.dport(22),
+                            "22 in a set": self.dport({"set": [8443, 22]}), "a range holding 22": self.dport({"range": [20, 30]}),
+                            "the old comment on another port": self.dport(2222, "ssh: admin only")}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(rule)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value)
+                self.assertIn("the loaded inet regalia_kms still admits TCP :22", why)
+        # a drop on 22, or an accept on a port that only contains 22, is not an admission
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with({"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}},
+                                                               "right": 22}}, {"drop": None}]}, self.dport(2222), self.dport({"range": [23, 30]}))
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_persisted_fragment_that_admits_22_fails_it_though_the_kernel_is_clean(self):
+        for label, line in {"the old rule": self.OLD_RULE, "22 in a set": "tcp dport { 8443, 22 } accept",
+                            "a range holding 22": "tcp dport 20-30 accept", "the old comment": 'tcp dport 2222 accept comment "ssh: admin only"'}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value)
+                self.assertIn("would load it back", why)
+        h = FakeHost()
+        h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    tcp dport 2222 accept\n    tcp dport 22 drop\n  }\n}\n")
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_loaded_rule_is_judged_by_its_operator(self):
+        """#791 CodeRabbit: != and the comparisons decide what a tcp dport match lets through; an operand this cannot
+        compare (a named set, a variable) admits 22, so it fails closed."""
+        for label, (op, right, admits) in {
+                "!= 8443 lets 22 in": ("!=", 8443, True), "< 1024 lets 22 in": ("<", 1024, True),
+                "<= 22 lets 22 in": ("<=", 22, True), ">= 22 lets 22 in": (">=", 22, True),
+                "a named set is not known not to hold 22": ("==", "@admin_ports", True),
+                "!= over a named set is not known to leave 22 out": ("!=", "@admin_ports", True),
+                "an operator it does not know": ("~", 8443, True),
+                "!= 22 keeps 22 out": ("!=", 22, False), "!= a set holding 22 keeps 22 out": ("!=", {"set": [22, 2222]}, False),
+                "> 1024 keeps 22 out": (">", 1024, False), "< 22 keeps 22 out": ("<", 22, False)}.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(self.dport(right, op=op))
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, not admits, why)
+
+    def test_a_persisted_rule_is_read_whole_and_by_its_operator(self):
+        """#791 CodeRabbit: a backslash continues a rule on the next line, and != and the comparisons decide what it lets
+        through. A name in place of a port (a service, a set, a variable) admits 22: unknown is not closed."""
+        admits = {"continued over two lines": "tcp dport 22 \\\n      accept",
+                  "the comment on the next line": "tcp dport 2222 \\\n      accept comment \"ssh: admin only\"",
+                  "!= 8443": "tcp dport != 8443 accept", "ne 8443": "tcp dport ne 8443 accept", "< 1024": "tcp dport < 1024 accept",
+                  "the service name": "tcp dport ssh accept", "a named set": "tcp dport @admin_ports accept",
+                  "a variable": "tcp dport $ADMIN accept", "a set with a name in it": "tcp dport { 8443, ssh } accept"}
+        keeps_out = {"!= 22": "tcp dport != 22 accept", "> 1024": "tcp dport > 1024 accept",
+                     "!= a set holding 22": "tcp dport != { 22, 2222 } accept", "a continued drop": "tcp dport 22 \\\n      drop"}
+        for label, line in list(admits.items()) + list(keeps_out.items()):
+            with self.subTest(label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in keeps_out, why)
+                if label in admits:
+                    self.assertIn("would load it back", why)
+
+    def test_a_jump_goto_or_th_dport_to_22_fails_it(self):
+        """#791 delta review (GA ruling): a check that claims to fail closed missed "tcp dport 22 jump/goto" (the target
+        chain may accept) and "th dport 22" (the transport header matches TCP too). Both, loaded or persisted, fail it;
+        the same rules on another port, or a th/tcp 22 that drops, do not."""
+        def loaded(proto, verdict, right=22):
+            return {"expr": [{"match": {"op": "==", "left": {"payload": {"protocol": proto, "field": "dport"}}, "right": right}},
+                             verdict]}
+        for label, rule in {"tcp 22 jump": loaded("tcp", {"jump": {"target": "admin"}}),
+                            "tcp 22 goto": loaded("tcp", {"goto": {"target": "admin"}}),
+                            "th 22 accept": loaded("th", {"accept": None}),
+                            "th 22 jump": loaded("th", {"jump": {"target": "admin"}}),
+                            "th in a set holding 22": loaded("th", {"accept": None}, {"set": [8443, 22]})}.items():
+            with self.subTest("loaded: " + label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with(rule)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value, why)
+                self.assertIn("the loaded inet regalia_kms still admits TCP :22", why)
+        for label, line in {"tcp 22 jump": "tcp dport 22 jump admin", "tcp 22 goto": "tcp dport 22 goto admin",
+                            "th 22 accept": "meta l4proto tcp th dport 22 accept", "th 22 jump": "th dport 22 jump admin",
+                            "a th range holding 22": "th dport 20-30 accept", "continued, jump on the next line": "tcp dport 22 \\\n      jump admin"}.items():
+            with self.subTest("persisted: " + label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value, why)
+                self.assertIn("would load it back", why)
+        h = FakeHost()
+        h.runs[NFT_LIST] = self.nft_with(loaded("th", {"jump": {"target": "admin"}}, 2222), loaded("th", {"drop": None}))
+        h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace(
+            "  }\n}\n", "    th dport 2222 jump admin\n    tcp dport 22 drop\n    th dport != 22 goto admin\n  }\n}\n")
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+    def test_a_rule_that_does_not_provably_exclude_22_fails_it(self):
+        """#791 CodeRabbit + council: a rule that lets packets through admits TCP :22 unless it provably excludes it. An
+        address-only accept, ct state new, another interface, a verdict map or a queue admits it, loaded and persisted.
+        The rendered ruleset's own forms do not: loopback, ct state established/related, the mesh's established answers,
+        typed ICMP, and UDP (WireGuard)."""
+        def m(left, right, op="=="):
+            return {"match": {"op": op, "left": left, "right": right}}
+        saddr = m({"payload": {"protocol": "ip", "field": "saddr"}}, "203.0.113.1")
+        loaded_admits = {
+            "an address-only accept": [saddr, {"accept": None}],
+            "ct state new": [m({"ct": {"key": "state"}}, "new"), {"accept": None}],
+            "ct state established,new": [m({"ct": {"key": "state"}}, ["established", "new"], "in"), {"accept": None}],
+            "another interface": [m({"meta": {"key": "iifname"}}, "eth0"), {"accept": None}],
+            "not loopback": [m({"meta": {"key": "iif"}}, "lo", "!="), {"accept": None}],
+            "a verdict map on tcp dport": [{"vmap": {"key": {"payload": {"protocol": "tcp", "field": "dport"}},
+                                                     "data": {"set": [[22, {"accept": None}]]}}}],
+            "a queue": [saddr, {"queue": {"num": 0}}],
+            "an address-only jump": [saddr, {"jump": {"target": "admin"}}]}
+        loaded_keeps_out = {
+            "loopback": [m({"meta": {"key": "iif"}}, "lo"), {"accept": None}],
+            "ct state established,related": [m({"ct": {"key": "state"}}, ["established", "related"], "in"), {"accept": None}],
+            "a mesh answer": [m({"meta": {"key": "iifname"}}, "wg-svc"), m({"payload": {"protocol": "tcp", "field": "sport"}}, 2379),
+                              m({"ct": {"key": "state"}}, "established"), {"accept": None}],
+            "typed ICMP": [saddr, m({"payload": {"protocol": "icmp", "field": "type"}}, "echo-request"), {"accept": None}],
+            "UDP": [m({"payload": {"protocol": "udp", "field": "dport"}}, 51820), {"accept": None}],
+            "meta l4proto udp": [m({"meta": {"key": "l4proto"}}, "udp"), saddr, {"accept": None}]}
+        for label, exprs in list(loaded_admits.items()) + list(loaded_keeps_out.items()):
+            with self.subTest("loaded: " + label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with({"expr": exprs})
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in loaded_keeps_out, why)
+                if label in loaded_admits:
+                    self.assertIn("the loaded inet regalia_kms still admits TCP :22", why)
+        persisted_admits = {"an address-only accept": "ip saddr 203.0.113.1 accept",
+                            "an address-only accept with a comment": 'ip saddr { 203.0.113.0/28 } accept comment "admin"',
+                            "ct state new": "ct state new accept", "another interface": 'iifname "eth0" accept',
+                            "not loopback": 'iif != "lo" accept', "a ct state verdict map": "ct state vmap { established : accept, new : accept }",
+                            "a queue": "ip saddr 203.0.113.1 queue num 0", "an address-only jump": "ip saddr 203.0.113.1 jump admin",
+                            "a drop whose comment says accept is not one, but this accept is": 'ip saddr 203.0.113.1 accept comment "drop"',
+                            "an exclusion inside a comment is not one": 'ip saddr 203.0.113.1 accept comment "not ct state established here"'}
+        persisted_keeps_out = {"loopback": 'iif "lo" accept', "ct state established,related": "ct state established,related accept",
+                               "ct state as a set": "ct state { established, related } accept",
+                               "a mesh answer": 'iifname "wg-svc" ip6 saddr fd00::2 ip6 daddr fd00::1 tcp sport 2379 ct state established accept comment "service mesh: answers"',
+                               "typed ICMP": 'ip saddr { 203.0.113.0/28 } icmp type echo-request accept comment "ping: admin only"',
+                               "typed ICMP in a set": 'icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"',
+                               "UDP": 'ip daddr 192.0.2.10 udp dport 51820 ip saddr { 198.51.100.2 } accept comment "boot mesh: WireGuard"',
+                               "a drop whose comment says accept": 'ip saddr 203.0.113.1 drop comment "we never accept here"'}
+        for label, line in list(persisted_admits.items()) + list(persisted_keeps_out.items()):
+            with self.subTest("persisted: " + label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in persisted_keeps_out, why)
+                if label in persisted_admits:
+                    self.assertIn("would load it back", why)
+
+    def test_only_a_positive_pin_to_a_non_tcp_protocol_excludes_22(self):
+        """#791 council ACs: L4 excludes :22 only when a POSITIVE equality pins it to a known non-TCP value (icmp/icmpv6
+        type; udp dport/sport on a port or a set of ports; meta l4proto / ip protocol / ip6 nexthdr == udp, icmp or
+        ipv6-icmp, a set only of those). A negation, a range, a set holding tcp or an unknown element, a th match or an
+        unreadable operand admits it (fail closed). A UDP pin beside a TCP-capable match excludes it: nft ANDs a rule."""
+        def m(left, right, op="=="):
+            return {"match": {"op": op, "left": left, "right": right}}
+        def p(proto, field):
+            return {"payload": {"protocol": proto, "field": field}}
+        l4, saddr = {"meta": {"key": "l4proto"}}, m(p("ip", "saddr"), "203.0.113.1")
+        loaded_admits = {
+            "meta l4proto { tcp, udp }": [m(l4, {"set": ["tcp", "udp"]}), {"accept": None}],
+            "meta l4proto != icmp": [m(l4, "icmp", "!="), {"accept": None}],
+            "meta l4proto tcp": [m(l4, "tcp"), {"accept": None}],
+            "meta l4proto { udp, sctp }": [m(l4, {"set": ["udp", "sctp"]}), {"accept": None}],
+            "ip protocol tcp": [m(p("ip", "protocol"), "tcp"), {"accept": None}],
+            "ip protocol != udp": [m(p("ip", "protocol"), "udp", "!="), {"accept": None}],
+            "ip6 nexthdr tcp": [m(p("ip6", "nexthdr"), "tcp"), {"accept": None}],
+            "udp dport != 53": [m(p("udp", "dport"), 53, "!="), {"accept": None}],
+            "a udp port range": [m(p("udp", "dport"), {"range": [1, 65535]}), {"accept": None}],
+            "icmp type != echo-request": [m(p("icmp", "type"), "echo-request", "!="), {"accept": None}],
+            "th sport 53 (th covers TCP)": [m(p("th", "sport"), 53), {"accept": None}],
+            "an l4proto that is a variable": [m(l4, {"range": ["udp", "tcp"]}), {"accept": None}]}
+        loaded_keeps_out = {
+            "meta l4proto { udp, icmp }": [m(l4, {"set": ["udp", "icmp"]}), saddr, {"accept": None}],
+            "ip protocol icmp": [m(p("ip", "protocol"), "icmp"), {"accept": None}],
+            "ip6 nexthdr ipv6-icmp": [m(p("ip6", "nexthdr"), "ipv6-icmp"), {"accept": None}],
+            "udp dport { 53, 123 }": [m(p("udp", "dport"), {"set": [53, 123]}), {"accept": None}],
+            "a udp pin beside th dport 22": [m(l4, "udp"), m(p("th", "dport"), 22), {"accept": None}],
+            "icmpv6 type": [m(p("icmpv6", "type"), {"set": ["nd-neighbor-solicit", "nd-neighbor-advert"]}), {"accept": None}]}
+        for label, exprs in list(loaded_admits.items()) + list(loaded_keeps_out.items()):
+            with self.subTest("loaded: " + label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with({"expr": exprs})
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in loaded_keeps_out, why)
+        persisted_admits = {"meta l4proto { tcp, udp }": "meta l4proto { tcp, udp } accept",
+                            "meta l4proto != icmp": "meta l4proto != icmp accept", "meta l4proto ne udp": "meta l4proto ne udp accept",
+                            "meta l4proto tcp": "meta l4proto tcp accept", "a set with an unknown element": "meta l4proto { udp, sctp } accept",
+                            "ip protocol tcp": "ip protocol tcp accept", "ip protocol != udp": "ip protocol != udp accept",
+                            "ip6 nexthdr tcp": "ip6 nexthdr tcp accept", "udp dport != 53": "udp dport != 53 accept",
+                            "a udp port range": "udp dport 1-65535 accept", "a udp port variable": "udp dport $DNS accept",
+                            "a named udp port set": "udp dport @dns accept", "icmp type != echo-request": "icmp type != echo-request accept", "icmp type ne echo-request": "icmp type ne echo-request accept",
+                            "th sport 53 (th covers TCP)": "th sport 53 accept", "an l4proto variable": "meta l4proto $L4 accept",
+                            "meta l4proto { tcp, udp } th dport 22": "meta l4proto { tcp, udp } th dport 22 accept"}
+        persisted_keeps_out = {"meta l4proto { udp, icmp }": "meta l4proto { udp, icmp } ip saddr 203.0.113.1 accept",
+                               "meta l4proto == udp": "meta l4proto == udp accept", "ip protocol icmp": "ip protocol icmp accept",
+                               "ip6 nexthdr ipv6-icmp": "ip6 nexthdr ipv6-icmp accept", "udp dport { 53, 123 }": "udp dport { 53, 123 } accept",
+                               "a udp pin beside th dport 22": "meta l4proto udp th dport 22 accept",
+                               "icmpv6 type in a set": "icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept"}
+        for label, line in list(persisted_admits.items()) + list(persisted_keeps_out.items()):
+            with self.subTest("persisted: " + label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in persisted_keeps_out, why)
+
+    def test_ct_state_excludes_only_established_and_related(self):
+        """#791 council: ct state excludes :22 only when its set is exactly {established}, {related} or {established,
+        related}: any of new, untracked or invalid in it, a negation, or a list a comma continues admits it."""
+        def ct(right, op="=="):
+            return [{"match": {"op": op, "left": {"ct": {"key": "state"}}, "right": right}}, {"accept": None}]
+        loaded = {"established": (ct("established"), True), "related": (ct("related"), True),
+                  "{established, related}": (ct({"set": ["established", "related"]}), True),
+                  "[established, related] by in": (ct(["established", "related"], "in"), True),
+                  "new": (ct("new"), False), "untracked": (ct("untracked"), False), "invalid": (ct("invalid"), False),
+                  "{established, new}": (ct({"set": ["established", "new"]}), False),
+                  "{related, untracked}": (ct({"set": ["related", "untracked"]}), False),
+                  "{established, invalid}": (ct(["established", "invalid"], "in"), False),
+                  "!= established": (ct("established", "!="), False), "!= {new}": (ct({"set": ["new"]}, "!="), False),
+                  "an empty set": (ct({"set": []}), False)}
+        for label, (exprs, closed) in loaded.items():
+            with self.subTest("loaded: " + label):
+                h = FakeHost()
+                h.runs[NFT_LIST] = self.nft_with({"expr": exprs})
+                self.assertEqual(host_probe.firewall(h)[0], closed, host_probe.firewall(h)[1])
+        persisted = {"ct state established accept": True, "ct state related accept": True,
+                     "ct state established,related accept": True, "ct state { related, established } accept": True,
+                     "ct state == established accept": True,
+                     "ct state new accept": False, "ct state untracked accept": False, "ct state invalid accept": False,
+                     "ct state established,new accept": False, "ct state established, new accept": False,
+                     "ct state established ,new accept": False, "ct state { established, untracked } accept": False,
+                     "ct state established,related,invalid accept": False, "ct state != established accept": False,
+                     "ct state ne related accept": False, "ct state != { new } accept": False,
+                     "meta l4proto udp ,tcp accept": False}
+        for line, closed in persisted.items():
+            with self.subTest("persisted: " + line):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                self.assertEqual(host_probe.firewall(h)[0], closed, host_probe.firewall(h)[1])
+
+    def test_a_comment_or_a_string_is_never_read_as_a_match(self):
+        """#791 CodeRabbit: nft reads everything after a "#" outside a string as a comment, and a log prefix (or any other
+        quoted string) as data. Neither may supply an exclusion: an accept whose only "exclusion" sits there admits :22.
+        A commented-out rule is no rule; a "#" inside a string comments nothing out; iifname "lo" still reads."""
+        persisted = {"tcp dport 22 accept # udp dport 53": False,
+                     "ip saddr 203.0.113.1 accept # ct state established": False,
+                     "ip saddr 203.0.113.1 accept #iif lo": False,
+                     'ip saddr 203.0.113.1 log prefix "audit ct state established packet " accept': False,
+                     'ip saddr 203.0.113.1 log prefix "tcp dport 80 " accept': False,
+                     'ip saddr 203.0.113.1 log prefix "udp dport 53" accept': False,
+                     'ip saddr 203.0.113.1 log prefix "#" accept': False,
+                     "# tcp dport 22 accept": True,
+                     "  #ip saddr 203.0.113.1 accept": True,
+                     'ct state established log prefix "in # out " accept': True,
+                     'iifname "lo" accept': True,
+                     'ip saddr 203.0.113.1 log prefix "accept ssh " drop': True}
+        for line, closed in persisted.items():
+            with self.subTest(persisted=line):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                self.assertEqual(host_probe.firewall(h)[0], closed, host_probe.firewall(h)[1])
+        self.assertEqual(host_probe._logical_rules('a # b; c\nd "x # y" e\n# f\ng "#"'), ["a", 'd "x # y" e', "", 'g "#"'])
+
+    def test_a_semicolon_ends_a_rule_and_a_continuation_does_not(self):
+        """#791 council: ";" and continuation lines never merge two rules into one or split one into two, in both
+        directions: an admitting rule beside a UDP one on the same line fails it, in either order; one rule continued
+        over lines, or one whose quoted comment holds a ";", is judged whole."""
+        admits = {"an address-only accept, then a UDP one": "ip saddr 203.0.113.1 accept; udp dport 53 accept",
+                  "a UDP accept, then an address-only one": "udp dport 53 accept; ip saddr 203.0.113.1 accept",
+                  "a UDP accept, then tcp dport 22": "udp dport 53 accept ; tcp dport 22 accept",
+                  "continued: an address-only accept": "ip saddr 203.0.113.1 \\\n      accept",
+                  "a quoted ; does not hide the next rule": 'udp dport 53 accept comment "a; b"; ip saddr 203.0.113.1 accept'}
+        keeps_out = {"a tcp dport 22 drop, then a UDP accept": "tcp dport 22 drop; ip saddr 203.0.113.1 udp dport 53 accept",
+                     "continued: a UDP pin on the next line": "ip saddr 203.0.113.1 \\\n      udp dport 53 accept",
+                     "continued: the accept on the next line of a UDP rule": "udp dport 53 \\\n      accept",
+                     "a ; inside a quoted comment is not a rule": 'udp dport 53 accept comment "x; ip saddr 203.0.113.1 accept"'}
+        for label, line in list(admits.items()) + list(keeps_out.items()):
+            with self.subTest(label):
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = PERSISTED_RULESET.replace("  }\n}\n", "    %s\n  }\n}\n" % line)
+                value, why = host_probe.firewall(h)
+                self.assertEqual(value, label in keeps_out, why)
+        self.assertEqual(host_probe._logical_rules('a; b "c; d"\ne\\\nf'), ["a", 'b "c; d"', "e f"])
+
+    def test_the_rendered_ruleset_of_every_host_role_passes(self):
+        """#791 council: what firewall.py renders for each host role passes the persisted check: the plain example, a
+        single-node host, each of a, b and c with the boot mesh only, and with the boot mesh and the service mesh."""
+        from deploy.baremetal import firewall, sitecfg
+        from tests.test_baremetal_bootnet import site
+        from tests.test_baremetal_single_node_network import single_site
+        example = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "site.example.json"
+        roles = {"the plain example": json.loads(example.read_text()), "single-node": single_site()}
+        for node in "abc":
+            roles["%s, boot mesh" % node] = site(node)
+            roles["%s, boot and service mesh" % node] = dict(site(node), service_mesh={"interface": "wg-svc", "listen_port": 51821,
+                                                                                         "sync_port": 7444})
+        for role, doc in roles.items():
+            with self.subTest(role):
+                text = firewall.render(sitecfg.validate(doc))
+                h = FakeHost()
+                h.files[host_probe.PERSISTED_FIREWALL] = text
+                value, why = host_probe.firewall(h)
+                self.assertTrue(value, why)
+                if "service" in role:
+                    self.assertIn("ct state established accept", text)        # the mesh answers are in what was judged
+
+    def test_a_persisted_fragment_that_cannot_be_read_fails_it(self):
+        h = FakeHost()
+        del h.files[host_probe.PERSISTED_FIREWALL]
+        value, why = host_probe.firewall(h)
+        self.assertFalse(value)
+        self.assertIn("cannot be read", why)
+
+    def test_the_rendered_ruleset_passes_the_persisted_check(self):
+        """What firewall.py renders today, written to /var, is what the check accepts (no drift between the two)."""
+        from deploy.baremetal import firewall, sitecfg
+        example = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "site.example.json"
+        h = FakeHost()
+        h.files[host_probe.PERSISTED_FIREWALL] = firewall.render(sitecfg.validate(json.loads(example.read_text())))
+        self.assertTrue(host_probe.firewall(h)[0], host_probe.firewall(h)[1])
+
+
+NFT_LIST = ("nft", "-j", "list", "table", "inet", "regalia_kms")

@@ -7,7 +7,8 @@
 # inside its namespace, never on the machine running the test), a client, a monitoring host, an admin
 # host, an unauthorized host, and the audit and NTP sinks. Then:
 #   1  network_probe.py from each zone: KMS port and SSH port exactly as the site config says
-#   2  a listener on an undeclared port of the KMS host is reachable from nowhere; node_exporter's port
+#   2  a listener on an undeclared port of the KMS host is reachable from nowhere; a listener on SSH's port
+#      (22) from no zone, the admin zone included (q-20: ABSENT, regalia-kms-r1s.12); node_exporter's port
 #      (9100, #305) from the monitoring zone only
 #   3  outbound: the KMS host reaches the audit sink (TCP) and the NTS server (NTS-KE TCP 4460, NTP UDP 123,
 #      rendered from time.nts, #303), and nothing else
@@ -95,7 +96,7 @@ for spec in sys.argv[1:]:
     proto, port = spec.split(":"); threading.Thread(target={"tcp": tcp, "tcp6": tcp6, "udp": udp}[proto], args=(int(port),), daemon=True).start()
 threading.Event().wait()
 PY
-x kms python3 -Es "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp:9100 tcp6:8443 &
+x kms python3 -Es "$T/listen.py" tcp:8443 tcp:22 tcp:2222 tcp:9999 tcp:9100 tcp6:8443 &
 x inside python3 -Es "$T/listen.py" tcp:80 &
 x audit python3 -Es "$T/listen.py" tcp:6514 tcp:7000 &
 x ntp python3 -Es "$T/listen.py" udp:123 udp:124 tcp:4460 tcp:4461 &
@@ -124,6 +125,8 @@ tcpok kms "${IP[unauth]}" 443 && P "the KMS host reaches an undeclared host befo
 # otherwise make "not reachable" pass whatever the firewall does.
 tcpok kms "${IP[audit]}" 7000 && P "control: audit:7000 answers before the ruleset" || F "control: audit:7000 not listening"
 tcpok client "${IP[kms]}" 9100 && P "control: kms:9100 answers before the ruleset" || F "control: kms:9100 not listening"
+tcpok admin "${IP[kms]}" 22 && P "control: kms:22 answers the admin zone before the ruleset" || F "control: kms:22 not listening"
+tcpok admin "${IP[kms]}" 2222 && P "control: kms:2222 answers the admin zone before the ruleset" || F "control: kms:2222 not listening"
 tcpok kms "${IP[unauth]}" 6514 && P "control: unauth:6514 answers before the ruleset" || F "control: unauth:6514 not listening"
 udpok 124 && P "control: ntp:124/udp answers before the ruleset" || F "control: ntp:124/udp not listening"
 tcpok kms "${IP[ntp]}" 4461 && P "control: ntp:4461 answers before the ruleset" || F "control: ntp:4461 not listening"
@@ -151,6 +154,30 @@ hdr "2  an undeclared port on the KMS host is reachable from nowhere"
 for h in client mon admin unauth; do
   tcpok "$h" "${IP[kms]}" 9999 && F "$h reached port 9999" || P "$h cannot reach port 9999"
 done
+
+hdr "2-ssh  SSH (TCP 22) is reachable from no zone, the admin zone included (q-20: ABSENT, regalia-kms-r1s.12)"
+for h in client mon admin unauth; do
+  tcpok "$h" "${IP[kms]}" 22 && F "$h reached SSH (22)" || P "$h cannot reach SSH (22)"
+done
+
+hdr "2-ssh-port  with ssh_port moved to 2222, neither 22 nor 2222 opens from any zone (q-20; #791 review MUST 4)"
+s0=$pass   # liveness: this section must run and pass all 16 of its checks, so a skipped one cannot pass silently
+sed "s/\"ssh_port\": 22,/\"ssh_port\": 2222,/" "$T/site.json" > "$T/site-ssh2222.json"
+grep -q "\"ssh_port\": 2222," "$T/site-ssh2222.json" && P "a site with ssh_port 2222" || F "the ssh_port edit did not apply"
+python3 -Es "$BM/firewall.py" "$T/site-ssh2222.json" > "$T/kms-ssh2222.nft" && x kms nft -c -f "$T/kms-ssh2222.nft" \
+  && x kms nft delete table inet regalia_kms && x kms nft -f "$T/kms-ssh2222.nft" && P "rendered and loaded with ssh_port 2222" || F "the ssh_port 2222 ruleset did not load"
+for h in client mon admin unauth; do
+  tcpok "$h" "${IP[kms]}" 22 && F "$h reached 22 with ssh_port 2222" || P "$h cannot reach 22 with ssh_port 2222"
+  tcpok "$h" "${IP[kms]}" 2222 && F "$h reached 2222 (the site's ssh_port)" || P "$h cannot reach 2222 (the site's ssh_port)"
+done
+tcpok client "${IP[kms]}" 8443 && P "the client still reaches the KMS port under that ruleset" || F "the KMS port closed with ssh_port 2222"
+for role in client:client monitoring:mon admin:admin unauthorized:unauth; do
+  r="${role%%:*}"; h="${role##*:}"
+  out="$(x "$h" python3 -Es "$BM/network_probe.py" "$T/site-ssh2222.json" --role "$r" --source-ip "${IP[$h]}" --timeout 1)"; rc=$?
+  [ "$rc" = 0 ] && P "$r: matrix matches with ssh_port 2222 (22 and 2222 closed)" || F "$r with ssh_port 2222 (rc=$rc): $out"
+done
+x kms nft delete table inet regalia_kms && x kms nft -f "$T/kms.nft" && P "the default ruleset is loaded again" || F "could not reload the default ruleset"
+n=$((pass - s0)); [ "$n" = 16 ] && P "liveness: section 2-ssh-port ran and passed all 16 of its checks" || F "liveness: section 2-ssh-port passed $n of its 16 checks"
 
 hdr "2a  node_exporter's port (#305): from the monitoring zone only"
 tcpok mon "${IP[kms]}" 9100 && P "the monitoring host reaches 9100" || F "the monitoring host cannot reach 9100"

@@ -8,8 +8,11 @@ Run it once from a machine in each zone. Exit 0 when every port is exactly as op
 config says, 1 when the firewall differs, 2 when the probe itself is refused (bad config or source).
 
   client, monitoring   kms_port open, ssh_port closed
-  admin                ssh_port open, kms_port closed
+  admin                both closed (the admin zone may ping the host, nothing more)
   unauthorized         both closed
+
+ssh_port is closed from EVERY zone: a production KMS host runs no sshd and its firewall admits no SSH (q-20: ABSENT,
+GA ruling under owner delegation 2026-11-25; SSH.md).
 """
 import argparse
 import datetime
@@ -28,8 +31,10 @@ ROLES = ("client", "monitoring", "admin", "unauthorized")
 
 def expected_ports(cfg, role):
     kms, ssh = cfg["kms_port"], cfg["ssh_port"]
-    return {"client": {kms: True, ssh: False}, "monitoring": {kms: True, ssh: False},
-            "admin": {kms: False, ssh: True}, "unauthorized": {kms: False, ssh: False}}[role]
+    # TCP :22 is closed from every zone whatever ssh_port says (sitecfg.SSH_PORT, #791 independent review MUST 4)
+    closed = {sitecfg.SSH_PORT: False, ssh: False}
+    return {"client": {**closed, kms: True}, "monitoring": {**closed, kms: True},
+            "admin": {**closed, kms: False}, "unauthorized": {**closed, kms: False}}[role]
 
 
 def role_matches_source(cfg, role, source):

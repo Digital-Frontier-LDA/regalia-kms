@@ -2,6 +2,7 @@
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
+import fnmatch
 import hashlib
 import json
 import os
@@ -110,6 +111,43 @@ def sysctl_path(key):
     return sysctl_paths(key, "eno1")[0]
 
 
+# sshd_absent (q-20: ABSENT, GA ruling under owner delegation 2026-11-25; regalia-kms-r1s.12): the unit files an SSH server
+# would bring, listed with the KMS unit (systemd 257 prints "name state preset"), and the TCP listeners (ss -Hltn)
+UNIT_FILES = ("systemctl", "list-unit-files", "--no-legend", "--no-pager", os_probe.SERVICE, *os_probe.SSH_UNIT_PATTERNS)
+LISTENERS = ("ss", "-Hltn")
+KMS_UNIT_FILE = "regalia-kms.service enabled enabled\n"
+PROC_TCP_HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+# the same listeners as NO_SSH_LISTENING, as /proc/net/tcp holds them (192.0.2.10 is 0A0200C0 little-endian; 8443 is 20FB)
+PROC_TCP = (PROC_TCP_HEAD + "   0: 0A0200C0:20FB 00000000:0000 0A 00000000:00000000 00:00000000 00000000   995        0 101 1\n"
+            "   1: 0A0200C0:238C 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 102 1\n"
+            "   2: 0100007F:094B 00000000:0000 0A 00000000:00000000 00:00000000 00000000   990        0 103 1\n"
+            "   3: 0A0200C0:20FB 0B0200C0:D431 01 00000000:00000000 00:00000000 00000000   995        0 104 1\n")
+# /proc/net/tcp6 names its remote column remote_address (net/ipv6/tcp_ipv6.c), not tcp's rem_address
+PROC_TCP6_HEAD = ("  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when "
+                  "retrnsmt   uid  timeout inode\n")
+PROC_TCP6 = PROC_TCP6_HEAD
+NO_SSH_LISTENING = ("LISTEN 0      4096   192.0.2.10:8443   0.0.0.0:*\n"
+                    "LISTEN 0      4096   192.0.2.10:9100   0.0.0.0:*\n"
+                    "LISTEN 0      4096   127.0.0.1:2379    0.0.0.0:*\n")
+
+
+KMS_UNIT_PATH = "/usr/lib/systemd/system/regalia-kms.service"
+
+
+def stat_file(kind="regular file", path="/usr/sbin/sshd"):
+    return lambda g: g.present.__setitem__(path, kind)
+
+
+def unit_file(directory, name, text, program=None, program_bytes=None):
+    """A unit file in one of systemd's directories, and (optionally) the program its Exec line names, with its bytes."""
+    def breaker(g):
+        g.dirs.setdefault(directory, []).append(name)
+        g.files[directory + "/" + name] = text
+        if program:
+            g.files[program] = program_bytes
+    return breaker
+
+
 class FakeHost:
     """A hardened KMS host by default; each test breaks exactly one thing and asks for the verdict."""
 
@@ -127,6 +165,8 @@ class FakeHost:
             os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
             "/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE,
             "/proc/40/status": sync_status(),
+            "/proc/net/tcp": PROC_TCP,
+            "/proc/net/tcp6": PROC_TCP6,
         }
         # the kernel as the image's sysctl.d leaves it (the kernel writes each value with a newline)
         for key, value in os_probe.SYSCTL_BASELINE.items():
@@ -160,7 +200,18 @@ class FakeHost:
             # the client endpoint shows `*` and is found by inode.
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
+            # no SSH server: nothing on :22 (the unit files are self.unit_files below; every SSH server's path is missing)
+            LISTENERS: NO_SSH_LISTENING,
         }
+        # the KMS unit, as the image ships it, is the one unit file; the KMS program's bytes are not an SSH server's
+        self.files[KMS_UNIT_PATH] = "[Service]\nExecStart=/usr/sbin/regalia-kms --config /etc/regalia-kms/config.json\n"
+        self.files["/usr/sbin/regalia-kms"] = "\x7fELF the regalia-kms daemon\n"
+        self.dirs["/usr/lib/systemd/system"] = ["regalia-kms.service"]
+        self.unit_files = [KMS_UNIT_FILE.strip()]   # what systemctl list-unit-files knows; None: it fails
+        self.unit_files_rc = 0
+        self.present = {}                           # path -> what lstat says it is
+        self.lookup_errors = {}                     # path -> the errno its lstat fails with
+        self.realpaths = {}
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
             self.commands[("test", "-e", directory)] = ""
@@ -184,6 +235,12 @@ class FakeHost:
     def run(self, argv):
         if argv[:2] == ["find", "-H"] and argv[2] in self.dirs and argv[2] not in self.unlistable:
             return 0, "".join(name + "\n" for name in self.dirs[argv[2]] if name.endswith(".rules"))
+        if argv[:4] == ["systemctl", "list-unit-files", "--no-legend", "--no-pager"]:
+            # systemctl applies the globs it is given: a glob the probe stops asking for stops finding its units
+            if self.unit_files is None:
+                return 1, ""
+            return self.unit_files_rc, "".join(line + "\n" for line in self.unit_files
+                                               if any(fnmatch.fnmatchcase(line.split()[0], g) for g in argv[4:]))
         out = self.commands.get(tuple(argv))
         return (0, out) if out is not None else (1, "")
 
@@ -192,6 +249,19 @@ class FakeHost:
 
     def readlink(self, path):
         return self.links.get(path)
+
+    def lookup(self, path):
+        if path in self.lookup_errors:
+            return "error", self.lookup_errors[path]
+        if path in self.present:
+            return "present", self.present[path]
+        return ("present", "regular file") if path in self.files else ("missing", None)
+
+    def entries(self, path):
+        return None if path in self.unlistable else sorted(self.dirs.get(path, []))
+
+    def realpath(self, path):
+        return self.realpaths.get(path, path)
 
 
 def add_pcscd_client(host, inode, name, pid, exe):
@@ -593,6 +663,396 @@ ENV_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "Environment,Environmen
 OPENSC = "/etc/regalia-kms/opensc.conf"
 BOTH_TOKENS = dict(ADMISSION, pkcs11_module_path="/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", yubikey_devices={"yubikey-site-a": "35718625"})
 IGNORE_YUBIKEY = (pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/ignore-yubikey.conf").read_text()
+
+
+class SshdAbsent(unittest.TestCase):
+    """sshd_absent: a production KMS host runs no SSH server (q-20: ABSENT, GA ruling under owner delegation 2026-11-25;
+    regalia-kms-r1s.12). Each fake host breaks one thing: a binary, a unit, a listener. It fails sshd_absent and no
+    other control, and every other control still passes."""
+
+    control = "sshd_absent"
+
+    def judged(self, host):
+        results = measure(host)
+        others = {k: v["value"] for k, v in results.items() if k != self.control}
+        self.assertTrue(all(others.values()), others)
+        return results[self.control]["value"], results[self.control]["why"]
+
+    def assert_fails(self, breakers, *reasons):
+        for index, breaker in enumerate(breakers):
+            with self.subTest(case=index):
+                host = FakeHost()
+                breaker(host)
+                value, why = self.judged(host)
+                self.assertFalse(value, why)
+                for reason in reasons:
+                    self.assertIn(reason, why)
+
+    def test_a_host_with_no_ssh_server_passes(self):
+        value, why = self.judged(FakeHost())
+        self.assertTrue(value, why)
+        self.assertIn("nothing listening on TCP :22", why)
+        # a port that only ends in 22, or only contains it, is not SSH's
+        host = FakeHost()
+        host.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*\nLISTEN 0 128 [::]:8422 [::]:*\n"
+        self.assertTrue(self.judged(host)[0])
+
+    def test_an_sshd_binary_fails_it(self):
+        """(a) an SSH server binary on the host, whatever else is absent: no unit, nothing listening."""
+        def on_path(name, where):
+            def breaker(g):
+                g.which = lambda tool: where if tool == name else None
+            return breaker
+        self.assert_fails([stat_file(), stat_file(path="/usr/lib/openssh/sshd-session"), stat_file(path="/usr/sbin/dropbear"),
+                           stat_file(path="/usr/local/sbin/sshd"), stat_file("symbolic link"),
+                           on_path("sshd", "/opt/openssh/sbin/sshd"), on_path("dropbear", "/opt/bin/dropbear"),
+                           on_path("tinysshd", "/usr/sbin/tinysshd")])
+        host = FakeHost()
+        stat_file()(host)
+        self.assertIn("/usr/sbin/sshd is present (regular file)", self.judged(host)[1])
+
+    def test_an_ssh_unit_fails_it(self):
+        """(b) a unit file an SSH server brings, enabled or not, masked or generated: no binary, nothing listening."""
+        def unit(line):
+            return lambda g: g.unit_files.append(line)
+        self.assert_fails([unit("ssh.service enabled enabled"), unit("ssh.socket disabled enabled"),
+                           unit("ssh@.service static -"), unit("sshd.service disabled disabled"),
+                           unit("sshd-vsock.socket generated -"), unit("ssh.service masked enabled"),
+                           unit("regalia-staging-sshd.service enabled enabled"), unit("dropbear.service enabled enabled")],
+                          "the unit ")
+        host = FakeHost()
+        unit("ssh.service enabled enabled")(host)
+        self.assertIn("the unit ssh.service exists (enabled)", self.judged(host)[1])
+
+    def test_each_unit_glob_finds_a_unit_no_other_glob_finds(self):
+        """#791 independent review (MUST 1): with the fake answering list-unit-files by the globs it is asked for, every
+        glob in SSH_UNIT_PATTERNS is load-bearing: dropping any one of them lets its unit through this check."""
+        only = {"ssh.*": "ssh.socket", "ssh@*": "ssh@.service", "*sshd*": "sshd-unix-local.socket", "dropbear*": "dropbear.service"}
+        self.assertEqual(set(only), set(os_probe.SSH_UNIT_PATTERNS))
+        for glob, name in only.items():
+            with self.subTest(glob=glob):
+                self.assertEqual([g for g in os_probe.SSH_UNIT_PATTERNS if fnmatch.fnmatchcase(name, g)], [glob])
+                host = FakeHost()
+                host.unit_files.append(name + " disabled enabled")
+                value, why = self.judged(host)
+                self.assertFalse(value)
+                self.assertIn("the unit %s exists" % name, why)
+
+    def test_a_renamed_ssh_service_or_socket_fails_it_masked_or_not(self):
+        """#791 independent review (MUST 1): an SSH server is found by what its units run and listen on, not by their
+        names: a service under any name whose Exec line runs an SSH server's program (by path, by name, or renamed and
+        recognised by its bytes), a socket under any name on TCP :22, a drop-in that swaps the program, and the vendor
+        file under a mask (systemctl does not list a renamed unit, and a masked one is still installed)."""
+        lib, etc = "/usr/lib/systemd/system", "/etc/systemd/system"
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        cases = [
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/sbin/sshd -D\n"),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=-/opt/x/bin/sshd-session -i\n"),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/libexec/admin-shell -D\n",
+                      "/usr/libexec/admin-shell", openssh),
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/opt/db -F -R\n", "/opt/db", "\x7fELF dropbear_2025.88\n"),
+            unit_file(lib, "remote-admin@.service", "[Service]\nExecStart=@/usr/sbin/dropbear dropbear -i\n"),
+            unit_file(lib, "remote-admin.socket", "[Socket]\nListenStream=22\nAccept=yes\n"),
+            unit_file(lib, "remote-admin.socket", "[Socket]\nListenStream=[::]:22\n"),
+        ]
+        # a drop-in that changes the KMS unit's program to an sshd
+        def drop_in(g):
+            g.dirs.setdefault(etc, []).append("regalia-kms.service.d")
+            g.dirs[etc + "/regalia-kms.service.d"] = ["override.conf"]
+            g.files[etc + "/regalia-kms.service.d/override.conf"] = "[Service]\nExecStart=\nExecStart=/usr/sbin/sshd -D\n"
+        # a masked unit: /etc's name is a link to /dev/null (it reads empty), the vendor file is still under /usr/lib
+        def masked(g):
+            unit_file(etc, "remote-admin.service", "")(g)
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/sbin/sshd -D\n")(g)
+        self.assert_fails(cases + [drop_in, masked], "the ")
+        host = FakeHost()
+        cases[2](host)
+        self.assertIn("is an SSH server's program by its contents (OpenSSH_)", self.judged(host)[1])
+        host = FakeHost()
+        cases[5](host)
+        self.assertIn("the socket remote-admin.socket", self.judged(host)[1])
+        # the KMS's own unit, a unit whose program is not installed, and a socket on another port are not SSH
+        host = FakeHost()
+        unit_file(lib, "other.service", "[Service]\nExecStart=/usr/lib/x/not-installed --flag\n")(host)
+        unit_file(lib, "other.socket", "[Socket]\nListenStream=2222\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_program_or_unit_that_cannot_be_read_fails_it(self):
+        """Fail closed: a unit directory that cannot be listed, a unit file or a program that is there but cannot be read
+        is not shown to be free of an SSH server."""
+        lib = "/usr/lib/systemd/system"
+
+        def unlistable(g):
+            g.unlistable.add("/etc/systemd/system")
+
+        def unit_unreadable(g):
+            g.dirs[lib].append("remote-admin.service")
+            g.present[lib + "/remote-admin.service"] = "regular file"
+
+        def program_unreadable(g):
+            unit_file(lib, "remote-admin.service", "[Service]\nExecStart=/usr/libexec/admin-shell\n")(g)
+            g.present["/usr/libexec/admin-shell"] = "regular file"
+        self.assert_fails([unlistable], "cannot be listed")
+        self.assert_fails([unit_unreadable], "the unit file %s/remote-admin.service cannot be read" % lib)
+        self.assert_fails([program_unreadable], "/usr/libexec/admin-shell cannot be read")
+
+    def test_a_listener_on_port_22_fails_it(self):
+        """(c) anything on TCP :22, on any address: no binary, no unit (a netcat, a container's sshd, a forwarder)."""
+        def listening(local):
+            return lambda g: g.commands.__setitem__(LISTENERS, NO_SSH_LISTENING + "LISTEN 0 128 %s 0.0.0.0:*\n" % local)
+        self.assert_fails([listening("0.0.0.0:22"), listening("[::]:22"), listening("192.0.2.10%eno1:22"), listening("*:22"),
+                           listening("127.0.0.1:22")], "is listening")
+
+    def test_a_read_that_does_not_answer_fails_it(self):
+        """Fail closed: a host that cannot be read is not a host with no SSH server."""
+        self.assert_fails([lambda g: g.commands.pop(LISTENERS)], "the TCP listeners cannot be listed")
+        self.assert_fails([lambda g: setattr(g, "unit_files", None), lambda g: setattr(g, "unit_files", [])],
+                          "the unit files cannot be listed")
+
+    def test_a_systemctl_that_fails_part_way_fails_it(self):
+        """#791 independent review (MUST 3): systemctl exiting non-zero after printing the KMS unit (a partial
+        inventory) is not an answer, even when what it printed shows no SSH unit."""
+        def partial(g):
+            g.unit_files_rc = 1
+        self.assert_fails([partial], "the unit files cannot be listed (systemctl list-unit-files exit 1)")
+
+    def test_a_listener_the_kernel_holds_fails_it_even_when_ss_shows_none(self):
+        """#791 review: an ss that exits 0 and prints nothing read as "nothing on :22". The kernel's tables are read
+        beside it, so a listener on :22 is found either way, on IPv4 or IPv6, on any address; a connection that is not
+        listening, or a port that only contains 22, is not SSH's."""
+        def kernel(table, row):
+            return lambda g: (g.commands.__setitem__(LISTENERS, ""),
+                              g.files.__setitem__(table, g.files[table] + row))
+        v4 = "   9: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 109 1\n"
+        v4_one_address = "   9: 0A0200C0:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 109 1\n"
+        v6 = ("   0: 00000000000000000000000000000000:0016 00000000000000000000000000000000:0000 0A "
+              "00000000:00000000 00:00000000 00000000     0        0 110 1\n")
+        self.assert_fails([kernel("/proc/net/tcp", v4), kernel("/proc/net/tcp", v4_one_address)], "/proc/net/tcp shows a listener on :22")
+        self.assert_fails([kernel("/proc/net/tcp6", v6)], "/proc/net/tcp6 shows a listener on :22")
+        host = FakeHost()
+        host.files["/proc/net/tcp"] += ("  10: 0A0200C0:0016 0B0200C0:D431 01 00000000:00000000 00:00000000 00000000 0 0 111 1\n"   # established, not listening
+                                        "  11: 00000000:08AE 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 112 1\n")  # :2222
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_kernel_table_that_cannot_be_read_fails_it(self):
+        self.assert_fails([lambda g: g.files.pop("/proc/net/tcp"), lambda g: g.files.pop("/proc/net/tcp6")], "cannot be read")
+
+    def test_a_blank_or_malformed_kernel_table_fails_it(self):
+        """#791 independent review (MUST 3): the table must be the kernel's: a header, then rows of its shape. A blank
+        table, one with another header, or a row that is not a TCP row fails the control; a header with no rows (an
+        address family with no sockets) is a valid empty table."""
+        def table(text, name="/proc/net/tcp"):
+            return lambda g: g.files.__setitem__(name, text)
+        self.assert_fails([table(""), table("\n"), table("garbage\n"), table("", "/proc/net/tcp6")], "is not a kernel TCP table")
+        self.assert_fails([table(PROC_TCP_HEAD + "   0: 00000000:0016 0A\n"), table(PROC_TCP_HEAD + "nonsense row\n"),
+                           table(PROC_TCP_HEAD + "   0: 0000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 0 0 0 1\n")],
+                          "is not a kernel TCP row")
+        host = FakeHost()
+        host.files["/proc/net/tcp"] = PROC_TCP_HEAD
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_the_ipv6_table_has_its_own_header(self):
+        """#791 CodeRabbit: the kernel spells tcp6's remote column remote_address, tcp's rem_address. Each table passes
+        with its own header and fails with the other's."""
+        host = FakeHost()
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])           # the fixture's tcp6 is the kernel's real header
+        self.assert_fails([lambda g: g.files.__setitem__("/proc/net/tcp6", PROC_TCP_HEAD),
+                           lambda g: g.files.__setitem__("/proc/net/tcp", PROC_TCP6_HEAD)], "is not a kernel TCP table")
+
+    def test_a_transient_control_or_attached_unit_fails_it(self):
+        """#791 CodeRabbit: systemd 257 also loads units from /run/systemd/transient (systemd-run), the system.control
+        directories (set-property) and the system.attached ones (portable services). A renamed SSH server there, outside
+        PATH and on another port, fails the control by its bytes."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        directories = ("/run/systemd/transient", "/etc/systemd/system.control", "/run/systemd/system.control",
+                       "/etc/systemd/system.attached", "/run/systemd/system.attached")
+        self.assertTrue(set(directories) <= set(os_probe.UNIT_DIRECTORIES))
+        self.assert_fails([unit_file(d, "remote-admin.service", "[Service]\nExecStart=/opt/remote-shell -D -p 2222\n",
+                                     "/opt/remote-shell", openssh) for d in directories], "the unit remote-admin.service")
+
+    def test_every_exec_key_systemd_runs_is_checked(self):
+        """#791 CodeRabbit + council: systemd runs ExecStop= and ExecStopPost= too (systemd.service(5)), and a socket's
+        ExecStopPre= (systemd.socket(5)). A renamed SSH server named only there fails the control by its own bytes; the
+        same keys naming an unrelated program pass. An Exec key the probe does not know fails it (fail closed); the path
+        lists ExecSearchPath= and ExecPaths= are not commands and pass."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        self.assertEqual(set(os_probe.UNIT_EXEC_KEYS), {"ExecCondition", "ExecStartPre", "ExecStart", "ExecStartPost",
+                                                        "ExecReload", "ExecStop", "ExecStopPost", "ExecStopPre"})
+        for kind, key in (("service", "ExecStop"), ("service", "ExecStopPost"), ("socket", "ExecStopPre"),
+                          ("socket", "ExecStopPost")):
+            with self.subTest(key=key, kind=kind):
+                text = "[%s]\nExecStart=/usr/bin/true\n%s=/opt/remote-shell -D -p 2222\n" % (kind.capitalize(), key)
+                if kind == "socket":
+                    text = "[Socket]\nListenStream=8443\n%s=/opt/remote-shell -D -p 2222\n" % key
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin." + kind, text, "/opt/remote-shell", openssh)],
+                                  "the unit remote-admin.%s" % kind, "/opt/remote-shell is an SSH server's program")
+                host = FakeHost()
+                unit_file("/etc/systemd/system", "remote-admin." + kind, text, "/opt/remote-shell", "\x7fELF ... a backup tool ...\n")(host)
+                self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+        self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                     "[Service]\nExecStart=/usr/bin/true\nExecTeleport=/opt/remote-shell -D\n")],
+                          "ExecTeleport=, an Exec key this probe does not know")
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "kms-helper.service",
+                  "[Service]\nExecStart=/usr/bin/true\nExecSearchPath=/usr/local/bin\nExecPaths=/usr/lib/regalia\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_every_command_of_an_exec_line_is_checked(self):
+        """#791 CodeRabbit: systemd runs each command a ";" word divides in one Exec*= value (config_parse_exec, systemd
+        257), each with its own prefixes, and takes a first word's quotes off before its prefixes. A renamed SSH server
+        that is a later command fails the control. A quoted or escaped ";" word is a separator too (systemd takes it as
+        one in first-word position; here everywhere, fail closed); a ";" inside a quoted argument, or glued to a word,
+        divides nothing."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        for line in ("ExecStop=/usr/bin/true ; /opt/remote-shell -D -p 2222",
+                     "ExecStartPost=/usr/bin/true --quiet ; -/opt/remote-shell -D",
+                     "ExecStart=/usr/bin/true ; /usr/bin/true ; @/opt/remote-shell admin -D",
+                     'ExecStop=/usr/bin/true ";" /opt/remote-shell -D',
+                     'ExecStop="-/opt/remote-shell" -D'):
+            with self.subTest(line=line):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service", "[Service]\n%s\n" % line,
+                                             "/opt/remote-shell", openssh)],
+                                  "the unit remote-admin.service", "/opt/remote-shell is an SSH server's program")
+        self.assertEqual(os_probe._exec_programs('/usr/bin/true ; -/opt/a x ; @/opt/b b-name ; "/opt/c d" e'),
+                         ["/usr/bin/true", "/opt/a", "/opt/b", "/opt/c d"])
+        self.assertEqual(os_probe._exec_programs('/usr/bin/logger "a ; /opt/remote-shell" x;/opt/remote-shell'),
+                         ["/usr/bin/logger"])
+        self.assertEqual(os_probe._exec_programs(""), [])
+        self.assertEqual(os_probe._exec_programs("; ; /opt/a ; ; - /opt/b"), ["/opt/a", "/opt/b"])
+        for line in ('ExecStart=/usr/bin/logger "starting ; /opt/remote-shell -D"',
+                     "ExecStart=/usr/bin/logger x;/opt/remote-shell"):
+            with self.subTest(passes=line):
+                host = FakeHost()
+                unit_file("/etc/systemd/system", "kms-helper.service", "[Service]\n%s\n" % line, "/opt/remote-shell", openssh)(host)
+                self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_bare_command_is_looked_for_where_systemd_finds_it(self):
+        """#791 CodeRabbit: systemd finds a command given by bare name in the unit's ExecSearchPath= directories, or in
+        its own compiled path, not on this probe's PATH (src/core/exec-invoke.c: use_path_envvar false). A renamed SSH
+        server found there fails the control, wherever the ExecSearchPath= is set; an entry this cannot resolve (a
+        specifier, a relative path) fails it too; the same names resolving to unrelated programs pass."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                     "[Service]\nExecSearchPath=/opt/admin\nExecStop=remote-shell -D -p 2222\n",
+                                     "/opt/admin/remote-shell", openssh)],
+                          "the unit remote-admin.service", "/opt/admin/remote-shell is an SSH server's program")
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "remote-admin.service", "[Service]\nExecStart=remote-shell -D\n")(host)
+        unit_file("/etc/systemd/system/remote-admin.service.d", "50-path.conf", "[Service]\nExecSearchPath=/srv/x:/opt/admin\n",
+                  "/opt/admin/remote-shell", openssh)(host)
+        host.dirs["/etc/systemd/system"].append("remote-admin.service.d")
+        self.assertFalse(self.judged(host)[0])
+        self.assertIn("/opt/admin/remote-shell is an SSH server's program", self.judged(host)[1])
+        for directory in os_probe.SYSTEMD_COMMAND_PATH:
+            with self.subTest(directory=directory):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                             "[Service]\nExecStart=remote-shell -D -p 2222\n", directory + "/remote-shell", openssh)],
+                                  "%s/remote-shell is an SSH server's program" % directory)
+        for entry in ("%h/bin", "bin", "/opt/%i"):
+            with self.subTest(entry=entry):
+                self.assert_fails([unit_file("/etc/systemd/system", "remote-admin.service",
+                                             "[Service]\nExecSearchPath=%s\nExecStart=/usr/bin/true\n" % entry)],
+                                  "sets ExecSearchPath= to %s, a directory this probe cannot resolve" % entry)
+        host = FakeHost()
+        unit_file("/etc/systemd/system", "kms-helper.service",
+                  "[Service]\nExecSearchPath=/opt/admin\nExecStart=helper --once\n", "/opt/admin/helper",
+                  "\x7fELF ... a backup tool ...\n")(host)
+        unit_file("/etc/systemd/system", "kms-other.service", "[Service]\nExecStart=other\n", "/usr/local/bin/other",
+                  "\x7fELF ... a log shipper ...\n")(host)
+        self.assertTrue(self.judged(host)[0], self.judged(host)[1])
+
+    def test_a_type_wide_drop_in_fails_it(self):
+        """#791 CodeRabbit: service.d/*.conf applies to every service (socket.d to every socket), so an ExecStartPost
+        there runs on the KMS unit too; a prefix drop-in (regalia-.service.d) applies to every regalia- unit."""
+        openssh = "\x7fELF ... OpenSSH_10.0p2 Debian ... sshd_config ...\n"
+        def drop_in(directory, name, text):
+            def breaker(g):
+                g.dirs.setdefault(directory, []).append(name)
+                g.dirs[directory + "/" + name] = ["50-admin.conf"]
+                g.files[directory + "/" + name + "/50-admin.conf"] = text
+                g.files["/opt/remote-shell"] = openssh
+            return breaker
+        post = "[Service]\nExecStartPost=/opt/remote-shell -D -p 2222\n"
+        self.assert_fails([drop_in("/etc/systemd/system", "service.d", post), drop_in("/usr/lib/systemd/system", "service.d", post),
+                           drop_in("/run/systemd/system", "regalia-.service.d", post),
+                           drop_in("/etc/systemd/system", "socket.d", "[Socket]\nListenStream=22\n")], "the ")
+        host = FakeHost()
+        drop_in("/etc/systemd/system", "service.d", post)(host)
+        self.assertIn("the unit service (/etc/systemd/system/service.d/50-admin.conf)", self.judged(host)[1])
+
+    def test_a_lookup_that_fails_other_than_missing_fails_it(self):
+        """#791 independent review (MUST 2): only "no such file" (ENOENT) is absence. One binary path whose lookup fails
+        with EACCES, EIO or ENOTDIR, while every other path is plainly missing, fails the control by name."""
+        def error(path, name):
+            return lambda g: g.lookup_errors.__setitem__(path, name)
+        self.assert_fails([error("/usr/local/sbin/sshd", "EACCES"), error("/usr/local/bin/sshd", "EIO"),
+                           error("/usr/sbin/sshd", "ENOTDIR")], "cannot be checked")
+        host = FakeHost()
+        error("/usr/local/sbin/sshd", "EACCES")(host)
+        self.assertIn("/usr/local/sbin/sshd cannot be checked (EACCES)", self.judged(host)[1])
+
+    def test_the_real_lookup_tells_missing_from_unreadable(self):
+        """os_probe.Host.lookup itself: ENOENT is missing, a dangling link is present, a path under a file is an error."""
+        real = os_probe.Host()
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(real.lookup(os.path.join(d, "absent")), ("missing", None))
+            os.symlink(os.path.join(d, "nowhere"), os.path.join(d, "dangling"))
+            self.assertEqual(real.lookup(os.path.join(d, "dangling")), ("present", "symbolic link"))
+            pathlib.Path(d, "file").write_text("x")
+            self.assertEqual(real.lookup(os.path.join(d, "file", "below")), ("error", "ENOTDIR"))
+            self.assertEqual(real.entries(os.path.join(d, "absent")), [])
+            self.assertIsNone(real.entries(os.path.join(d, "file")))
+
+    def test_every_problem_is_named(self):
+        host = FakeHost()
+        stat_file()(host)
+        host.unit_files.append("ssh.service enabled enabled")
+        host.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"
+        value, why = self.judged(host)
+        self.assertFalse(value)
+        for reason in ("/usr/sbin/sshd is present", "the unit ssh.service exists", "0.0.0.0:22 is listening", "q-20"):
+            self.assertIn(reason, why)
+
+    def test_the_staging_variant_fails_it_and_says_so(self):
+        """The staging image's operator sshd (image/staging/) is not a production host's: it fails the control, booted with
+        regalia.staging=1 or not, and the reason names the variant. A production image never holds the marker
+        (imagevariant.STAGING_PATHS)."""
+        from deploy.baremetal import imagevariant
+        self.assertIn("." + os_probe.STAGING_VARIANT, imagevariant.STAGING_PATHS)
+        self.assertIn("./usr/sbin/sshd", imagevariant.STAGING_PATHS)
+
+        def staging(booted):
+            def breaker(g):
+                g.files[os_probe.STAGING_VARIANT] = "staging\n"
+                stat_file()(g)
+                g.unit_files.append("regalia-staging-sshd.service enabled enabled")
+                if booted:
+                    g.files["/proc/cmdline"] = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/root ro quiet regalia.staging=1\n"
+                    g.commands[LISTENERS] = NO_SSH_LISTENING + "LISTEN 0 128 192.0.2.10:22 0.0.0.0:*\n"
+            return breaker
+        self.assert_fails([staging(False), staging(True)], "STAGING image variant", "regalia-staging-sshd.service")
+        # without the marker, the same sshd reads as what it is on a production host: no word of staging
+        host = FakeHost()
+        stat_file()(host)
+        self.assertNotIn("STAGING", self.judged(host)[1])
+
+    def test_the_staging_unit_is_still_gated_as_it_was(self):
+        """The decision keeps the staging sshd as it is: refused without regalia.staging=1 and the staging install's /var
+        keys, and never in a production image."""
+        unit = configparser.ConfigParser(strict=False, interpolation=None)
+        unit.read_string((ROOT / "deploy/baremetal/image/staging/regalia-staging-sshd.service").read_text())
+        self.assertEqual(unit["Unit"]["ConditionKernelCommandLine"], "regalia.staging=1")
+        self.assertEqual(unit["Unit"]["ConditionPathExists"], "/var/lib/regalia-staging/authorized_keys")
+        packages = (ROOT / "deploy/baremetal/image/packages.txt").read_text()
+        self.assertNotIn("openssh-server", packages)
+
+    def test_ssh_md_records_the_ruling(self):
+        ssh_md = (ROOT / "deploy/baremetal/SSH.md").read_text(encoding="utf-8")
+        self.assertIn("q-20: ABSENT, GA ruling under owner delegation 2026-11-25", ssh_md)
+        # the open question and the admit-from-admin_cidrs sentence are gone
+        self.assertNotIn("Whether there is an sshd at all is open", ssh_md)
+        self.assertNotIn("admit it from `admin_cidrs`", ssh_md)
+        self.assertIn("sshd_absent", ssh_md)
 
 
 class ShippedHardening(unittest.TestCase):

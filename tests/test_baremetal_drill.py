@@ -288,6 +288,30 @@ class Journal(unittest.TestCase):
             self.assertEqual(drill.main(["restore", "--journal", self.path], ssh=server), 0)
         self.assertEqual((server.table, server.timer, drill.Journal(self.path).pending()), (False, False, []))
 
+    def test_over_ssh_it_refuses_unless_the_targets_are_staging_hosts(self):
+        """q-20 (#791 delta review, GA ruling): a production host runs no sshd, so the SSH runner reaches only staging
+        hosts. Without --staging, each SSH operation refuses (exit 2) before ssh runs or the journal is written."""
+        import contextlib
+        import io
+        from unittest import mock
+        for argv in (["partition", "--node", "b", "--journal", self.path], ["unpartition", "--node", "b", "--journal", self.path],
+                     ["restore", "--journal", self.path]):
+            with self.subTest(argv[0]):
+                err = io.StringIO()
+                with mock.patch.object(drill.subprocess, "run", side_effect=AssertionError("ssh ran")), \
+                        contextlib.redirect_stderr(err):
+                    self.assertEqual(drill.main(argv), 2)
+                self.assertIn("STAGING ONLY", err.getvalue())
+                self.assertIn("production host runs no sshd", err.getvalue())
+                self.assertFalse(os.path.exists(self.path) and drill.Journal(self.path).entries())
+        # with --staging the SSH runner is the one used (ssh is what it would call)
+        calls = []
+        with mock.patch.object(drill.subprocess, "run", side_effect=lambda *a, **k: calls.append(a[0]) or
+                               subprocess.CompletedProcess(a[0], 1, "", "refused by the fake")), \
+                contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            drill.main(["unpartition", "--node", "b", "--journal", self.path, "--staging"])
+        self.assertTrue(calls and calls[0][0] == "ssh", calls)
+
 
 class Canary(unittest.TestCase):
     def test_every_key_must_be_canary_in_the_key_state_store(self):

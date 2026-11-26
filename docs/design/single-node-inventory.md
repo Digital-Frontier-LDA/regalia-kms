@@ -585,7 +585,7 @@ Not counted (false positives checked and left out):
 | `deploy/baremetal/README.md:931` | a | "The node's running services (three-site, #80)". A label. |
 | `deploy/baremetal/signkey.py:3` | b | "one party of a quorum ... the three nodes and the owner keep each other fresh". For N=1 the node's key plus the owner's is the whole quorum. |
 | `deploy/baremetal/site.example.json:3` | a | "site": "site-a"`, a label from the a/b/c naming scheme (cosmetic). |
-| `deploy/baremetal/SSH.md:19` | a | "replicated across the three hosts". |
+| `deploy/baremetal/SSH.md:50` | a | "replicated across the three hosts". |
 | `e2e/lib/threenode.py:1` | c | module title "Three KMS nodes on one machine"; becomes "N nodes (N>=1)" |
 | `e2e/three-node-netns.py:10` | c | "three nodes built ... one chain naming all three" |
 | `FENCING.md:120` | c | commissioning test "a cut-off minority stops serving within one lease". |

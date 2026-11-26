@@ -127,15 +127,16 @@ class Mesh(Case):
         unlock_rule = 'iifname "wg-unlock" ip daddr 10.89.0.2 tcp dport 7443 ip saddr { 10.89.0.1/32, 10.89.0.3/32 } %s comment' % SYN
         self.assertIn(unlock_rule, text)
         # everything else that arrives inside the tunnel is dropped BEFORE the zone rules: a packet from a
-        # tunnel address to the host's own address never reaches the KMS or SSH rule, whatever the zones say
+        # tunnel address to the host's own address never reaches the KMS rule or the admin zone's ping, whatever the zones say
         order = [text.index(rule) for rule in ("ct state established,related accept", unlock_rule, 'iifname "wg-unlock" drop',
-                                               "tcp dport 8443", "tcp dport 22", "icmp type echo-request")]
+                                               "tcp dport 8443", "icmp type echo-request")]
         self.assertEqual(order, sorted(order))
-        self.assertEqual(text.count(" dport "), 13)                   # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303), and the two of the mesh
+        self.assertNotIn("tcp dport 22", text)                        # no SSH, in the tunnel or out of it (q-20: ABSENT)
+        self.assertEqual(text.count(" dport "), 12)                   # kms, node metrics (#305), audit, dns, 2 per NTS server (#303), and the two of the mesh
         self.assertEqual(text.count("7443"), 1)                       # the unlock port is open inside the tunnel and nowhere else
         plain = firewall.render(sitecfg.validate(json.loads(EXAMPLE.read_text())))
         self.assertNotIn("boot mesh", plain)
-        self.assertEqual(plain.count(" dport "), 11)                  # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303)
+        self.assertEqual(plain.count(" dport "), 10)                  # kms, node metrics (#305), audit, dns, 2 per NTS server (#303)
 
     @unittest.skipUnless(shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin"), "nft not installed")
     def test_nft_accepts_both_rulesets(self):

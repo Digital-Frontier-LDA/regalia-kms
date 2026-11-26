@@ -148,7 +148,8 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
 
 The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too, and so are the
 kernel's sysctl baseline (kernel_sysctl_baseline) and the separate bootstrap and KMS users
-(bootstrap_and_kms_users_separate), regalia-kms-r1s.5. Every os_probe control is in MEASURED, so the signed
+(bootstrap_and_kms_users_separate), regalia-kms-r1s.5, and the absence of any SSH server (sshd_absent; q-20: ABSENT,
+GA ruling under owner delegation 2026-11-25, regalia-kms-r1s.12). Every os_probe control is in MEASURED, so the signed
 evidence must carry each one (evidence.validate holds its host section to MEASURED exactly).
 
 NOT MEASURED YET: a signed PCR 11 policy on the ROOT DISK. root_disk_tpm_unlocked still requires a
@@ -1435,7 +1436,234 @@ def firewall(host):
     bad = [h for h in ("input", "output", "forward") if (chains.get(h) or {}).get("policy") != "drop"]
     if bad:
         return False, "inet regalia_kms is loaded, but %s %s not on policy drop" % (", ".join(bad), "is" if len(bad) == 1 else "are")
-    return True, "inet regalia_kms loaded; input, output and forward default to drop"
+    # q-20 (#791 independent review, MUST 5): a host enrolled before q-20 keeps its old "ssh: admin only" rule, in the
+    # kernel and in the fragment on /var that every boot reloads, until the fragment is re-rendered. Neither may admit
+    # TCP :22: the loaded rules are read from nft -j, the persisted fragment from /var.
+    live = [r["rule"] for r in items if isinstance(r, dict) and isinstance(r.get("rule"), dict) and _admits_ssh(r["rule"])]
+    if live:
+        return False, "the loaded inet regalia_kms still admits TCP :%d (%s): re-render, load and persist the fragment (q-20 rollout, README)" % (
+            SSH_PORT, "; ".join("%s chain, handle %s%s" % (r.get("chain"), r.get("handle"), ", %r" % r["comment"] if r.get("comment") else "")
+                               for r in live))
+    persisted = host.read(PERSISTED_FIREWALL)
+    if persisted is None:
+        return False, "the persisted ruleset %s cannot be read: the next boot's firewall is unknown" % PERSISTED_FIREWALL
+    stale = [rule for rule in _logical_rules(persisted) if _text_admits_ssh(rule)]
+    if stale:
+        return False, "the persisted ruleset %s still admits TCP :%d (%s): the next boot would load it back (q-20 rollout, README)" % (
+            PERSISTED_FIREWALL, SSH_PORT, "; ".join(stale))
+    return True, ("inet regalia_kms loaded; input, output and forward default to drop; TCP :%d admitted neither by the loaded "
+                  "rules nor by the persisted %s" % (SSH_PORT, PERSISTED_FIREWALL))
+
+
+# The per-host fragment every boot loads (README "Host firewall"; /etc/nftables.d/regalia-kms.nft links here on a verity host)
+PERSISTED_FIREWALL = "/var/lib/regalia-etc/nftables.d/regalia-kms.nft"
+SSH_PORT = 22
+# a TCP destination-port match in nft's text form, "tcp dport" or the transport-header "th dport" (which matches TCP too):
+# its operator (none is ==) and its operand (a port, a set, a range, or a name)
+TCP_DPORT = re.compile(r"(?<![\w.-])(?:tcp|th) dport\s+(?:(==|!=|<=|>=|<|>|eq|ne|le|ge|lt|gt)\s*)?(\{[^}]*\}|[^\s;]+)")
+TEXT_OPS = {"eq": "==", "ne": "!=", "le": "<=", "ge": ">=", "lt": "<", "gt": ">"}
+
+
+def _logical_rules(text):
+    """nft's text form as whole rules: a backslash at the end of a line continues the rule on the next, and a ";"
+    outside a quoted string ends one (nft(8)), so two rules on one line are judged apart and a continued rule whole
+    (#791 council: a "udp dport 53 accept; ip saddr X accept" line must not pass as one UDP rule). A "#" outside a
+    quoted string starts a comment that runs to the end of its line, so nothing after it is read (#791 CodeRabbit:
+    "tcp dport 22 accept # udp dport 53" accepts :22, and a commented-out rule is no rule)."""
+    out, pending = [], ""
+    for raw in text.splitlines():
+        line = pending + _strip_comment(raw).strip()
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1] + " "
+            continue
+        out.extend(_split_statements(line))
+    if pending:
+        out.extend(_split_statements(pending.strip()))
+    return out
+
+
+def _strip_comment(line):
+    """One line of nft's text form up to its first "#" outside a double-quoted string (nft's scanner reads the rest of
+    the line as a comment; its strings hold no escapes and never span lines)."""
+    quoted = False
+    for index, char in enumerate(line):
+        if char == '"':
+            quoted = not quoted
+        elif char == "#" and not quoted:
+            return line[:index]
+    return line
+
+
+def _split_statements(line):
+    """One line of nft's text form cut at each ";" that is not inside a double-quoted string."""
+    parts, current, quoted = [], [], False
+    for char in line:
+        if char == '"':
+            quoted = not quoted
+        if char == ";" and not quoted:
+            parts.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current).strip())
+    return [p for p in parts if p] or [""]
+
+
+def _text_operand(text):
+    """A text operand as nft -j would give it: an int, {"range": [low, high]}, {"set": [...]}, or the text itself (a
+    named set, a service name, a variable: not a port this can compare)."""
+    def one(item):
+        item = item.strip()
+        low, dash, high = item.partition("-")
+        if low.isdigit() and not dash:
+            return int(low)
+        if low.isdigit() and high.isdigit():
+            return {"range": [int(low), int(high)]}
+        return item
+    if text.startswith("{"):
+        return {"set": [one(i) for i in text.strip("{} ").split(",") if i.strip()]}
+    return one(text)
+
+
+def _holds(right, port):
+    """Whether the operand holds port: True, False, or None when it names something this cannot read (fail closed)."""
+    if isinstance(right, bool):
+        return None
+    if isinstance(right, int):
+        return right == port
+    if isinstance(right, dict) and "range" in right:
+        low, high = (right["range"] + [None, None])[:2]
+        return low <= port <= high if isinstance(low, int) and isinstance(high, int) else None
+    items = right.get("set") if isinstance(right, dict) else right if isinstance(right, list) else None
+    if items is None:
+        return None
+    held = [_holds(item, port) for item in items]
+    return True if True in held else None if None in held else False
+
+
+def _match_admits(op, right, port):
+    """Whether a tcp dport match lets port through, by its operator (#791 CodeRabbit): == and in hold it, != leaves out
+    what it holds, < <= > >= compare. An operand or an operator this cannot read admits it: unknown is not closed."""
+    op = TEXT_OPS.get(op, op) or "=="
+    if op in ("==", "in"):
+        held = _holds(right, port)
+        return True if held is None else held
+    if op == "!=":
+        held = _holds(right, port)
+        return True if held is None else not held
+    if op in ("<", "<=", ">", ">=") and isinstance(right, int) and not isinstance(right, bool):
+        return {"<": port < right, "<=": port <= right, ">": port > right, ">=": port >= right}[op]
+    return True
+
+
+# The verdicts that can let a packet through: accept, and a jump or goto, whose target chain this check does not read, so
+# it counts as an admission (#791 delta review: a "tcp dport 22 jump admin" was passed as closed). Fail closed.
+ADMITTING_VERDICTS = ("accept", "jump", "goto")
+
+
+# A rule that lets a packet through admits TCP :22 UNLESS it provably excludes it (#791 CodeRabbit, council ACs; fail
+# closed). nft ANDs a rule's matches, so ONE excluding match is enough: a tcp/th dport match that does not hold 22
+# (above), or one POSITIVE equality match (==, in, or none written; never != or another comparison) that no new TCP
+# connection to :22 can satisfy:
+#   * the loopback interface only (iif/oif "lo", iifname/oifname "lo");
+#   * ct state established and/or related only (what reaches it is not a new connection);
+#   * L4 pinned to a known non-TCP protocol: an icmp/icmpv6 type header match; a udp dport/sport match on a port or
+#     a set of ports (not a range); meta l4proto, ip protocol or ip6 nexthdr equal to udp, icmp or ipv6-icmp, or a set
+#     of only those. The rendered ruleset's typed-ICMP and WireGuard rules (firewall.py) are of this kind.
+# Anything else admits it: an address-only accept, ct state new, another interface, a negation, a range, a set holding
+# tcp or anything else, a th match (th covers TCP), an operand this cannot read (a name, a variable), a verdict map.
+SAFE_CT_STATES = {"established", "related"}
+NON_TCP_L4 = ("udp", "icmp", "ipv6-icmp")
+# The nft -j expressions that are not a verdict and send no packet anywhere; any other one (a verdict map, a queue, a
+# kind nft adds later) counts as a verdict that may admit (council: vmap and unknown verdict expressions fail closed).
+INERT_EXPRS = ("match", "counter", "log", "limit", "drop", "reject", "return", "continue")
+# A double-quoted string is data, never a match: a comment, a log prefix, a set element's or a helper's name. Its text
+# is put out of the way before a match is read (#791 CodeRabbit: 'log prefix "audit ct state established " accept'
+# accepts :22). A string that is one bare word (an interface name such as "lo") cannot hold a match and is kept, so
+# iifname "lo" reads.
+TEXT_STRING = re.compile(r'"([^"]*)"')
+TEXT_BARE_WORD = re.compile(r"[\w.*-]*")
+# the text verdicts that may admit: the three above, a verdict map and a queue (both decided outside this rule)
+TEXT_MAY_ADMIT = re.compile(r"(^|\s)(accept|jump|goto|vmap|queue)(\s|;|$)")
+# The same exclusions in nft's text form: each a positive equality (no operator, == or eq) on a literal or a set of
+# literals, ending at white space, ";" or the end and never followed by a comma (a list going on, as in
+# "ct state established ,new"); a negation, a range, a name or a variable never matches.
+_EQ = r'(?:==\s*|eq\s+)?'
+_L4 = r'(?:ipv6-icmp|udp|icmp)'
+TEXT_EXCLUDES = re.compile(
+    r'(^|\s)(?:(?:iif|oif|iifname|oifname)\s+' + _EQ + r'"?lo"?'
+    r'|ct\s+state\s+' + _EQ + r'(?:\{\s*)?(?:established|related)(?:\s*,\s*(?:established|related))*(?:\s*\})?'
+    r'|(?:icmp|icmpv6)\s+type\s+' + _EQ + r'(?!(?:ne|eq|lt|gt|le|ge)\s)(?:[a-z][\w-]*|\d+|\{\s*[\w-]+(?:\s*,\s*[\w-]+)*\s*\})'
+    r'|udp\s+(?:dport|sport)\s+' + _EQ + r'(?:\d+|\{\s*\d+(?:\s*,\s*\d+)*\s*\})'
+    r'|(?:meta\s+l4proto|ip\s+protocol|ip6\s+nexthdr)\s+' + _EQ + r'(?:' + _L4 + r'|\{\s*' + _L4 + r'(?:\s*,\s*' + _L4 + r')*\s*\})'
+    r')(?!\s*,)(?=\s|;|$)')
+
+
+def _text_admits_ssh(rule):
+    """A whole rule of nft's text form that may let TCP to port 22 through: it accepts, jumps, goes to a chain, or
+    decides by a verdict map or a queue, and it does not provably exclude :22 (one excluding match, above; or tcp/th
+    dport matches that all leave 22 out); or it carries the pre-q-20 rule's comment."""
+    body = TEXT_STRING.sub(lambda s: s.group(0) if TEXT_BARE_WORD.fullmatch(s.group(1)) else '"_"', rule)
+    if not TEXT_MAY_ADMIT.search(body):
+        return False
+    if 'comment "ssh' in rule:
+        return True
+    if TEXT_EXCLUDES.search(body):
+        return False
+    ports = list(TCP_DPORT.finditer(body))
+    return not ports or any(_match_admits(m.group(1), _text_operand(m.group(2)), SSH_PORT) for m in ports)
+
+
+def _literals(right, kind):
+    """The values of a match's operand when it is a literal of kind or a set (or list) of only such literals; None for
+    anything else (a range, a name of another kind, a variable): this cannot read it as a pin."""
+    items = right.get("set") if isinstance(right, dict) and "set" in right else right if isinstance(right, list) else [right]
+    if not isinstance(items, list) or not items:
+        return None
+    if all(isinstance(v, kind) and not isinstance(v, bool) for v in items):
+        return items
+    return None
+
+
+def _excludes_new_tcp_22(match):
+    """Whether one nft -j match keeps every new TCP connection to :22 out: a positive equality (== or in) on the
+    loopback interface, ct state established/related only, or L4 pinned to a known non-TCP protocol."""
+    left, op, right = match.get("left") or {}, match.get("op") or "==", match.get("right")
+    meta, ct, payload = left.get("meta") or {}, left.get("ct") or {}, left.get("payload") or {}
+    if op not in ("==", "in"):
+        return False
+    if meta.get("key") in ("iif", "oif", "iifname", "oifname"):
+        return right == "lo"
+    if ct.get("key") == "state":
+        states = _literals(right, str)
+        return states is not None and set(states) <= SAFE_CT_STATES
+    if meta.get("key") == "l4proto" or (payload.get("protocol"), payload.get("field")) in (("ip", "protocol"), ("ip6", "nexthdr")):
+        protocols = _literals(right, str)
+        return protocols is not None and all(p in NON_TCP_L4 for p in protocols)
+    if payload.get("protocol") in ("icmp", "icmpv6") and payload.get("field") == "type":
+        return _literals(right, (str, int)) is not None
+    if payload.get("protocol") == "udp" and payload.get("field") in ("dport", "sport"):
+        return _literals(right, int) is not None
+    return False
+
+
+def _admits_ssh(rule):
+    """A rule of nft -j that may let TCP to port 22 through: it accepts, jumps or goes to a chain, or carries a verdict
+    expression this does not know (a verdict map, a queue), and it does not provably exclude :22 (one excluding match,
+    above; or tcp/th dport matches that all leave 22 out); or it carries the old rule's comment."""
+    exprs = [e for e in rule.get("expr") or [] if isinstance(e, dict)]
+    accepts = any(any(v in e for v in ADMITTING_VERDICTS) or not set(e) <= set(INERT_EXPRS) for e in exprs)
+    if not accepts:
+        return False
+    if str(rule.get("comment", "")).lower().startswith("ssh"):
+        return True
+    matches = [e["match"] for e in exprs if isinstance(e.get("match"), dict)]
+    if any(_excludes_new_tcp_22(m) for m in matches):
+        return False
+    dports = [m for m in matches if (m.get("left") or {}).get("payload", {}).get("field") == "dport"
+              and (m.get("left") or {}).get("payload", {}).get("protocol") in ("tcp", "th")]
+    return not dports or any(_match_admits(m.get("op"), m.get("right"), SSH_PORT) for m in dports)
 
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, secure_boot_db_has_image_cert=secure_boot_db,
