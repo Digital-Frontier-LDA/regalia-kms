@@ -8,6 +8,7 @@ the staging files' own refusals."""
 import contextlib
 import io
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -208,6 +209,141 @@ class TheSshdDropIns(unittest.TestCase):
         head = (STAGING / "sshd_config").read_text()
         self.assertIn("ONLY ListenAddress and AllowUsers", head)
         self.assertIn("Match included", head)
+
+
+HOSTKEY_CHECK = STAGING / "sshd-hostkey-check.sh"
+
+
+class TheSshdHostKeyIsTheBundledOne(unittest.TestCase):
+    """regalia-kms-u2t: the 2026-11-25 --wipe reinstall made a NEW host key at first start (the unit ran ssh-keygen
+    when the key was missing), so the operator trusted it on first use. The key is made once off-box and installed by
+    stage-perhost; the unit never makes one, and a missing, exposed, foreign-owned or unpaired key refuses the start by
+    name. Every pair here is an ephemeral TEST pair made by ssh-keygen in a temporary directory."""
+
+    @staticmethod
+    def keygen(path, kind="ed25519", passphrase=""):
+        subprocess.run(["ssh-keygen", "-q", "-t", kind, "-N", passphrase, "-C", "TEST", "-f", str(path)],
+                       check=True, capture_output=True, timeout=60)
+
+    def judge(self, setup, owner=None):
+        with tempfile.TemporaryDirectory() as d:
+            top = pathlib.Path(d)
+            ssh = top / "ssh"
+            ssh.mkdir(mode=0o700)
+            key = ssh / "ssh_host_ed25519_key"
+            setup(key)
+            uid = os.getuid() if owner is None else owner
+            p = subprocess.run(["sh", str(HOSTKEY_CHECK), str(key), str(top), str(uid)],
+                               capture_output=True, text=True, timeout=30)
+            return p.returncode, p.stderr
+
+    def pair(self, key, mode=0o600):
+        self.keygen(key)
+        key.chmod(mode)
+
+    def test_the_unit_never_makes_a_key_and_checks_it_before_sshd(self):
+        unit = (STAGING / "regalia-staging-sshd.service").read_text()
+        self.assertNotIn("ssh-keygen", unit)
+        pre = [l for l in unit.splitlines() if l.startswith("ExecStartPre=")]
+        self.assertEqual(pre, ["ExecStartPre=/usr/lib/regalia-staging/sshd-dropins-check.sh",
+                               "ExecStartPre=/usr/lib/regalia-staging/sshd-hostkey-check.sh",
+                               "ExecStartPre=/usr/sbin/sshd -t -f /usr/lib/regalia-staging/sshd_config"])
+        self.assertIn('install -D -m 0755 "$SRC/$STAGING_DIR/sshd-hostkey-check.sh" '
+                      '"$ROOT/usr/lib/regalia-staging/sshd-hostkey-check.sh"', BUILD.read_text())
+        self.assertIn("./usr/lib/regalia-staging/sshd-hostkey-check.sh", v.STAGING_PATHS)
+        # the check judges the very key sshd_config serves, and that is the ONLY key sshd serves
+        hostkeys = [l for l in (STAGING / "sshd_config").read_text().splitlines() if l.lower().startswith("hostkey")]
+        self.assertEqual(hostkeys, ["HostKey /var/lib/regalia-staging/ssh/ssh_host_ed25519_key"])
+        text = HOSTKEY_CHECK.read_text()
+        self.assertIn("key=${1:-/var/lib/regalia-staging/ssh/ssh_host_ed25519_key}", text)
+        self.assertIn("top=${2:-/var/lib/regalia-staging}", text)
+        self.assertIn("owner=${3:-0}", text)   # the unit passes no arguments: root
+
+    def test_a_refusal_stops_the_unit_instead_of_looping(self):
+        unit = (STAGING / "regalia-staging-sshd.service").read_text().splitlines()
+        self.assertIn("StartLimitIntervalSec=120", unit)
+        self.assertIn("StartLimitBurst=5", unit)
+        self.assertLess(unit.index("StartLimitBurst=5"), unit.index("[Service]"))   # a [Unit] setting
+
+    def test_the_bundled_pair_passes(self):
+        for mode in (0o600, 0o400):
+            with self.subTest(mode=oct(mode)):
+                self.assertEqual(self.judge(lambda k: self.pair(k, mode=mode)), (0, ""))
+
+    def test_each_wrong_key_refuses_by_name(self):
+        def other_pub(k):
+            self.pair(k)
+            self.keygen(k.with_name("other"))
+            k.with_name(k.name + ".pub").write_bytes(k.with_name("other.pub").read_bytes())
+
+        def junk_pub(k):
+            self.pair(k)
+            k.with_name(k.name + ".pub").write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJunkJunkJunk TEST\n")
+
+        def rsa_pub(k):
+            self.pair(k)
+            self.keygen(k.with_name("rsa"), kind="rsa")
+            k.with_name(k.name + ".pub").write_bytes(k.with_name("rsa.pub").read_bytes())
+
+        def pub_symlink(k):
+            self.pair(k)
+            pub = k.with_name(k.name + ".pub")
+            real = k.parent.parent / "elsewhere.pub"
+            real.write_bytes(pub.read_bytes())
+            pub.unlink()
+            pub.symlink_to(real)
+
+        def key_symlink(k):
+            real = k.parent.parent / "real_key"
+            self.keygen(real)
+            k.symlink_to(real)
+            k.with_name(k.name + ".pub").write_bytes(real.with_name("real_key.pub").read_bytes())
+
+        def encrypted(k):
+            self.keygen(k, passphrase="TEST-pass")
+
+        def open_dir(mode):
+            def setup(k):
+                self.pair(k)
+                k.parent.chmod(mode)
+            return setup
+
+        def pub_mode(mode):
+            def setup(k):
+                self.pair(k)
+                k.with_name(k.name + ".pub").chmod(mode)
+            return setup
+
+        cases = (
+            (lambda k: None, "no host key at"),
+            (lambda k: (k.write_bytes(b""), k.chmod(0o600)), "is empty"),
+            (lambda k: self.pair(k, mode=0o644), "is mode 644, not 0600"),
+            (lambda k: self.pair(k, mode=0o640), "is mode 640, not 0600"),
+            (lambda k: (self.pair(k), k.with_name(k.name + ".pub").unlink()), "no public half"),
+            (key_symlink, "is not a regular file"),
+            (lambda k: k.symlink_to(k.with_name("nowhere")), "is not a regular file"),
+            (lambda k: k.mkdir(), "is not a regular file"),
+            (pub_symlink, "ssh_host_ed25519_key.pub is not a regular file"),
+            (other_pub, "is not the public half of"),
+            (junk_pub, "is not the public half of"),
+            (rsa_pub, "not ssh-ed25519"),
+            (encrypted, "not a readable unencrypted private key"),
+            (pub_mode(0o666), "writable by group or others"),
+            (open_dir(0o770), "is writable by group or others"),
+            (open_dir(0o707), "is writable by group or others"),
+        )
+        for setup, why in cases:
+            with self.subTest(why=why):
+                rc, err = self.judge(setup)
+                self.assertEqual(rc, 1, err)
+                self.assertIn(why, err)
+                self.assertIn("refusing to start regalia-staging-sshd", err)
+                self.assertIn("stage-perhost", err)
+
+    def test_a_key_or_directory_not_roots_refuses(self):
+        rc, err = self.judge(self.pair, owner=os.getuid() + 1)
+        self.assertEqual(rc, 1, err)
+        self.assertIn("ssh_host_ed25519_key is owned by uid %d, not %d" % (os.getuid(), os.getuid() + 1), err)
 
 
 class TheSshdWaitsForItsAddress(unittest.TestCase):
