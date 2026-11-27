@@ -89,6 +89,7 @@ etcdconf | the etcd configuration renderer (#432, D32): nothing renders it on a 
 firewall | renders a host's nftables ruleset from its site config, from the operator's checkout
 initrd_drift | the scheduled initrd drift report (CI)
 manifest | regalia-manifest: propose, sign and verify membership manifests, on the laptop
+testgenesis | the staging TEST genesis material from a named TEST root (regalia-kms-223): run from the operator's checkout for a staging box, never on a node
 opstate | the operational-state entries (#432, D32): the format and its vector; the daemon (Go) reads and writes etcd
 owner | the owner's co-signatures, off the nodes
 p11sign | a key on a PKCS#11 token for the laptop's signing paths
