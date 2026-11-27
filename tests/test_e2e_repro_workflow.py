@@ -1,0 +1,262 @@
+"""e2e-repro.yml (regalia-kms-9xw): the by-hand re-run of node-units.yml's three-node-leases job at one commit, on hosted
+runners, under the GA's conditions (2026-11-25): read-only token, no secrets or environments, a full 40-hex SHA only,
+at most 5 runs, one dispatch at a time. Its steps are node-units.yml's, held equal here, so a repro runs what CI runs."""
+import os
+import re
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+REPRO = ROOT / ".github" / "workflows" / "e2e-repro.yml"
+NODE_UNITS = ROOT / ".github" / "workflows" / "node-units.yml"
+ACTION = ".github/actions/tpm-diagnostics"
+REMOTE = "Digital-Frontier-LDA/regalia-kms/" + ACTION + "@"
+
+
+def load(path):
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+class Repro(unittest.TestCase):
+    def setUp(self):
+        self.text = REPRO.read_text()
+        self.doc = load(REPRO)
+        self.job = self.doc["jobs"]["three-node-leases"]
+        self.ci = load(NODE_UNITS)["jobs"]["three-node-leases"]
+
+    def test_it_is_dispatched_by_hand_only(self):
+        triggers = self.doc.get(True, self.doc.get("on"))     # YAML 1.1 reads the key `on` as True
+        self.assertEqual(list(triggers), ["workflow_dispatch"])
+
+    def test_its_token_is_read_only_and_it_reaches_no_secret_or_environment(self):
+        self.assertEqual(self.doc["permissions"], {"contents": "read"})
+        for name, job in self.doc["jobs"].items():
+            with self.subTest(job=name):
+                self.assertNotIn("permissions", job)
+                self.assertNotIn("environment", job)
+        self.assertNotRegex(self.text, r"secrets\.")
+        self.assertNotRegex(self.text, r"\benvironment:")
+
+    def test_one_dispatch_runs_at_a_time_and_a_running_one_is_not_cancelled(self):
+        """cancel-in-progress: false keeps a RUNNING dispatch; GitHub still keeps one pending run per group, so a third
+        dispatch replaces the waiting one (the header says so)."""
+        self.assertEqual(self.doc["concurrency"], {"group": "e2e-repro", "cancel-in-progress": False})
+        self.assertIn("GitHub keeps ONE pending run per group", self.text)
+
+    def test_the_commit_must_be_a_full_sha_and_the_runs_at_most_5(self):
+        inputs = self.doc.get(True, self.doc.get("on"))["workflow_dispatch"]["inputs"]
+        self.assertEqual(inputs["runs"]["options"], ["1", "2", "3", "4", "5"])
+        self.assertEqual(inputs["runs"]["default"], "1", "a mis-click should cost one run, not five")
+        [plan] = self.doc["jobs"]["plan"]["steps"]
+        self.assertEqual(plan["env"], {"REF": "${{ inputs.ref }}", "RUNS": "${{ inputs.runs }}",
+                                       "REPO": "${{ github.repository }}", "GH_TOKEN": "${{ github.token }}",
+                                       "PIN": self.pin(), "ACTION_TREE": plan["env"]["ACTION_TREE"]})
+        self.assertEqual(self.job["needs"], "plan")
+        self.assertEqual(self.job["strategy"]["matrix"]["run"], "${{ fromJSON(needs.plan.outputs.runs) }}")
+
+    def test_no_input_is_expanded_inside_a_shell_script(self):
+        """An input reaches a script through env only: `${{ inputs.* }}` inside `run:` would be script injection."""
+        for name, job in self.doc["jobs"].items():
+            for step in job["steps"]:
+                with self.subTest(job=name, step=step.get("name") or step.get("uses")):
+                    self.assertNotIn("${{ inputs", step.get("run", ""))
+
+    def test_the_checkout_is_the_dispatched_commit_only(self):
+        checkout, ci_checkout = self.job["steps"][0], self.ci["steps"][0]
+        self.assertEqual(checkout["uses"], ci_checkout["uses"])
+        self.assertEqual(checkout["with"], dict(ci_checkout["with"], ref="${{ inputs.ref }}"))
+
+    def test_setup_go_caches_nothing(self):
+        """A dispatch runs in main's cache scope, so the dispatched commit must write no cache entry main could later
+        read (CodeQL cache poisoning, #788): node-units' setup-go step, with caching off and nothing else changed."""
+        setup, ci_setup = self.job["steps"][1], self.ci["steps"][1]
+        self.assertEqual(setup["uses"], ci_setup["uses"])
+        self.assertIs(setup["with"].get("cache"), False)
+        self.assertEqual(setup["with"], dict(ci_setup["with"], cache=False))
+
+    def test_its_steps_are_node_units_three_node_leases_steps(self):
+        """Everything between setup-go and the diagnostics is node-units.yml's, value for value (each script's text
+        exactly), and so are the runner and the timeout: a repro runs what CI runs."""
+        self.assertEqual((self.job["runs-on"], self.job["timeout-minutes"]), (self.ci["runs-on"], self.ci["timeout-minutes"]))
+        self.assertEqual(len(self.job["steps"]), len(self.ci["steps"]))
+        self.assertEqual(self.job["steps"][2:-1], self.ci["steps"][2:-1])
+        diag, ci_diag = self.job["steps"][-1], self.ci["steps"][-1]
+        self.assertEqual({k: v for k, v in diag.items() if k not in ("with", "uses")},
+                         {k: v for k, v in ci_diag.items() if k not in ("with", "uses")})
+        self.assertEqual(ci_diag["uses"], "./" + ACTION)
+        self.assertEqual(diag["uses"], REMOTE + self.pin())
+        self.assertEqual(diag["with"], {"name": ci_diag["with"]["name"] + "-run-${{ matrix.run }}"})
+
+    def pin(self):
+        [plan] = self.doc["jobs"]["plan"]["steps"]
+        return str(plan["env"]["PIN"])
+
+    def test_no_action_code_comes_from_the_dispatched_commit_or_its_workspace(self):
+        """CodeQL actions/cache-poisoning/poisonable-step (#788): no step uses a local `./` action, which the dispatched
+        commit's root code could rewrite. The diagnostics action is main's, fetched by the runner at the pin the plan job
+        checks (a full SHA, the same one in both places)."""
+        for name, job in self.doc["jobs"].items():
+            for step in job["steps"]:
+                with self.subTest(job=name, step=step.get("name") or step.get("uses")):
+                    self.assertFalse(step.get("uses", "").startswith("./"))
+        self.assertRegex(self.pin(), r"^[0-9a-f]{40}$")
+        self.assertEqual([s["uses"] for s in self.job["steps"] if s.get("uses", "").startswith(REMOTE)],
+                         [REMOTE + self.pin()])
+
+    def test_the_diagnostics_action_is_one_hop(self):
+        """The pinned action itself loads no local action, so nothing it runs comes from the workspace either."""
+        text = (ROOT / ACTION / "action.yml").read_text()
+        for step in load(ROOT / ACTION / "action.yml")["runs"]["steps"]:
+            with self.subTest(step=step.get("name")):
+                self.assertFalse(step.get("uses", "").startswith("./"))
+        for workspace in ("github.workspace", "GITHUB_WORKSPACE", "github.action_path", "GITHUB_ACTION_PATH"):
+            self.assertNotIn(workspace, text)
+
+    def test_the_pin_holds_the_action_node_units_runs(self):
+        """ACTION_TREE is the git tree of the tpm-diagnostics action in THIS checkout's files (what node-units.yml runs
+        as `./`), computed without history so it never skips; the plan job checks at run time that PIN and main hold the
+        same tree, failing closed. Changing the action without bumping PIN and ACTION_TREE goes red here."""
+        [plan] = self.doc["jobs"]["plan"]["steps"]
+        expected = str(plan["env"]["ACTION_TREE"])
+        self.assertRegex(expected, r"^[0-9a-f]{40}$")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
+            # --force and no eol conversion: an ignore rule or an autocrlf setting cannot change the tree computed
+            git = lambda *args: subprocess.run(["git", "-C", str(ROOT), "-c", "core.autocrlf=false", *args], env=env,
+                                               capture_output=True, text=True, check=True).stdout.strip()
+            git("add", "--force", "--", ACTION)
+            self.assertEqual(git("write-tree", "--prefix=%s/" % ACTION), expected)
+
+    def test_the_job_it_mirrors_still_runs_the_three_node_lease_test(self):
+        """If node-units.yml's job is renamed or emptied, the equality above would hold vacuously: it is not."""
+        scripts = "\n".join(step.get("run", "") for step in self.ci["steps"])
+        self.assertRegex(scripts, re.escape("python3 -Es e2e/three-node-leases.py"))
+
+
+SHA = "a" * 40
+REPO_NAME = "owner/regalia-kms"
+FAKE_GH = """#!/bin/sh
+echo "$*" >> "$FAKE_LOG"
+case "$*" in
+  *"compare/heads/main...$PIN "*) [ -n "$FAKE_PINCMP_RC" ] && exit "$FAKE_PINCMP_RC"; printf '%s\\n' "$FAKE_PINCMP";;
+  *"contents/.github/actions?ref=$PIN "*) [ -n "$FAKE_TREE_RC" ] && exit "$FAKE_TREE_RC"; printf '%s\\n' "$FAKE_PIN_TREE";;
+  *"contents/.github/actions?ref=heads/main "*) printf '%s\\n' "$FAKE_MAIN_TREE";;
+  *compare*) [ -n "$FAKE_COMPARE_RC" ] && exit "$FAKE_COMPARE_RC"; printf '%s\\n' "$FAKE_COMPARE";;
+  *pulls*) [ -n "$FAKE_PULLS_RC" ] && exit "$FAKE_PULLS_RC"; printf '%s' "$FAKE_PULLS";;
+  *) exit 99;;
+esac
+"""
+
+
+class PlanRefusesAnyCommitNotFromThisRepository(unittest.TestCase):
+    """The plan job's script itself, run under bash -e (as Actions runs it) with a stand-in `gh` that answers the two
+    questions it asks: is the commit in main's history, and which open pull requests have which head from which repo.
+    A fork's commit would run as root on the runner, in main's cache scope (council, #788): it is refused, and so is
+    every commit GitHub cannot vouch for."""
+
+    def run_plan(self, ref=SHA, runs="5", compare="behind", compare_rc="", pulls="", pulls_rc="",
+                 pincmp="identical", pincmp_rc="", pin_tree=None, main_tree=None, tree_rc=""):
+        [plan] = load(REPRO)["jobs"]["plan"]["steps"]
+        self.pin, self.tree = str(plan["env"]["PIN"]), str(plan["env"]["ACTION_TREE"])
+        pin_tree = self.tree if pin_tree is None else pin_tree
+        main_tree = self.tree if main_tree is None else main_tree
+        with tempfile.TemporaryDirectory() as tmp:
+            gh = Path(tmp) / "gh"
+            gh.write_text(FAKE_GH)
+            gh.chmod(0o755)
+            out, log = Path(tmp) / "output", Path(tmp) / "log"
+            out.write_text("")
+            log.write_text("")
+            env = {"PATH": "%s:/usr/bin:/bin" % tmp, "REF": ref, "RUNS": runs, "REPO": REPO_NAME, "GH_TOKEN": "x",
+                   "GITHUB_OUTPUT": str(out), "FAKE_LOG": str(log), "FAKE_COMPARE": compare,
+                   "FAKE_COMPARE_RC": compare_rc, "FAKE_PULLS": pulls, "FAKE_PULLS_RC": pulls_rc, "PIN": self.pin, "ACTION_TREE": self.tree,
+                   "FAKE_PINCMP": pincmp, "FAKE_PINCMP_RC": pincmp_rc, "FAKE_PIN_TREE": pin_tree,
+                   "FAKE_MAIN_TREE": main_tree, "FAKE_TREE_RC": tree_rc}
+            done = subprocess.run(["bash", "-e", "-c", plan["run"]], env=env, capture_output=True, text=True)
+            return done.returncode, out.read_text(), log.read_text(), done.stderr
+
+    def assert_refused(self, result, why):
+        rc, output, _, stderr = result
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(output, "", "a refused plan must give the matrix nothing to run")
+        self.assertIn(why, stderr)
+
+    def test_a_commit_in_mains_history_runs(self):
+        """compare main...REF is `behind` (REF is an ancestor of main) or `identical`; the pulls are never asked."""
+        for status in ("behind", "identical"):
+            with self.subTest(status=status):
+                rc, output, log, _ = self.run_plan(compare=status)
+                self.assertEqual((rc, output), (0, "runs=[1,2,3,4,5]\n"))
+                self.assertEqual(log.splitlines()[0], "api repos/%s/compare/heads/main...%s --jq .status" % (REPO_NAME, self.pin))
+                self.assertEqual(log.splitlines()[3:], ["api repos/%s/compare/heads/main...%s --jq .status" % (REPO_NAME, SHA)])
+
+    def test_the_head_of_an_open_pull_request_from_this_repository_runs(self):
+        for status in ("ahead", "diverged"):
+            with self.subTest(status=status):
+                pulls = "%s other/fork open\n%s %s open\n" % ("b" * 40, SHA, REPO_NAME)
+                rc, output, _, _ = self.run_plan(runs="2", compare=status, pulls=pulls)
+                self.assertEqual((rc, output), (0, "runs=[1,2]\n"))
+
+    def test_a_forks_pull_request_head_is_refused(self):
+        """GitHub resolves a fork's commit in the repo network, so compare can say `ahead` for it: that alone is
+        never enough, and a pull request from a fork does not vouch for it either."""
+        for repo in ("other/regalia-kms", "-", REPO_NAME + "x"):
+            for status in ("ahead", "diverged"):
+                with self.subTest(head_repo=repo, status=status):
+                    self.assert_refused(self.run_plan(compare=status, pulls="%s %s open\n" % (SHA, repo)),
+                                        "neither in main's history nor the head of an open pull request")
+
+    def test_a_commit_nobody_vouches_for_is_refused(self):
+        """`ahead` (a commit main lacks, possibly a fork's) and `diverged` are refused unless an open same-repo
+        pull request has exactly this head."""
+        for status in ("ahead", "diverged"):
+            with self.subTest(status=status):
+                self.assert_refused(self.run_plan(compare=status, pulls="%s %s open\n" % ("b" * 40, REPO_NAME)),
+                                    "neither in main's history nor the head of an open pull request")
+
+    def test_the_head_must_match_whole_and_be_open(self):
+        for pulls in ("%s %s closed\n" % (SHA, REPO_NAME), "%s %s open\n" % (SHA[:39], REPO_NAME),
+                      "%s0 %s open\n" % (SHA, REPO_NAME), "x%s %s open\n" % (SHA, REPO_NAME)):
+            with self.subTest(pulls=pulls):
+                self.assert_refused(self.run_plan(compare="ahead", pulls=pulls),
+                                    "neither in main's history nor the head of an open pull request")
+
+    def test_github_not_answering_is_a_refusal(self):
+        self.assert_refused(self.run_plan(compare_rc="1"), "could not say whether")
+        self.assert_refused(self.run_plan(compare="ahead", pulls_rc="1"), "could not list the open pull requests")
+
+    def test_the_diagnostics_pin_must_be_on_main(self):
+        for status in ("ahead", "diverged", ""):
+            with self.subTest(status=status):
+                self.assert_refused(self.run_plan(pincmp=status), "diagnostics pin")
+
+    def test_a_stale_diagnostics_pin_is_refused(self):
+        """main's tpm-diagnostics changed since the pin: the repro would run an older action than node-units does."""
+        for main_tree in ("u" * 40, ""):
+            with self.subTest(main_tree=main_tree):
+                self.assert_refused(self.run_plan(main_tree=main_tree), "is stale")
+
+    def test_the_pin_must_hold_the_recorded_action_tree(self):
+        for pin_tree in ("u" * 40, ""):
+            with self.subTest(pin_tree=pin_tree):
+                self.assert_refused(self.run_plan(pin_tree=pin_tree), "does not hold tree")
+
+    def test_github_not_answering_about_the_pin_is_a_refusal(self):
+        self.assert_refused(self.run_plan(pincmp_rc="1"), "could not say whether the diagnostics pin")
+        self.assert_refused(self.run_plan(tree_rc="1"), "could not read the diagnostics action")
+
+    def test_a_malformed_input_is_refused_before_github_is_asked(self):
+        for ref, runs in ((SHA[:39], "5"), (SHA.upper(), "5"), (SHA + "\n", "5"), ("main", "5"), (SHA, "6"), (SHA, "0")):
+            with self.subTest(ref=ref, runs=runs):
+                result = self.run_plan(ref=ref, runs=runs)
+                self.assert_refused(result, "must be")
+                self.assertEqual(result[2], "", "GitHub was asked about a malformed input")
+
+
+if __name__ == "__main__":
+    unittest.main()

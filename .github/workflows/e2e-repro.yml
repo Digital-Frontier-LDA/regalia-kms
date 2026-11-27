@@ -1,0 +1,141 @@
+# regalia-kms-9xw: reproduce a three-node e2e flake on GitHub-hosted runners, by hand, at one commit. The three-node
+# e2e changes the machine as root (namespaces, loop devices, dm-crypt, transient units), so it cannot run on the
+# shared heavy pool; this is the one place it is re-run on purpose.
+#
+# OWNER-ACCEPTED STANDING EXCEPTION to the pre-run rule (2026-11-25): e2e-repro dispatches are hosted runs of root e2e
+# that can't run on heavy, bounded to N<=5 per dispatch, dispatched by the GA only, once per flake bead, at a same-repo
+# 40-hex SHA, each use logged on the bead + #787.
+#
+# Dispatch only: no pull_request, push or schedule. One dispatch runs at a time and a running one is never cancelled;
+# GitHub keeps ONE pending run per group, so a third dispatch replaces the one still waiting. The plan job refuses
+# anything but a full SHA that is in main's history or is the head of an open pull request from THIS repository (a
+# fork's commit would otherwise run as root here, in main's cache scope), failing closed when GitHub cannot answer.
+#
+# Its steps are node-units.yml's three-node-leases job, held equal by tests/test_e2e_repro_workflow.py, except
+# (a) the checkout takes the dispatched commit, (b) setup-go caches nothing, (c) the TPM diagnostics action is main's,
+# referenced remotely at a pinned commit the plan job checks is on main and current, so no action code comes from the
+# dispatched commit or its workspace (its tree is recorded as ACTION_TREE: any later change to the action on main makes
+# e2e-repro refuse until PIN and ACTION_TREE are bumped, fail-closed by design), (d) each run's diagnostics have their
+# own name. The dispatched commit's own code
+# still runs (as root) in main's cache scope: that residual is what the same-repo check bounds and the owner's exception
+# accepts (follow-up regalia-kms-cvl: dispatch on a dedicated non-main ref instead).
+name: e2e repro
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "The full 40-hex commit SHA to run at (nothing else is accepted)"
+        required: true
+        type: string
+      runs:
+        description: "How many runs of three-node-leases (1-5)"
+        required: true
+        type: choice
+        options: ["1", "2", "3", "4", "5"]
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-repro
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      runs: ${{ steps.plan.outputs.runs }}
+    steps:
+      - name: The commit is a full SHA from this repository and the run count is 1-5
+        id: plan
+        env:
+          REF: ${{ inputs.ref }}
+          RUNS: ${{ inputs.runs }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PIN: 2833e65fe39a0c238fb0458ab9dcd82d47910c86   # the diagnostics action's commit, as in its `uses:` below
+          ACTION_TREE: d13ce44c3e5e7b86df8821b84447572a3722e4eb   # .github/actions/tpm-diagnostics's git tree, at PIN and here
+        run: |
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::ref must be a full 40-hex commit SHA" >&2; exit 1; }
+          [[ "$RUNS" =~ ^[1-5]$ ]] || { echo "::error::runs must be 1-5" >&2; exit 1; }
+          # the diagnostics action is used remotely at PIN: PIN must be on main, and its action must be main's current one
+          if ! pin_status=$(gh api "repos/$REPO/compare/heads/main...$PIN" --jq .status); then
+            echo "::error::GitHub could not say whether the diagnostics pin $PIN is on main: refused" >&2; exit 1
+          fi
+          [[ "$pin_status" == behind || "$pin_status" == identical ]] || {
+            echo "::error::the diagnostics pin $PIN is not on main: refused" >&2; exit 1; }
+          if ! pin_tree=$(gh api "repos/$REPO/contents/.github/actions?ref=$PIN" --jq '.[] | select(.name == "tpm-diagnostics") | .sha') ||
+             ! main_tree=$(gh api "repos/$REPO/contents/.github/actions?ref=heads/main" --jq '.[] | select(.name == "tpm-diagnostics") | .sha'); then
+            echo "::error::GitHub could not read the diagnostics action: refused" >&2; exit 1
+          fi
+          [[ "$pin_tree" == "$ACTION_TREE" ]] || {
+            echo "::error::the diagnostics pin $PIN does not hold tree $ACTION_TREE: refused" >&2; exit 1; }
+          [[ "$main_tree" == "$ACTION_TREE" ]] || {
+            echo "::error::the diagnostics pin $PIN is stale (main's tpm-diagnostics changed): bump PIN and ACTION_TREE" >&2; exit 1; }
+          # compare main...REF: `behind` or `identical` means REF is an ancestor of main. `ahead` and `diverged` mean REF
+          # has commits main lacks, and GitHub resolves commits from FORKS in the repo network, so they are never enough.
+          if ! status=$(gh api "repos/$REPO/compare/heads/main...$REF" --jq .status); then
+            echo "::error::GitHub could not say whether $REF is in main's history: refused" >&2; exit 1
+          fi
+          if [[ "$status" == behind || "$status" == identical ]]; then
+            echo "$REF is in main's history"
+          else
+            # the full head SHA, the head's repository and the state, from the same response; matched as a whole line
+            if ! heads=$(gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" --jq '.[] | "\(.head.sha) \(.head.repo.full_name // "-") \(.state)"'); then
+              echo "::error::GitHub could not list the open pull requests: refused" >&2; exit 1
+            fi
+            grep -Fxq -- "$REF $REPO open" <<< "$heads" || {
+              echo "::error::$REF is neither in main's history nor the head of an open pull request from $REPO: refused" >&2; exit 1; }
+            echo "$REF is the head of an open pull request from $REPO"
+          fi
+          echo "runs=[$(seq -s, 1 "$RUNS")]" >> "$GITHUB_OUTPUT"
+
+  three-node-leases:
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        run: ${{ fromJSON(needs.plan.outputs.runs) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # a dispatch runs in main's cache scope: the dispatched commit writes no cache entry main could read (CodeQL)
+          cache: false
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends tzdata-legacy swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs nftables softhsm2 opensc python3-pykcs11 tpm2-abrmd libtss2-tcti-tabrmd0 dbus-daemon   # the owner's keys (#199)
+      - name: Build the pre-root client, and the audit trail shipper and collector (#340)
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+          mkdir -p "$RUNNER_TEMP/audit"
+          for name in regalia-audit-ship regalia-audit-collector; do go build -o "$RUNNER_TEMP/audit/$name" "./cmd/$name"; done
+      - name: Runtime leases, renewal and failover, a running node revoked
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_AUDIT_BIN="$RUNNER_TEMP/audit" \
+            sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN \
+            python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
+          grep -q '^e2e3: the nodes reach their TPMs through one tpm2-abrmd each$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the run did not take the tpm2-abrmd route (#592)" >&2; exit 1; }
+          grep -q '^three-node-leases: 20 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the three-node lease test did not pass all 20 checks" >&2; exit 1; }
+      # The diagnostics action is MAIN's, fetched by the runner from GitHub at a pinned commit (PIN, checked on main and
+      # current by the plan job), never from the workspace the dispatched commit's root code could rewrite (CodeQL
+      # actions/cache-poisoning/poisonable-step, #788).
+      - name: Keep the software TPMs' logs (regalia-zga)
+        if: failure()
+        uses: Digital-Frontier-LDA/regalia-kms/.github/actions/tpm-diagnostics@2833e65fe39a0c238fb0458ab9dcd82d47910c86 # main, 2026-11-25
+        with:
+          name: three-node-leases-run-${{ matrix.run }}
