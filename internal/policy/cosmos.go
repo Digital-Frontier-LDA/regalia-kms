@@ -223,6 +223,16 @@ func parseAuthInfo(input []byte) (uint64, []Coin, uint64, *CosmosPublicKey, erro
 			}
 			feeBytes = append([]byte(nil), value...)
 			seenFee = true
+		case 3:
+			// AuthInfo.tip (cosmos-sdk v0.46 Tip{amount = 1, tipper = 2}; deprecated since) is a
+			// second payment the signature commits to, outside Fee and so outside MaxFee. It
+			// was always refused -- by the default arm below, as "field 3" -- and is named here
+			// so the refusal is a decision on record rather than a side effect of not knowing
+			// the field: a later change that teaches this switch a new field must not accept a
+			// tip by accident. Refused outright, not summed into the fee: a tip's coins go to
+			// the fee payer, its tipper need not be the signer, and no policy dimension exists
+			// for either (regalia-kms-bim).
+			return fmt.Errorf("%w: AuthInfo.tip not allowed: a tip is a payment outside the fee policy caps", ErrCosmosSignDoc)
 		default:
 			return fmt.Errorf("%w: AuthInfo.field %d not allowed", ErrCosmosSignDoc, tag)
 		}
@@ -372,10 +382,18 @@ func parseFee(input []byte) ([]Coin, uint64, error) {
 				return fmt.Errorf("%w: Fee.gas_limit: %v", ErrCosmosSignDoc, err)
 			}
 			seenGas = true
-		case 3, 4:
-			if wire != 2 {
-				return fmt.Errorf("%w: Fee.field %d wire %d not allowed", ErrCosmosSignDoc, tag, wire)
-			}
+		case 3:
+			// Fee.payer and Fee.granter WERE ACCEPTED AND THEIR VALUES DROPPED (regalia-kms-bim).
+			// Both change WHO PAYS the fee the policy capped, and the policy never saw either:
+			// a payer moves the fee onto another account's signature, a granter onto another
+			// account's x/feegrant allowance. No policy dimension exists for them, so they are
+			// refused, in any form: a present-but-empty string is not what a generated encoder
+			// writes (proto3 leaves an empty string out), so refusing it costs nothing, and it
+			// keeps the rule "this field is never in a document we sign" with no exception to
+			// reason about. Naming them -- not "Fee.field 3" -- is what tells an operator which.
+			return fmt.Errorf("%w: Fee.payer not allowed: a fee paid by another account is not what policy capped", ErrCosmosSignDoc)
+		case 4:
+			return fmt.Errorf("%w: Fee.granter not allowed: a fee paid from a fee grant is not what policy capped", ErrCosmosSignDoc)
 		default:
 			return fmt.Errorf("%w: Fee.field %d not allowed", ErrCosmosSignDoc, tag)
 		}
